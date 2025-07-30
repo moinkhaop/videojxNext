@@ -1,4 +1,4 @@
-import { ConversionTask, BatchTask, TaskStatus, VideoParserConfig, WebDAVConfig, ParsedVideoInfo, MediaType } from '@/types'
+import { ConversionTask, BatchTask, TaskStatus, VideoParserConfig, WebDAVConfig, ParsedVideoInfo, MediaType, PreviewParseResponse } from '@/types'
 import { CleanupService } from './cleanup'
 import { FilenameSanitizer } from './filename-sanitizer'
 
@@ -100,6 +100,100 @@ export class ConversionService {
       return result.data
     } catch (error) {
       console.error('[转存] 视频解析错误:', error)
+      throw error
+    }
+  }
+
+  // {{ AURA: Add - 仅解析视频信息，不进行上传（用于预览功能） }}
+  static async parseOnly(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
+    // 首先验证输入参数
+    if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
+      throw new Error('视频URL为空')
+    }
+    
+    if (!parserConfig || !parserConfig.apiUrl) {
+      throw new Error('解析API配置无效')
+    }
+    
+    try {
+      // 处理分享文本，提取真实URL
+      const extractedUrl = this.extractRealUrl(videoUrl)
+      console.log(`[预览解析] 提取到URL: ${extractedUrl}`)
+      console.log(`[预览解析] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
+      
+      const response = await fetch('/api/preview/parse', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoUrl: extractedUrl,
+          parserConfig
+        })
+      })
+
+      let result: PreviewParseResponse;
+      try {
+        const responseText = await response.text();
+        console.log(`[预览解析] API响应状态: ${response.status}, 内容长度: ${responseText.length}`);
+        
+        if (!responseText.trim()) {
+          throw new Error(`预览解析服务器返回空响应 (HTTP ${response.status})`);
+        }
+        
+        result = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('[预览解析] JSON解析失败:', parseError);
+        throw new Error(`预览解析API解析失败: ${parseError instanceof Error ? parseError.message : '未知解析错误'}`);
+      }
+      
+      if (!result.success) {
+        throw new Error(result.error || '视频解析失败')
+      }
+      
+      // 验证返回的数据
+      if (!result.data) {
+        throw new Error('预览API返回的数据为空')
+      }
+      
+      // 对于视频类型，检查URL字段
+      if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
+        throw new Error('视频解析成功但未返回有效的视频URL')
+      }
+      
+      // 对于图集类型，检查图片数组
+      if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
+        if (!result.data.images || result.data.images.length === 0) {
+          throw new Error('图集解析成功但没有找到任何图片')
+        }
+        console.log(`[预览解析] 图集解析成功，包含 ${result.data.images.length} 张图片`)
+      }
+
+      console.log(`[预览解析] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
+      
+      return result.data
+    } catch (error) {
+      console.error('[预览解析] 视频解析错误:', error)
+      throw error
+    }
+  }
+
+  // {{ AURA: Add - 基于已解析的媒体信息进行上传（用于预览确认后的上传） }}
+  static async uploadParsedMedia(
+    mediaInfo: ParsedVideoInfo,
+    webdavConfig: WebDAVConfig,
+    folderPath?: string
+  ): Promise<string> {
+    try {
+      console.log(`[预览上传] 开始上传${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${mediaInfo.title}`)
+      
+      // 直接调用现有的上传方法
+      const filePath = await this.uploadToWebDAV(mediaInfo, webdavConfig, folderPath)
+      
+      console.log(`[预览上传] 上传成功: ${filePath}`)
+      return filePath
+    } catch (error) {
+      console.error('[预览上传] 上传失败:', error)
       throw error
     }
   }
@@ -373,19 +467,31 @@ export class ConversionService {
     return batchTask
   }
 
+  // {{ AURA: Modify - 增强文件名生成，更好地处理特殊字符 }}
   // 生成文件名
   private static generateFileName(title: string, format: string): string {
-    // {{ AURA: Modify - 使用FilenameSanitizer进行文件名规范化 }}
+    console.log(`[文件名生成] 原始标题: "${title}"`);
+    
+    // 首先检测特殊字符
+    const specialChars = FilenameSanitizer.detectSpecialChars(title);
+    if (specialChars.length > 0) {
+      console.log(`[文件名生成] 检测到特殊字符: ${specialChars.join(', ')}`);
+    }
+    
+    // 使用增强的FilenameSanitizer进行文件名规范化
     const sanitizedTitle = FilenameSanitizer.sanitize(title, {
       replacement: '_',
-      maxLength: 100,
+      maxLength: 80, // 减少长度为时间戳留出空间
       preserveExtension: false,
       addTimestamp: true
     });
 
     // 移除可能的扩展名，确保格式正确
     const nameWithoutExt = sanitizedTitle.replace(/\.[^.]*$/, '');
-    return `${nameWithoutExt}.${format}`;
+    const finalName = `${nameWithoutExt}.${format}`;
+    
+    console.log(`[文件名生成] 最终文件名: "${finalName}"`);
+    return finalName;
   }
 
   // 生成文件夹名（用于图集）

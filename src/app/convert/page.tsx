@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,17 +9,19 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { 
-  Play, 
-  Download, 
   CheckCircle, 
   XCircle, 
   Loader2, 
   Settings,
-  Link as LinkIcon 
+  Link as LinkIcon,
+  Eye,
+  Upload,
+  RotateCcw
 } from 'lucide-react'
-import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig } from '@/types'
+import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
+import { PreviewArea } from '@/components/preview'
 import Link from 'next/link'
 
 export default function ConvertPage() {
@@ -32,6 +33,13 @@ export default function ConvertPage() {
   const [currentTask, setCurrentTask] = useState<ConversionTask | null>(null)
   const [progress, setProgress] = useState(0)
   const [isConverting, setIsConverting] = useState(false)
+  
+  // 预览状态管理
+  const [previewState, setPreviewState] = useState<PreviewState>({
+    isPreviewMode: false,
+    showPreview: false,
+    previewData: null
+  })
 
   useEffect(() => {
     // 加载配置
@@ -51,90 +59,79 @@ export default function ConvertPage() {
 
   // 提取视频链接
   const extractVideoLink = (input: string): string => {
-    // 改进的URL正则表达式，能够更好地匹配各种分享文本中的URL
     const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&=\/=]*))/g
     const matches = input.match(urlRegex)
     return matches && matches.length > 0 ? matches[0].replace(/\/$/, '') : input.trim()
   }
   
-  const handleConvert = async () => {
+  // 处理解析和预览
+  const handleParseAndPreview = async () => {
     if (!videoUrl.trim()) {
       alert('请输入视频链接')
       return
     }
     
-    // 提取输入文本中的URL
     const extractedUrl = extractVideoLink(videoUrl)
 
-    if (!selectedParser || !selectedWebDAV) {
-      alert('请选择解析API和WebDAV服务器')
+    if (!selectedParser) {
+      alert('请选择解析API')
       return
     }
 
     const parser = parsers.find(p => p.id === selectedParser)
-    const webdav = webdavServers.find(s => s.id === selectedWebDAV)
 
-    if (!parser || !webdav) {
-      alert('配置信息错误')
+    if (!parser) {
+      alert('解析API配置信息错误')
       return
     }
 
     setIsConverting(true)
     setProgress(0)
 
-    // 如果提取出了URL，显示提示
     if (extractedUrl !== videoUrl.trim()) {
-      console.log(`[转存] 从分享文本中提取到URL: ${extractedUrl}`)
+      console.log(`[预览] 从分享文本中提取到URL: ${extractedUrl}`)
     }
     
     // 创建转存任务
     const task: ConversionTask = {
       id: ConversionService.generateTaskId(),
-      videoUrl: extractedUrl, // 使用提取后的URL
-      status: TaskStatus.PENDING,
+      videoUrl: extractedUrl,
+      status: TaskStatus.PARSING,
       createdAt: new Date()
     }
 
     setCurrentTask(task)
 
     try {
-      // 执行转存
-      const updatedTask = await ConversionService.convertSingle(
-        task,
-        parser,
-        webdav,
-        (progress, status) => {
-          setProgress(progress)
-          setCurrentTask(prev => prev ? { ...prev, status } : null)
-        }
-      )
-
-      setCurrentTask(updatedTask)
+      // 仅解析，不上传
+      const parsedInfo = await ConversionService.parseOnly(extractedUrl, parser)
       
-      // 判断任务是否失败
-      if (updatedTask.status === TaskStatus.FAILED) {
-        console.error('转存失败:', updatedTask.error)
-      } else {
-        console.log('转存成功:', updatedTask.uploadResult?.filePath)
-      }
-
-      // 无论成功失败都保存到历史记录
-      HistoryManager.addRecord({
-        id: ConversionService.generateTaskId(),
-        type: 'single',
-        task: updatedTask,
-        createdAt: new Date()
+      // 更新预览状态
+      setPreviewState({
+        isPreviewMode: true,
+        showPreview: true,
+        previewData: parsedInfo
       })
+      
+      // 更新任务状态
+      setCurrentTask(prev => prev ? {
+        ...prev,
+        status: TaskStatus.PARSED,
+        parsedVideoInfo: parsedInfo,
+        videoTitle: parsedInfo.title
+      } : null)
+      
+      setProgress(100)
+      console.log(`[预览] 解析成功: ${parsedInfo.title}`)
 
     } catch (error) {
-      console.error('转存过程出现异常:', error)
-      // 更新当前任务状态为失败
+      console.error('解析过程出现异常:', error)
       setCurrentTask(prev => {
         if (!prev) return null
         return {
           ...prev,
           status: TaskStatus.FAILED,
-          error: error instanceof Error ? error.message : '转存过程发生未知错误',
+          error: error instanceof Error ? error.message : '解析过程发生未知错误',
           completedAt: new Date()
         }
       })
@@ -143,11 +140,103 @@ export default function ConvertPage() {
     }
   }
 
+  // 处理确认上传
+  const handleConfirmUpload = async () => {
+    if (!previewState.previewData || !selectedWebDAV) {
+      alert('请选择WebDAV服务器')
+      return
+    }
+
+    const webdav = webdavServers.find(s => s.id === selectedWebDAV)
+
+    if (!webdav) {
+      alert('WebDAV服务器配置信息错误')
+      return
+    }
+
+    setIsConverting(true)
+    setProgress(0)
+
+    try {
+      // 更新任务状态为上传中
+      setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
+      setProgress(50)
+
+      // 基于已解析的数据进行上传
+      const filePath = await ConversionService.uploadParsedMedia(
+        previewState.previewData,
+        webdav
+      )
+
+      // 更新任务状态为成功
+      const finalTask = {
+        ...currentTask!,
+        status: TaskStatus.SUCCESS,
+        completedAt: new Date(),
+        uploadResult: {
+          success: true,
+          filePath
+        }
+      }
+
+      setCurrentTask(finalTask)
+      setProgress(100)
+
+      console.log('上传成功:', filePath)
+
+      // 保存到历史记录
+      HistoryManager.addRecord({
+        id: ConversionService.generateTaskId(),
+        type: 'single',
+        task: finalTask,
+        createdAt: new Date()
+      })
+
+      // 重置预览状态
+      setPreviewState({
+        isPreviewMode: false,
+        showPreview: false,
+        previewData: null
+      })
+
+    } catch (error) {
+      console.error('上传过程出现异常:', error)
+      setCurrentTask(prev => {
+        if (!prev) return null
+        return {
+          ...prev,
+          status: TaskStatus.FAILED,
+          error: error instanceof Error ? error.message : '上传过程发生未知错误',
+          completedAt: new Date()
+        }
+      })
+    } finally {
+      setIsConverting(false)
+    }
+  }
+
+  // 重新解析
+  const handleReparse = () => {
+    setPreviewState({
+      isPreviewMode: false,
+      showPreview: false,
+      previewData: null
+    })
+    setCurrentTask(null)
+    setProgress(0)
+    setIsConverting(false)
+  }
+
   const resetForm = () => {
     setVideoUrl('')
     setCurrentTask(null)
     setProgress(0)
     setIsConverting(false)
+    setPreviewState({
+      isPreviewMode: false,
+      showPreview: false,
+      previewData: null
+    })
   }
 
   const getStatusIcon = (status: TaskStatus) => {
@@ -156,8 +245,10 @@ export default function ConvertPage() {
         return <Loader2 className="w-4 h-4 animate-spin" />
       case TaskStatus.PARSING:
         return <Loader2 className="w-4 h-4 animate-spin" />
+      case TaskStatus.PARSED:
+        return <Eye className="w-4 h-4 text-blue-500" />
       case TaskStatus.UPLOADING:
-        return <Download className="w-4 h-4" />
+        return <Upload className="w-4 h-4" />
       case TaskStatus.SUCCESS:
         return <CheckCircle className="w-4 h-4 text-green-500" />
       case TaskStatus.FAILED:
@@ -173,6 +264,8 @@ export default function ConvertPage() {
         return '等待中'
       case TaskStatus.PARSING:
         return '解析中'
+      case TaskStatus.PARSED:
+        return '已解析'
       case TaskStatus.UPLOADING:
         return '上传中'
       case TaskStatus.SUCCESS:
@@ -190,6 +283,8 @@ export default function ConvertPage() {
         return 'bg-green-500'
       case TaskStatus.FAILED:
         return 'bg-red-500'
+      case TaskStatus.PARSED:
+        return 'bg-blue-500'
       case TaskStatus.PARSING:
       case TaskStatus.UPLOADING:
         return 'bg-blue-500'
@@ -199,11 +294,12 @@ export default function ConvertPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
+    <div className="container mx-auto px-4 py-8 max-w-6xl">
+      {/* 页面标题 */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">单链接转存</h1>
         <p className="text-muted-foreground">
-          输入视频分享链接，选择解析API和WebDAV服务器，快速完成视频转存
+          输入视频分享链接，先解析预览内容，确认无误后再上传到WebDAV服务器
         </p>
       </div>
 
@@ -220,8 +316,9 @@ export default function ConvertPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 输入表单 */}
+      {/* 中间：操作区域（两列布局） */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* 左列：输入表单 */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
@@ -256,7 +353,7 @@ export default function ConvertPage() {
                       <div className="flex items-center justify-between w-full">
                         <span>{parser.name}</span>
                         {parser.isDefault && (
-                          <Badge key={`convert-parser-badge-${parser.id}`} variant="secondary" className="ml-2">默认</Badge>
+                          <Badge variant="secondary" className="ml-2">默认</Badge>
                         )}
                       </div>
                     </SelectItem>
@@ -277,7 +374,7 @@ export default function ConvertPage() {
                       <div className="flex items-center justify-between w-full">
                         <span>{server.name}</span>
                         {server.isDefault && (
-                          <Badge key={`convert-server-badge-${server.id}`} variant="secondary" className="ml-2">默认</Badge>
+                          <Badge variant="secondary" className="ml-2">默认</Badge>
                         )}
                       </div>
                     </SelectItem>
@@ -287,26 +384,40 @@ export default function ConvertPage() {
             </div>
 
             <div className="flex space-x-2">
-              <Button 
-                onClick={handleConvert} 
-                disabled={isConverting || !videoUrl.trim() || !selectedParser || !selectedWebDAV}
-                className="flex-1"
-              >
-                {isConverting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    转存中...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-4 h-4 mr-2" />
-                    开始转存
-                  </>
-                )}
-              </Button>
+              {/* 主操作按钮：解析/预览 */}
+              {!previewState.isPreviewMode ? (
+                <Button 
+                  onClick={handleParseAndPreview} 
+                  disabled={isConverting || !videoUrl.trim() || !selectedParser}
+                  className="flex-1"
+                >
+                  {isConverting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      解析中...
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-4 h-4 mr-2" />
+                      解析/预览
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button 
+                  onClick={handleParseAndPreview} 
+                  disabled={isConverting}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  <Eye className="w-4 h-4 mr-2" />
+                  重新解析
+                </Button>
+              )}
               
               {currentTask && (
                 <Button variant="outline" onClick={resetForm}>
+                  <RotateCcw className="w-4 h-4 mr-2" />
                   重置
                 </Button>
               )}
@@ -314,7 +425,7 @@ export default function ConvertPage() {
           </CardContent>
         </Card>
 
-        {/* 任务状态 */}
+        {/* 右列：任务状态（简化） */}
         <Card>
           <CardHeader>
             <CardTitle>转存状态</CardTitle>
@@ -325,8 +436,8 @@ export default function ConvertPage() {
           <CardContent>
             {!currentTask ? (
               <div className="text-center text-muted-foreground py-8">
-                <Play className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>点击"开始转存"开始处理视频</p>
+                <Eye className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>点击"解析/预览"开始处理视频</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -334,7 +445,7 @@ export default function ConvertPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium">任务状态</span>
-                    <Badge key={`convert-task-badge-${currentTask.id}`} className={getStatusColor(currentTask.status)}>
+                    <Badge className={getStatusColor(currentTask.status)}>
                       <div className="flex items-center space-x-1">
                         {getStatusIcon(currentTask.status)}
                         <span>{getStatusText(currentTask.status)}</span>
@@ -352,19 +463,17 @@ export default function ConvertPage() {
                   )}
                 </div>
 
-                {/* 视频信息 */}
+                {/* 简化的媒体信息 */}
                 {currentTask.parsedVideoInfo && (
                   <div className="space-y-2">
-                    <h4 className="font-medium">视频信息</h4>
+                    <h4 className="font-medium">
+                      {currentTask.parsedVideoInfo.mediaType === MediaType.VIDEO ? '视频信息' : '图集信息'}
+                    </h4>
                     <div className="text-sm space-y-1">
                       <p><span className="text-muted-foreground">标题:</span> {currentTask.parsedVideoInfo.title}</p>
-                      {currentTask.parsedVideoInfo.duration && (
-                        <p><span className="text-muted-foreground">时长:</span> {ConversionService.formatDuration(currentTask.parsedVideoInfo.duration)}</p>
+                      {currentTask.parsedVideoInfo.author && (
+                        <p><span className="text-muted-foreground">作者:</span> {currentTask.parsedVideoInfo.author}</p>
                       )}
-                      {currentTask.parsedVideoInfo.fileSize && (
-                        <p><span className="text-muted-foreground">大小:</span> {ConversionService.formatFileSize(currentTask.parsedVideoInfo.fileSize)}</p>
-                      )}
-                      <p><span className="text-muted-foreground">格式:</span> {currentTask.parsedVideoInfo.format}</p>
                     </div>
                   </div>
                 )}
@@ -373,19 +482,8 @@ export default function ConvertPage() {
                 {currentTask.error && (
                   <Alert className="border-red-200 bg-red-50">
                     <XCircle className="h-4 w-4 text-red-500" />
-                    <AlertDescription className="text-red-700 space-y-2">
+                    <AlertDescription className="text-red-700">
                       <p><strong>错误信息:</strong> {currentTask.error}</p>
-                      {currentTask.error.includes('URL为空') && (
-                        <>
-                          <p><strong>可能的原因:</strong></p>
-                          <ul className="list-disc pl-5">
-                            <li>解析API返回的数据格式不兼容</li>
-                            <li>视频链接可能无效或已过期</li>
-                            <li>解析API可能暂时不可用</li>
-                          </ul>
-                          <p><strong>建议:</strong> 尝试更换解析API或检查视频链接是否有效</p>
-                        </>
-                      )}
                     </AlertDescription>
                   </Alert>
                 )}
@@ -399,19 +497,21 @@ export default function ConvertPage() {
                     </AlertDescription>
                   </Alert>
                 )}
-
-                {/* 任务时间 */}
-                <div className="text-xs text-muted-foreground pt-4 border-t">
-                  <p>创建时间: {currentTask.createdAt.toLocaleString()}</p>
-                  {currentTask.completedAt && (
-                    <p>完成时间: {currentTask.completedAt.toLocaleString()}</p>
-                  )}
-                </div>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* 底部：预览区域（上下布局 - 符合需求6.3） */}
+      {previewState.showPreview && previewState.previewData && (
+        <PreviewArea
+          mediaInfo={previewState.previewData}
+          isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
+          onConfirmUpload={handleConfirmUpload}
+          onReparse={handleReparse}
+        />
+      )}
     </div>
   )
 }

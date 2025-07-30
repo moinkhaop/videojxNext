@@ -37,13 +37,21 @@ export class FilenameSanitizer {
   // {{ AURA: Add - 默认非法字符正则表达式 }}
   private static readonly DEFAULT_ILLEGAL_CHARS_REGEX = /[<>:"/\\|?*\x00-\x1F]/g;
 
+  // {{ AURA: Add - emoji和unicode特殊字符的正则表达式（ES5兼容） }}
+  private static readonly EMOJI_REGEX = /[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|[\uD83C][\uDF00-\uDFFF]/g;
+  
+  // {{ AURA: Add - 扩展的危险字符正则表达式（ES5兼容） }}
+  private static readonly EXTENDED_UNSAFE_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F\u200B-\u200F\u2028\u2029\uFEFF]|[\uD83C-\uDBFF][\uDC00-\uDFFF]/g;
+
   /**
-   * 检测文件名中是否包含特殊符号
+   * 检测文件名中是否包含特殊符号（包括emoji）
    * @param filename 文件名
    * @returns 包含的特殊符号数组
    */
   static detectSpecialChars(filename: string): string[] {
     const specialChars: string[] = [];
+    
+    // 检测基本特殊字符
     for (const char of filename) {
       if (this.SPECIAL_CHARS.has(char)) {
         if (!specialChars.includes(char)) {
@@ -51,6 +59,17 @@ export class FilenameSanitizer {
         }
       }
     }
+    
+    // {{ AURA: Add - 检测emoji和扩展unicode字符 }}
+    const emojiMatches = filename.match(this.EMOJI_REGEX);
+    if (emojiMatches) {
+      for (const emoji of emojiMatches) {
+        if (!specialChars.includes(emoji)) {
+          specialChars.push(emoji);
+        }
+      }
+    }
+    
     return specialChars;
   }
 
@@ -85,11 +104,13 @@ export class FilenameSanitizer {
       }
     }
 
-    // {{ AURA: Modify - 使用自定义正则或默认处理 }}
+    // {{ AURA: Modify - 使用自定义正则或默认处理，包括emoji }}
     if (allowedCharsRegex) {
       sanitized = sanitized.replace(allowedCharsRegex, replacement);
     } else {
-      // 默认处理：移除或替换特殊字符
+      // 首先处理emoji和扩展unicode字符
+      sanitized = sanitized.replace(this.EXTENDED_UNSAFE_CHARS, replacement);
+      // 然后处理基本特殊字符
       sanitized = this.replaceSpecialChars(sanitized, replacement);
     }
 
@@ -124,9 +145,19 @@ export class FilenameSanitizer {
       sanitized = sanitized.substring(0, maxNameLength);
     }
 
-    // {{ AURA: Modify - 添加时间戳 }}
+    // {{ AURA: Modify - 添加时间戳，确保WebDAV兼容性 }}
     if (addTimestamp) {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+      
+      // 创建WebDAV安全的时间戳格式：YYYY-MM-DD-HH-MM-SS-mmm
+      const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}-${milliseconds}`;
       const timestampPart = `_${timestamp}`;
       const availableLength = maxNameLength - timestampPart.length;
       

@@ -16,6 +16,7 @@ function generateRandomFileName(extension: string = 'jpg'): string {
   return `${year}${month}${day}_${hours}${minutes}${seconds}_${milliseconds}${randomNum}.${extension}`
 }
 
+// {{ AURA: Modify - 修复路径构建，添加URL编码和验证 }}
 // 构建WebDAV完整路径
 function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileName: string): string {
   const baseUploadUrl = webdavConfig.url.replace(/\/$/, '')
@@ -27,7 +28,9 @@ function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileNam
   if (webdavConfig.basePath) {
     const normalizedBasePath = webdavConfig.basePath.replace(/^\/+|\/+$/g, '')
     if (normalizedBasePath) {
-      fullPath = `${fullPath}/${normalizedBasePath}`
+      // 对basePath进行URL编码
+      const encodedBasePath = encodeURIComponent(normalizedBasePath)
+      fullPath = `${fullPath}/${encodedBasePath}`
     }
   }
   
@@ -35,12 +38,20 @@ function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileNam
   if (folderPath) {
     const normalizedFolderPath = folderPath.replace(/^\/+|\/+$/g, '')
     if (normalizedFolderPath) {
-      fullPath = `${fullPath}/${normalizedFolderPath}`
+      // 对folderPath进行URL编码
+      const encodedFolderPath = encodeURIComponent(normalizedFolderPath)
+      fullPath = `${fullPath}/${encodedFolderPath}`
     }
   }
   
-  // 添加文件名
-  return `${fullPath}/${fileName}`
+  // 添加文件名并进行URL编码
+  const encodedFileName = encodeURIComponent(fileName)
+  const finalPath = `${fullPath}/${encodedFileName}`
+  
+  console.log(`[WebDAV] 构建路径: 原始文件名="${fileName}", 编码后="${encodedFileName}"`)
+  console.log(`[WebDAV] 最终路径: ${finalPath}`)
+  
+  return finalPath
 }
 
 // 创建WebDAV文件夹
@@ -293,9 +304,16 @@ export async function POST(request: NextRequest) {
             // 忽略错误详情获取失败
           }
 
-          // 对于404错误，提供更具体的错误信息
+          // {{ AURA: Modify - 增强404错误处理，提供更详细的调试信息 }}
           if (uploadResponse.status === 404) {
-            errorMessage = `上传路径不存在 (404): ${uploadPath}. 请检查WebDAV服务器地址和路径配置是否正确。`
+            console.error(`[WebDAV] 详细路径分析:`)
+            console.error(`[WebDAV] - 基础URL: ${webdavConfig.url}`)
+            console.error(`[WebDAV] - basePath: ${webdavConfig.basePath || '无'}`)
+            console.error(`[WebDAV] - folderPath: ${folderPath || '无'}`)
+            console.error(`[WebDAV] - 原始文件名: ${fileName}`)
+            console.error(`[WebDAV] - 编码后路径: ${uploadPath}`)
+            
+            errorMessage = `上传路径不存在 (404): ${uploadPath}. 请检查WebDAV服务器地址和路径配置是否正确。错误详情: ${errorMessage}`
           }
 
           return NextResponse.json({
