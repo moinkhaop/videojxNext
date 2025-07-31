@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -25,7 +25,19 @@ import { ConversionService } from '@/lib/conversion'
 import { CompactPreview, PreviewActions } from '@/components/preview'
 import Link from 'next/link'
 
-export default function ConvertPage() {
+// {{ AURA: Add - Loading 组件用于 Suspense fallback }}
+function Loading() {
+  return (
+    <div className="container mx-auto px-4 py-8 max-w-6xl">
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin" />
+      </div>
+    </div>
+  )
+}
+
+// {{ AURA: Add - 使用 Suspense 包裹页面内容 }}
+function ConvertPageContent() {
   const [videoUrl, setVideoUrl] = useState('')
   const [selectedParser, setSelectedParser] = useState<string>('')
   const [selectedWebDAV, setSelectedWebDAV] = useState<string>('')
@@ -508,5 +520,14 @@ export default function ConvertPage() {
 
       {/* {{ AURA: Remove - 移除底部独立预览区域，预览功能已集成到右侧状态区域 }} */}
     </div>
+  )
+}
+
+// {{ AURA: Modify - 使用 Suspense 包裹页面内容以解决部署错误 }}
+export default function ConvertPage() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <ConvertPageContent />
+    </Suspense>
   )
 }
