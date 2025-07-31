@@ -112,20 +112,7 @@ export function PreviewActions({
         </Button>
       </div>
 
-      {/* 操作提示 */}
-      <div className="text-sm text-muted-foreground bg-blue-50 border border-blue-200 rounded-md p-3">
-        <div className="space-y-1">
-          <p className="font-medium text-blue-700">
-            💡 操作说明
-          </p>
-          <ul className="space-y-1 text-blue-600">
-            <li>• 确认{isVideo ? '视频' : '图集'}内容无误后，点击"确认并上传"完成转存</li>
-            <li>• 如需修改解析结果，可点击"重新解析"重新处理</li>
-            {isVideo && <li>• 视频将保存为 {mediaInfo.format?.toUpperCase() || 'MP4'} 格式</li>}
-            {isImageAlbum && <li>• 图集将创建文件夹并保存所有图片</li>}
-          </ul>
-        </div>
-      </div>
+      {/* {{ AURA: Remove - 移除操作说明，简化界面 }} */}
 
       {/* 上传进度提示 */}
       {isUploading && (

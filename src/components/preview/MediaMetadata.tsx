@@ -2,9 +2,10 @@
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
-import { Clock, User, Image, Video, FileText, Calendar } from 'lucide-react'
+import { Clock, User, Image as ImageIcon, Video, FileText, Calendar, Quote } from 'lucide-react'
 import { ParsedVideoInfo, MediaType } from '@/types'
 import { ConversionService } from '@/lib/conversion'
+import Image from 'next/image'
 
 interface MediaMetadataProps {
   mediaInfo: ParsedVideoInfo
@@ -12,8 +13,22 @@ interface MediaMetadataProps {
 }
 
 export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps) {
+  console.log('[调试] MediaMetadata收到的mediaInfo:', mediaInfo);
   const isVideo = mediaInfo.mediaType === MediaType.VIDEO
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
+
+  const formatTime = (time: number | string | undefined): string => {
+    if (!time) return '未知时间'
+    if (typeof time === 'string') {
+      const parsedDate = new Date(time)
+      if (!isNaN(parsedDate.getTime())) {
+        return parsedDate.toLocaleString()
+      }
+      return time // 如果无法解析，直接返回字符串
+    }
+    // 假设是毫秒时间戳
+    return new Date(time).toLocaleString()
+  }
 
   return (
     <Card className={`${className}`}>
@@ -25,7 +40,7 @@ export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps)
               {mediaInfo.title || '未知标题'}
             </h3>
             <div className="flex items-center gap-2">
-              <Badge 
+              <Badge
                 variant={isVideo ? "default" : "secondary"}
                 className="flex items-center gap-1"
               >
@@ -36,7 +51,7 @@ export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps)
                   </>
                 ) : (
                   <>
-                    <Image className="w-3 h-3" />
+                    <ImageIcon className="w-3 h-3" />
                     图集
                   </>
                 )}
@@ -52,9 +67,28 @@ export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps)
 
         {/* 作者信息 */}
         {mediaInfo.author && (
-          <div className="flex items-center gap-2 mb-3 text-sm text-muted-foreground">
-            <User className="w-4 h-4" />
-            <span>作者: {mediaInfo.author}</span>
+          <div className="flex items-start gap-3 mb-3 p-3 bg-gray-50 rounded-lg border">
+            {mediaInfo.avatar && (
+              <Image
+                src={mediaInfo.avatar}
+                alt={mediaInfo.author}
+                width={48}
+                height={48}
+                className="rounded-full border"
+              />
+            )}
+            <div className="flex-1">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <User className="w-4 h-4" />
+                <span>{mediaInfo.author}</span>
+              </div>
+              {mediaInfo.signature && (
+                <div className="flex items-start gap-2 mt-1 text-xs text-muted-foreground">
+                  <Quote className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                  <p className="italic">{mediaInfo.signature}</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -82,7 +116,7 @@ export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps)
           {isImageAlbum && (
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Image className="w-4 h-4" />
+                <ImageIcon className="w-4 h-4" />
                 <span>图片数量: {mediaInfo.imageCount || mediaInfo.images?.length || 0}</span>
               </div>
               {mediaInfo.images && mediaInfo.images.length > 0 && (
@@ -96,6 +130,12 @@ export function MediaMetadata({ mediaInfo, className = '' }: MediaMetadataProps)
                 </div>
               )}
             </>
+          )}
+          {mediaInfo.time && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Calendar className="w-4 h-4" />
+              <span>发布于: {formatTime(mediaInfo.time)}</span>
+            </div>
           )}
         </div>
 

@@ -77,6 +77,9 @@ export interface ImageInfo {
 export interface ParsedVideoInfo {
   title: string;
   author?: string; // 作者信息
+  avatar?: string; // 作者头像URL
+  signature?: string; // 作者签名
+  time?: number | string; // 发布时间戳或日期字符串
   description?: string; // 描述文本
   mediaType: MediaType; // 媒体类型：视频或图集
   

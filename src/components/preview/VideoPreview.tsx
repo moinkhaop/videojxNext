@@ -9,14 +9,22 @@ interface VideoPreviewProps {
   thumbnail?: string
   title?: string
   className?: string
+  onClick?: () => void // Add onClick prop
 }
 
-export function VideoPreview({ videoUrl, thumbnail, title, className = '' }: VideoPreviewProps) {
+export function VideoPreview({ videoUrl, thumbnail, title, className = '', onClick }: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  const handlePlayPause = () => {
+  const handlePlayPause = (e?: React.MouseEvent) => {
+    e?.stopPropagation() // Prevent event bubbling
+
+    if (onClick && !isPlaying) {
+      onClick()
+      return
+    }
+
     const video = document.getElementById('preview-video') as HTMLVideoElement
     if (video) {
       if (isPlaying) {
@@ -47,9 +55,9 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '' }: Vid
   }
 
   return (
-    <div className={`relative bg-black rounded-lg overflow-hidden ${className}`}>
+    <div className={`relative bg-black rounded-lg overflow-hidden ${className}`} onClick={onClick}>
       {/* 视频元素 */}
-      <video 
+      <video
         id="preview-video"
         className="w-full h-full object-contain"
         poster={thumbnail}
