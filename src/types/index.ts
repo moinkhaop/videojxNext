@@ -25,6 +25,8 @@ export interface WebDAVConfig {
 export enum TaskStatus {
   PENDING = 'pending',
   PARSING = 'parsing',
+  PARSED = 'parsed',      // 新增：解析完成，等待预览确认
+  PREVIEWING = 'previewing', // 新增：预览中
   UPLOADING = 'uploading',
   SUCCESS = 'success',
   FAILED = 'failed'
@@ -75,6 +77,9 @@ export interface ImageInfo {
 export interface ParsedVideoInfo {
   title: string;
   author?: string; // 作者信息
+  avatar?: string; // 作者头像URL
+  signature?: string; // 作者签名
+  time?: number | string; // 发布时间戳或日期字符串
   description?: string; // 描述文本
   mediaType: MediaType; // 媒体类型：视频或图集
   
@@ -152,9 +157,21 @@ export interface VideoParseResponse {
   error?: string;
 }
 
+// 预览解析API响应类型（继承自VideoParseResponse）
+export interface PreviewParseResponse extends VideoParseResponse {
+  message?: string;
+}
+
 // WebDAV上传响应类型
 export interface WebDAVUploadResponse {
   success: boolean;
   filePath?: string;
   error?: string;
+}
+
+// 预览状态类型
+export interface PreviewState {
+  isPreviewMode: boolean;     // 是否处于预览模式
+  showPreview: boolean;       // 是否显示预览内容
+  previewData: ParsedVideoInfo | null; // 预览数据
 }

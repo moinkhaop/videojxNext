@@ -221,216 +221,152 @@ export default function BatchPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 输入表单 */}
-        <div className="lg:col-span-1">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <List className="w-5 h-5" />
-                <span>批量输入</span>
-              </CardTitle>
-              <CardDescription>
-                每行输入一个视频链接
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">
-                  视频链接列表 {urlCount > 0 && <span className="text-muted-foreground">({urlCount} 个链接)</span>}
-                </label>
-                <Textarea
-                  placeholder={`请输入视频链接，每行一个，例如：
-https://example.com/video1
-https://example.com/video2
-https://example.com/video3`}
-                  value={videoUrls}
-                  onChange={(e) => setVideoUrls(e.target.value)}
-                  className="min-h-[150px] font-mono text-sm"
-                  disabled={isProcessing}
-                />
-              </div>
-
+      <div className="space-y-6">
+        {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
+        {/* 步骤一：输入与配置 */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <List className="w-5 h-5" />
+              <span>1. 输入与配置</span>
+            </CardTitle>
+            <CardDescription>
+              粘贴视频链接列表（每行一个），选择解析服务和存储位置。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">
+                视频链接列表 {urlCount > 0 && <span className="text-muted-foreground">({urlCount} 个链接)</span>}
+              </label>
+              <Textarea
+                placeholder={`请输入视频链接，每行一个，例如：\nhttps://example.com/video1\nhttps://example.com/video2`}
+                value={videoUrls}
+                onChange={(e) => setVideoUrls(e.target.value)}
+                className="min-h-[180px] font-mono text-sm"
+                disabled={isProcessing}
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium mb-2 block">解析API</label>
                 <Select value={selectedParser} onValueChange={setSelectedParser} disabled={isProcessing}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择解析API" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="选择解析API" /></SelectTrigger>
                   <SelectContent>
                     {parsers.map((parser) => (
                       <SelectItem key={parser.id} value={parser.id}>
                         <div className="flex items-center justify-between w-full">
                           <span>{parser.name}</span>
-                          {parser.isDefault && (
-                            <Badge key={`batch-parser-badge-${parser.id}`} variant="secondary" className="ml-2">默认</Badge>
-                          )}
+                          {parser.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-
               <div>
                 <label className="text-sm font-medium mb-2 block">WebDAV服务器</label>
                 <Select value={selectedWebDAV} onValueChange={setSelectedWebDAV} disabled={isProcessing}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择WebDAV服务器" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="选择WebDAV服务器" /></SelectTrigger>
                   <SelectContent>
                     {webdavServers.map((server) => (
                       <SelectItem key={server.id} value={server.id}>
                         <div className="flex items-center justify-between w-full">
                           <span>{server.name}</span>
-                          {server.isDefault && (
-                            <Badge key={`batch-server-badge-${server.id}`} variant="secondary" className="ml-2">默认</Badge>
-                          )}
+                          {server.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-
-              <div className="flex space-x-2">
-                {!isProcessing ? (
-                  <Button 
-                    onClick={handleStartBatch} 
-                    disabled={urlCount === 0 || !selectedParser || !selectedWebDAV}
-                    className="flex-1"
-                  >
-                    <Play className="w-4 h-4 mr-2" />
-                    开始批量转存
+            </div>
+            <div className="pt-2">
+              {!isProcessing ? (
+                <Button
+                  onClick={handleStartBatch}
+                  disabled={urlCount === 0 || !selectedParser || !selectedWebDAV}
+                  className="w-full"
+                  size="lg"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  开始批量转存 ({urlCount}个)
+                </Button>
+              ) : (
+                <div className="flex space-x-2">
+                  <Button variant="outline" onClick={() => setIsPaused(!isPaused)} className="flex-1" disabled>
+                    {isPaused ? <><Play className="w-4 h-4 mr-2" />继续</> : <><Pause className="w-4 h-4 mr-2" />暂停</>}
                   </Button>
-                ) : (
-                  <Button 
-                    variant="outline"
-                    onClick={() => setIsPaused(!isPaused)}
-                    className="flex-1"
-                    disabled
-                  >
-                    {isPaused ? (
-                      <>
-                        <Play className="w-4 h-4 mr-2" />
-                        继续
-                      </>
-                    ) : (
-                      <>
-                        <Pause className="w-4 h-4 mr-2" />
-                        暂停
-                      </>
-                    )}
-                  </Button>
-                )}
-                
-                {currentBatch && (
-                  <Button variant="outline" onClick={resetBatch}>
+                  <Button variant="destructive" onClick={resetBatch}>
                     <Square className="w-4 h-4 mr-2" />
-                    重置
+                    停止并重置
                   </Button>
-                )}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 步骤二：任务进度 */}
+        {currentBatch && (
+          <Card>
+            <CardHeader>
+              <CardTitle>2. 任务进度</CardTitle>
+              <CardDescription>
+                实时显示批量转存进度和每个任务的状态。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* 总体进度 */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">总体进度</h4>
+                  <span className="text-sm text-muted-foreground">
+                    {currentBatch.completedTasks}/{currentBatch.totalTasks} 完成
+                  </span>
+                </div>
+                <Progress value={overallProgress} className="w-full" />
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>{overallProgress.toFixed(1)}%</span>
+                  <span>
+                    成功: {currentBatch.tasks.filter(t => t.status === TaskStatus.SUCCESS).length} |
+                    失败: {currentBatch.tasks.filter(t => t.status === TaskStatus.FAILED).length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 任务列表 */}
+              <div className="space-y-2">
+                <h4 className="font-medium">任务详情</h4>
+                <div className="max-h-96 overflow-y-auto space-y-2 p-1">
+                  {currentBatch.tasks.map((task, index) => (
+                    <div key={task.id} className="flex items-center space-x-3 p-3 border rounded-lg bg-card hover:bg-muted/50">
+                      <div className="flex-shrink-0">{getStatusIcon(task.status)}</div>
+                      <div className="flex-grow min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium">任务 {index + 1}</span>
+                          <Badge key={`batch-task-badge-${task.id}`} className={`text-xs ${getStatusBadgeColor(task.status)}`} variant="outline">
+                            {getStatusText(task.status)}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate" title={task.videoUrl}>{task.videoUrl}</p>
+                        {task.videoTitle && <p className="text-xs text-foreground truncate mt-1" title={task.videoTitle}>{task.videoTitle}</p>}
+                        {task.error && <p className="text-xs text-red-600 mt-1" title={task.error}>错误: {task.error}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 批量任务信息 */}
+              <div className="text-xs text-muted-foreground pt-4 border-t space-y-1">
+                <p>任务名称: {currentBatch.name}</p>
+                <p>创建时间: {currentBatch.createdAt.toLocaleString()}</p>
+                {currentBatch.completedAt && <p>完成时间: {currentBatch.completedAt.toLocaleString()}</p>}
               </div>
             </CardContent>
           </Card>
-        </div>
-
-        {/* 批量任务状态 */}
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>批量任务状态</CardTitle>
-              <CardDescription>
-                实时显示批量转存进度和每个任务的状态
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!currentBatch ? (
-                <div className="text-center text-muted-foreground py-8">
-                  <List className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>输入视频链接并点击"开始批量转存"</p>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  {/* 总体进度 */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-medium">总体进度</h4>
-                      <span className="text-sm text-muted-foreground">
-                        {currentBatch.completedTasks}/{currentBatch.totalTasks} 完成
-                      </span>
-                    </div>
-                    <Progress value={overallProgress} className="w-full" />
-                    <div className="flex items-center justify-between text-sm text-muted-foreground">
-                      <span>{overallProgress.toFixed(1)}%</span>
-                      <span>
-                        成功: {currentBatch.tasks.filter(t => t.status === TaskStatus.SUCCESS).length} | 
-                        失败: {currentBatch.tasks.filter(t => t.status === TaskStatus.FAILED).length}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 任务列表 */}
-                  <div className="space-y-2">
-                    <h4 className="font-medium">任务详情</h4>
-                    <div className="max-h-96 overflow-y-auto space-y-2">
-                      {currentBatch.tasks.map((task, index) => (
-                        <div 
-                          key={task.id}
-                          className="flex items-center space-x-3 p-3 border rounded-lg bg-card"
-                        >
-                          <div className="flex-shrink-0">
-                            {getStatusIcon(task.status)}
-                          </div>
-                          
-                          <div className="flex-grow min-w-0">
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium">
-                                任务 {index + 1}
-                              </span>
-                              <Badge 
-                                key={`batch-task-badge-${task.id}`}
-                                className={`text-xs ${getStatusBadgeColor(task.status)}`}
-                                variant="outline"
-                              >
-                                {getStatusText(task.status)}
-                              </Badge>
-                            </div>
-                            
-                            <p className="text-xs text-muted-foreground truncate">
-                              {task.videoUrl}
-                            </p>
-                            
-                            {task.videoTitle && (
-                              <p className="text-xs text-foreground truncate mt-1">
-                                {task.videoTitle}
-                              </p>
-                            )}
-                            
-                            {task.error && (
-                              <p className="text-xs text-red-600 mt-1">
-                                错误: {task.error}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 批量任务信息 */}
-                  <div className="text-xs text-muted-foreground pt-4 border-t space-y-1">
-                    <p>任务名称: {currentBatch.name}</p>
-                    <p>创建时间: {currentBatch.createdAt.toLocaleString()}</p>
-                    {currentBatch.completedAt && (
-                      <p>完成时间: {currentBatch.completedAt.toLocaleString()}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        )}
       </div>
     </div>
   )

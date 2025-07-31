@@ -1,5 +1,0 @@
-{
-  "/api/proxy/parser/route": "app/api/proxy/parser/route.js",
-  "/api/proxy/webdav/route": "app/api/proxy/webdav/route.js",
-  "/convert/page": "app/convert/page.js"
-}

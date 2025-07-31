@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,17 +10,19 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { 
-  Play, 
-  Download, 
   CheckCircle, 
   XCircle, 
   Loader2, 
   Settings,
-  Link as LinkIcon 
+  Link as LinkIcon,
+  Eye,
+  Upload,
+  RotateCcw
 } from 'lucide-react'
-import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig } from '@/types'
+import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
+import { CompactPreview, PreviewActions } from '@/components/preview'
 import Link from 'next/link'
 
 export default function ConvertPage() {
@@ -32,6 +34,13 @@ export default function ConvertPage() {
   const [currentTask, setCurrentTask] = useState<ConversionTask | null>(null)
   const [progress, setProgress] = useState(0)
   const [isConverting, setIsConverting] = useState(false)
+  
+  // 预览状态管理
+  const [previewState, setPreviewState] = useState<PreviewState>({
+    isPreviewMode: false,
+    showPreview: false,
+    previewData: null
+  })
 
   useEffect(() => {
     // 加载配置
@@ -49,92 +58,91 @@ export default function ConvertPage() {
     if (defaultServer) setSelectedWebDAV(defaultServer.id)
   }, [])
 
+  // {{ AURA: Add - 处理URL参数自动填充 }}
+  const searchParams = useSearchParams()
+  
+  useEffect(() => {
+    const urlParam = searchParams.get('url')
+    if (urlParam) {
+      setVideoUrl(decodeURIComponent(urlParam))
+    }
+  }, [searchParams])
+
   // 提取视频链接
   const extractVideoLink = (input: string): string => {
-    // 改进的URL正则表达式，能够更好地匹配各种分享文本中的URL
     const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&=\/=]*))/g
     const matches = input.match(urlRegex)
     return matches && matches.length > 0 ? matches[0].replace(/\/$/, '') : input.trim()
   }
   
-  const handleConvert = async () => {
+  // 处理解析和预览
+  const handleParseAndPreview = async () => {
     if (!videoUrl.trim()) {
       alert('请输入视频链接')
       return
     }
     
-    // 提取输入文本中的URL
     const extractedUrl = extractVideoLink(videoUrl)
 
-    if (!selectedParser || !selectedWebDAV) {
-      alert('请选择解析API和WebDAV服务器')
+    if (!selectedParser) {
+      alert('请选择解析API')
       return
     }
 
     const parser = parsers.find(p => p.id === selectedParser)
-    const webdav = webdavServers.find(s => s.id === selectedWebDAV)
 
-    if (!parser || !webdav) {
-      alert('配置信息错误')
+    if (!parser) {
+      alert('解析API配置信息错误')
       return
     }
 
     setIsConverting(true)
     setProgress(0)
 
-    // 如果提取出了URL，显示提示
     if (extractedUrl !== videoUrl.trim()) {
-      console.log(`[转存] 从分享文本中提取到URL: ${extractedUrl}`)
+      console.log(`[预览] 从分享文本中提取到URL: ${extractedUrl}`)
     }
     
     // 创建转存任务
     const task: ConversionTask = {
       id: ConversionService.generateTaskId(),
-      videoUrl: extractedUrl, // 使用提取后的URL
-      status: TaskStatus.PENDING,
+      videoUrl: extractedUrl,
+      status: TaskStatus.PARSING,
       createdAt: new Date()
     }
 
     setCurrentTask(task)
 
     try {
-      // 执行转存
-      const updatedTask = await ConversionService.convertSingle(
-        task,
-        parser,
-        webdav,
-        (progress, status) => {
-          setProgress(progress)
-          setCurrentTask(prev => prev ? { ...prev, status } : null)
-        }
-      )
-
-      setCurrentTask(updatedTask)
+      // 仅解析，不上传
+      const parsedInfo = await ConversionService.parseOnly(extractedUrl, parser)
       
-      // 判断任务是否失败
-      if (updatedTask.status === TaskStatus.FAILED) {
-        console.error('转存失败:', updatedTask.error)
-      } else {
-        console.log('转存成功:', updatedTask.uploadResult?.filePath)
-      }
-
-      // 无论成功失败都保存到历史记录
-      HistoryManager.addRecord({
-        id: ConversionService.generateTaskId(),
-        type: 'single',
-        task: updatedTask,
-        createdAt: new Date()
+      // 更新预览状态
+      setPreviewState({
+        isPreviewMode: true,
+        showPreview: true,
+        previewData: parsedInfo
       })
+      
+      // 更新任务状态
+      setCurrentTask(prev => prev ? {
+        ...prev,
+        status: TaskStatus.PARSED,
+        parsedVideoInfo: parsedInfo,
+        videoTitle: parsedInfo.title
+      } : null)
+      
+      setProgress(100)
+      console.log(`[预览] 解析成功: ${parsedInfo.title}`)
 
     } catch (error) {
-      console.error('转存过程出现异常:', error)
-      // 更新当前任务状态为失败
+      console.error('解析过程出现异常:', error)
       setCurrentTask(prev => {
         if (!prev) return null
         return {
           ...prev,
           status: TaskStatus.FAILED,
-          error: error instanceof Error ? error.message : '转存过程发生未知错误',
+          error: error instanceof Error ? error.message : '解析过程发生未知错误',
           completedAt: new Date()
         }
       })
@@ -143,11 +151,103 @@ export default function ConvertPage() {
     }
   }
 
+  // 处理确认上传
+  const handleConfirmUpload = async () => {
+    if (!previewState.previewData || !selectedWebDAV) {
+      alert('请选择WebDAV服务器')
+      return
+    }
+
+    const webdav = webdavServers.find(s => s.id === selectedWebDAV)
+
+    if (!webdav) {
+      alert('WebDAV服务器配置信息错误')
+      return
+    }
+
+    setIsConverting(true)
+    setProgress(0)
+
+    try {
+      // 更新任务状态为上传中
+      setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
+      setProgress(50)
+
+      // 基于已解析的数据进行上传
+      const filePath = await ConversionService.uploadParsedMedia(
+        previewState.previewData,
+        webdav
+      )
+
+      // 更新任务状态为成功
+      const finalTask = {
+        ...currentTask!,
+        status: TaskStatus.SUCCESS,
+        completedAt: new Date(),
+        uploadResult: {
+          success: true,
+          filePath
+        }
+      }
+
+      setCurrentTask(finalTask)
+      setProgress(100)
+
+      console.log('上传成功:', filePath)
+
+      // 保存到历史记录
+      HistoryManager.addRecord({
+        id: ConversionService.generateTaskId(),
+        type: 'single',
+        task: finalTask,
+        createdAt: new Date()
+      })
+
+      // 重置预览状态
+      setPreviewState({
+        isPreviewMode: false,
+        showPreview: false,
+        previewData: null
+      })
+
+    } catch (error) {
+      console.error('上传过程出现异常:', error)
+      setCurrentTask(prev => {
+        if (!prev) return null
+        return {
+          ...prev,
+          status: TaskStatus.FAILED,
+          error: error instanceof Error ? error.message : '上传过程发生未知错误',
+          completedAt: new Date()
+        }
+      })
+    } finally {
+      setIsConverting(false)
+    }
+  }
+
+  // 重新解析
+  const handleReparse = () => {
+    setPreviewState({
+      isPreviewMode: false,
+      showPreview: false,
+      previewData: null
+    })
+    setCurrentTask(null)
+    setProgress(0)
+    setIsConverting(false)
+  }
+
   const resetForm = () => {
     setVideoUrl('')
     setCurrentTask(null)
     setProgress(0)
     setIsConverting(false)
+    setPreviewState({
+      isPreviewMode: false,
+      showPreview: false,
+      previewData: null
+    })
   }
 
   const getStatusIcon = (status: TaskStatus) => {
@@ -156,12 +256,14 @@ export default function ConvertPage() {
         return <Loader2 className="w-4 h-4 animate-spin" />
       case TaskStatus.PARSING:
         return <Loader2 className="w-4 h-4 animate-spin" />
+      case TaskStatus.PARSED:
+        return <Eye className="w-4 h-4" />
       case TaskStatus.UPLOADING:
-        return <Download className="w-4 h-4" />
+        return <Upload className="w-4 h-4 animate-bounce" />
       case TaskStatus.SUCCESS:
-        return <CheckCircle className="w-4 h-4 text-green-500" />
+        return <CheckCircle className="w-4 h-4" />
       case TaskStatus.FAILED:
-        return <XCircle className="w-4 h-4 text-red-500" />
+        return <XCircle className="w-4 h-4" />
       default:
         return null
     }
@@ -170,40 +272,48 @@ export default function ConvertPage() {
   const getStatusText = (status: TaskStatus) => {
     switch (status) {
       case TaskStatus.PENDING:
-        return '等待中'
+        return '等待处理'
       case TaskStatus.PARSING:
-        return '解析中'
+        return '正在解析'
+      case TaskStatus.PARSED:
+        return '解析完成'
       case TaskStatus.UPLOADING:
-        return '上传中'
+        return '正在上传'
       case TaskStatus.SUCCESS:
-        return '成功'
+        return '转存成功'
       case TaskStatus.FAILED:
-        return '失败'
+        return '处理失败'
       default:
-        return '未知'
+        return '状态未知'
     }
   }
 
   const getStatusColor = (status: TaskStatus) => {
     switch (status) {
       case TaskStatus.SUCCESS:
-        return 'bg-green-500'
+        return 'bg-green-500 text-white shadow-sm'
       case TaskStatus.FAILED:
-        return 'bg-red-500'
+        return 'bg-red-500 text-white shadow-sm'
+      case TaskStatus.PARSED:
+        return 'bg-blue-500 text-white shadow-sm'
       case TaskStatus.PARSING:
+        return 'bg-orange-500 text-white shadow-sm animate-pulse'
       case TaskStatus.UPLOADING:
-        return 'bg-blue-500'
+        return 'bg-purple-500 text-white shadow-sm animate-pulse'
+      case TaskStatus.PENDING:
+        return 'bg-gray-500 text-white shadow-sm'
       default:
-        return 'bg-gray-500'
+        return 'bg-gray-400 text-white shadow-sm'
     }
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
+    <div className="container mx-auto px-4 py-8 max-w-6xl">
+      {/* 页面标题 */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">单链接转存</h1>
         <p className="text-muted-foreground">
-          输入视频分享链接，选择解析API和WebDAV服务器，快速完成视频转存
+          输入视频分享链接，先解析预览内容，确认无误后再上传到WebDAV服务器
         </p>
       </div>
 
@@ -220,152 +330,146 @@ export default function ConvertPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 输入表单 */}
+      {/* 中间：操作区域（两列布局） */}
+      <div className="space-y-6">
+        {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
+        {/* 步骤一：输入与配置 */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
               <LinkIcon className="w-5 h-5" />
-              <span>视频链接</span>
+              <span>1. 输入链接与配置</span>
             </CardTitle>
             <CardDescription>
-              支持多种视频平台的分享链接
+              粘贴视频分享链接，然后选择解析服务和存储位置。
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium mb-2 block">视频链接</label>
-              <Textarea
-                placeholder="请粘贴视频分享链接..."
-                value={videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
-                className="min-h-[100px]"
-                disabled={isConverting}
-              />
+          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* 左侧输入 */}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">视频链接</label>
+                <Textarea
+                  placeholder="请粘贴视频分享链接..."
+                  value={videoUrl}
+                  onChange={(e) => setVideoUrl(e.target.value)}
+                  className="min-h-[120px]"
+                  disabled={isConverting || previewState.isPreviewMode}
+                />
+              </div>
             </div>
-
-            <div>
-              <label className="text-sm font-medium mb-2 block">解析API</label>
-              <Select value={selectedParser} onValueChange={setSelectedParser} disabled={isConverting}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择解析API" />
-                </SelectTrigger>
-                <SelectContent>
-                  {parsers.map((parser) => (
-                    <SelectItem key={parser.id} value={parser.id}>
-                      <div className="flex items-center justify-between w-full">
-                        <span>{parser.name}</span>
-                        {parser.isDefault && (
-                          <Badge key={`convert-parser-badge-${parser.id}`} variant="secondary" className="ml-2">默认</Badge>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium mb-2 block">WebDAV服务器</label>
-              <Select value={selectedWebDAV} onValueChange={setSelectedWebDAV} disabled={isConverting}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择WebDAV服务器" />
-                </SelectTrigger>
-                <SelectContent>
-                  {webdavServers.map((server) => (
-                    <SelectItem key={server.id} value={server.id}>
-                      <div className="flex items-center justify-between w-full">
-                        <span>{server.name}</span>
-                        {server.isDefault && (
-                          <Badge key={`convert-server-badge-${server.id}`} variant="secondary" className="ml-2">默认</Badge>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex space-x-2">
-              <Button 
-                onClick={handleConvert} 
-                disabled={isConverting || !videoUrl.trim() || !selectedParser || !selectedWebDAV}
-                className="flex-1"
-              >
-                {isConverting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    转存中...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-4 h-4 mr-2" />
-                    开始转存
-                  </>
-                )}
-              </Button>
-              
-              {currentTask && (
-                <Button variant="outline" onClick={resetForm}>
-                  重置
-                </Button>
-              )}
+            {/* 右侧选择 */}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">解析API</label>
+                <Select value={selectedParser} onValueChange={setSelectedParser} disabled={isConverting || previewState.isPreviewMode}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择解析API" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {parsers.map((parser) => (
+                      <SelectItem key={parser.id} value={parser.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <span>{parser.name}</span>
+                          {parser.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">WebDAV服务器</label>
+                <Select value={selectedWebDAV} onValueChange={setSelectedWebDAV} disabled={isConverting}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择WebDAV服务器" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {webdavServers.map((server) => (
+                      <SelectItem key={server.id} value={server.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <span>{server.name}</span>
+                          {server.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* 任务状态 */}
+        {/* 步骤二：操作与预览 */}
+        {/* {{ AURA: Modify - 将解析按钮和状态预览整合 }} */}
         <Card>
           <CardHeader>
-            <CardTitle>转存状态</CardTitle>
+            <CardTitle className="flex items-center space-x-2">
+              <Eye className="w-5 h-5" />
+              <span>2. 解析与预览</span>
+            </CardTitle>
             <CardDescription>
-              实时显示转存进度和结果
+              检查解析结果，确认无误后执行上传操作。
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!currentTask ? (
-              <div className="text-center text-muted-foreground py-8">
-                <Play className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>点击"开始转存"开始处理视频</p>
+            {/* 主操作按钮区域 */}
+            {!previewState.isPreviewMode && (
+              <div className="text-center py-4">
+                <Button
+                  onClick={handleParseAndPreview}
+                  disabled={isConverting || !videoUrl.trim() || !selectedParser}
+                  size="lg"
+                  className="w-full max-w-xs"
+                >
+                  {isConverting ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />解析中...</>
+                  ) : (
+                    <><Eye className="w-4 h-4 mr-2" />解析/预览</>
+                  )}
+                </Button>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {/* 基本信息 */}
+            )}
+
+            {/* 状态和预览区域 */}
+            {currentTask && (
+              <div className="space-y-4 pt-4 border-t">
+                {/* 任务状态 */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium">任务状态</span>
-                    <Badge key={`convert-task-badge-${currentTask.id}`} className={getStatusColor(currentTask.status)}>
+                    <Badge className={getStatusColor(currentTask.status)}>
                       <div className="flex items-center space-x-1">
                         {getStatusIcon(currentTask.status)}
                         <span>{getStatusText(currentTask.status)}</span>
                       </div>
                     </Badge>
                   </div>
-                  
                   {isConverting && (
                     <div className="space-y-2">
                       <Progress value={progress} className="w-full" />
-                      <p className="text-xs text-muted-foreground text-center">
-                        {progress.toFixed(0)}%
-                      </p>
+                      <p className="text-xs text-muted-foreground text-center">{progress.toFixed(0)}%</p>
                     </div>
                   )}
                 </div>
 
-                {/* 视频信息 */}
+                {/* 紧凑预览 */}
                 {currentTask.parsedVideoInfo && (
-                  <div className="space-y-2">
-                    <h4 className="font-medium">视频信息</h4>
-                    <div className="text-sm space-y-1">
-                      <p><span className="text-muted-foreground">标题:</span> {currentTask.parsedVideoInfo.title}</p>
-                      {currentTask.parsedVideoInfo.duration && (
-                        <p><span className="text-muted-foreground">时长:</span> {ConversionService.formatDuration(currentTask.parsedVideoInfo.duration)}</p>
-                      )}
-                      {currentTask.parsedVideoInfo.fileSize && (
-                        <p><span className="text-muted-foreground">大小:</span> {ConversionService.formatFileSize(currentTask.parsedVideoInfo.fileSize)}</p>
-                      )}
-                      <p><span className="text-muted-foreground">格式:</span> {currentTask.parsedVideoInfo.format}</p>
-                    </div>
+                  <div className="border-t pt-4">
+                    <CompactPreview mediaInfo={currentTask.parsedVideoInfo} />
+                  </div>
+                )}
+
+                {/* 操作按钮 */}
+                {previewState.isPreviewMode && previewState.previewData && (
+                  <div className="border-t pt-4">
+                    <PreviewActions
+                      mediaInfo={previewState.previewData}
+                      isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
+                      onConfirmUpload={handleConfirmUpload}
+                      onReparse={handleReparse}
+                      className="space-y-3"
+                    />
                   </div>
                 )}
 
@@ -373,19 +477,8 @@ export default function ConvertPage() {
                 {currentTask.error && (
                   <Alert className="border-red-200 bg-red-50">
                     <XCircle className="h-4 w-4 text-red-500" />
-                    <AlertDescription className="text-red-700 space-y-2">
+                    <AlertDescription className="text-red-700">
                       <p><strong>错误信息:</strong> {currentTask.error}</p>
-                      {currentTask.error.includes('URL为空') && (
-                        <>
-                          <p><strong>可能的原因:</strong></p>
-                          <ul className="list-disc pl-5">
-                            <li>解析API返回的数据格式不兼容</li>
-                            <li>视频链接可能无效或已过期</li>
-                            <li>解析API可能暂时不可用</li>
-                          </ul>
-                          <p><strong>建议:</strong> 尝试更换解析API或检查视频链接是否有效</p>
-                        </>
-                      )}
                     </AlertDescription>
                   </Alert>
                 )}
@@ -395,23 +488,25 @@ export default function ConvertPage() {
                   <Alert className="border-green-200 bg-green-50">
                     <CheckCircle className="h-4 w-4 text-green-500" />
                     <AlertDescription className="text-green-700">
-                      转存成功！文件已保存到: {currentTask.uploadResult.filePath}
+                      转存成功！文件已保存到: {decodeURIComponent(currentTask.uploadResult.filePath)}
                     </AlertDescription>
                   </Alert>
                 )}
 
-                {/* 任务时间 */}
-                <div className="text-xs text-muted-foreground pt-4 border-t">
-                  <p>创建时间: {currentTask.createdAt.toLocaleString()}</p>
-                  {currentTask.completedAt && (
-                    <p>完成时间: {currentTask.completedAt.toLocaleString()}</p>
-                  )}
+                {/* 重置按钮 */}
+                <div className="pt-4 border-t">
+                  <Button variant="outline" onClick={resetForm} className="w-full">
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    开始新的转存
+                  </Button>
                 </div>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* {{ AURA: Remove - 移除底部独立预览区域，预览功能已集成到右侧状态区域 }} */}
     </div>
   )
 }

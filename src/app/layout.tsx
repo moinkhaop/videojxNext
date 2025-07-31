@@ -19,7 +19,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <div className="min-h-screen bg-background">
           <Navigation />
-          <main>
+          <main className="pb-16 md:pb-0">
             {children}
           </main>
         </div>
