@@ -50,7 +50,7 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
 
       {/* {{ AURA: Add - 紧凑媒体预览区域 }} */}
       <div className="space-y-3">
-        {/* {{ AURA: Modify - 添加点击放大功能的媒体预览 }} */}
+        {/* {{ AURA: Modify - 添加点击放大功能的媒体预览 }}
         {/* 媒体内容预览 */}
         {isVideo && mediaInfo.url ? (
           <VideoPreview
@@ -83,7 +83,7 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
         )}
 
         {/* {{ AURA: Modify - 展示更多详细信息 }} */}
-        <div className="text-xs space-y-2 bg-gray-50 p-3 rounded">
+        <div className="text-xs space-y-2 bg-gray-50 p-3 rounded compact-preview-text">
           <div>
             <p className="font-medium text-gray-900 mb-1 leading-relaxed" title={mediaInfo.title}>
               {mediaInfo.title || '未知标题'}

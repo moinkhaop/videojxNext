@@ -208,7 +208,7 @@ export default function HistoryPage() {
               </div>
             </div>
           </div>
-          <div className="mt-3 pt-3 border-t space-y-1 text-xs text-muted-foreground">
+          <div className="mt-3 pt-3 border-t space-y-1 text-xs text-muted-foreground card-content">
             {task.uploadResult?.filePath && (
               <p className="text-green-600 break-all">
                 <strong className="font-semibold">文件路径:</strong> {decodeURIComponent(task.uploadResult.filePath)}
