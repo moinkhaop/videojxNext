@@ -8,6 +8,10 @@ export interface VideoParserConfig {
   useGetMethod?: boolean; // 是否使用GET请求方式
   requestMethod?: 'GET' | 'POST'; // 明确请求方法
   urlParamName?: string; // URL参数名称，默认为'url'
+  // {{ AURA: Add - 新增自定义参数支持 }}
+  customHeaders?: Record<string, string>; // 自定义请求头
+  customBodyParams?: Record<string, any>; // POST请求时的自定义参数
+  customQueryParams?: Record<string, string>; // GET请求时的自定义查询参数
 }
 
 // WebDAV服务器配置类型
@@ -82,6 +86,8 @@ export interface ParsedVideoInfo {
   time?: number | string; // 发布时间戳或日期字符串
   description?: string; // 描述文本
   mediaType: MediaType; // 媒体类型：视频或图集
+  viewCount?: string; // {{ AURA: Add - 添加观看次数字段 }}
+  uploadDate?: string; // {{ AURA: Add - 添加上传日期字段 }}
   
   // 视频相关字段
   url?: string; // 视频URL（视频类型时使用）
@@ -148,6 +154,7 @@ export interface ApiResponse<T = any> {
   data?: T;
   error?: string;
   message?: string;
+  rawData?: any; // {{ AURA: Add - 添加原始数据字段，用于调试 }}
 }
 
 // 视频解析API响应类型
@@ -155,6 +162,7 @@ export interface VideoParseResponse {
   success: boolean;
   data: ParsedVideoInfo;
   error?: string;
+  rawData?: any; // {{ AURA: Add - 添加原始数据字段，用于调试 }}
 }
 
 // 预览解析API响应类型（继承自VideoParseResponse）

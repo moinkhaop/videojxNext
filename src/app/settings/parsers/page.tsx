@@ -6,14 +6,16 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { 
-  Code, 
-  Plus, 
-  Trash2, 
-  Edit, 
-  Eye, 
-  EyeOff, 
-  CheckCircle, 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Code,
+  Plus,
+  Trash2,
+  Edit,
+  Eye,
+  EyeOff,
+  CheckCircle,
   XCircle,
   Zap,
   Save,
@@ -31,7 +33,12 @@ export default function ParsersConfigPage() {
   const [formData, setFormData] = useState({
     name: '',
     apiUrl: '',
-    apiKey: ''
+    apiKey: '',
+    requestMethod: 'POST' as 'GET' | 'POST',
+    urlParamName: 'url',
+    customHeaders: '{}',
+    customBodyParams: '{}',
+    customQueryParams: '{}'
   })
 
   useEffect(() => {
@@ -47,7 +54,12 @@ export default function ParsersConfigPage() {
     setFormData({
       name: '',
       apiUrl: '',
-      apiKey: ''
+      apiKey: '',
+      requestMethod: 'POST' as 'GET' | 'POST',
+      urlParamName: 'url',
+      customHeaders: '{}',
+      customBodyParams: '{}',
+      customQueryParams: '{}'
     })
     setEditingConfig(null)
     setIsNewConfig(true)
@@ -60,6 +72,8 @@ export default function ParsersConfigPage() {
       name: "测试模式解析器",
       apiUrl: "/api/proxy/parser?test=true",
       apiKey: "",
+      requestMethod: 'POST',
+      urlParamName: 'url',
       isDefault: configs.length === 0
     }
     
@@ -73,7 +87,12 @@ export default function ParsersConfigPage() {
     setFormData({
       name: config.name,
       apiUrl: config.apiUrl,
-      apiKey: config.apiKey || ''
+      apiKey: config.apiKey || '',
+      requestMethod: config.requestMethod || 'POST',
+      urlParamName: config.urlParamName || 'url',
+      customHeaders: JSON.stringify(config.customHeaders || {}, null, 2),
+      customBodyParams: JSON.stringify(config.customBodyParams || {}, null, 2),
+      customQueryParams: JSON.stringify(config.customQueryParams || {}, null, 2)
     })
     setEditingConfig(config)
     setIsNewConfig(false)
@@ -85,10 +104,41 @@ export default function ParsersConfigPage() {
       return
     }
 
+    // {{ AURA: Modify - 解析JSON字符串并添加新的自定义参数支持 }}
+    let customHeaders = {}
+    let customBodyParams = {}
+    let customQueryParams = {}
+
+    try {
+      customHeaders = JSON.parse(formData.customHeaders)
+    } catch (e) {
+      alert('自定义请求头格式错误，请输入有效的JSON格式')
+      return
+    }
+
+    try {
+      customBodyParams = JSON.parse(formData.customBodyParams)
+    } catch (e) {
+      alert('自定义POST参数格式错误，请输入有效的JSON格式')
+      return
+    }
+
+    try {
+      customQueryParams = JSON.parse(formData.customQueryParams)
+    } catch (e) {
+      alert('自定义GET参数格式错误，请输入有效的JSON格式')
+      return
+    }
+
     const configData: Omit<VideoParserConfig, 'id'> = {
       name: formData.name.trim(),
       apiUrl: formData.apiUrl.trim(),
       apiKey: formData.apiKey.trim() || undefined,
+      requestMethod: formData.requestMethod,
+      urlParamName: formData.urlParamName.trim() || 'url',
+      customHeaders: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
+      customBodyParams: Object.keys(customBodyParams).length > 0 ? customBodyParams : undefined,
+      customQueryParams: Object.keys(customQueryParams).length > 0 ? customQueryParams : undefined,
       isDefault: configs.length === 0 // 第一个配置自动设为默认
     }
 
@@ -109,7 +159,12 @@ export default function ParsersConfigPage() {
     setFormData({
       name: '',
       apiUrl: '',
-      apiKey: ''
+      apiKey: '',
+      requestMethod: 'POST' as 'GET' | 'POST',
+      urlParamName: 'url',
+      customHeaders: '{}',
+      customBodyParams: '{}',
+      customQueryParams: '{}'
     })
   }
 
@@ -208,6 +263,28 @@ export default function ParsersConfigPage() {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium mb-2">请求方法</label>
+                <Select value={formData.requestMethod} onValueChange={(value: 'GET' | 'POST') => setFormData({ ...formData, requestMethod: value })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择请求方法" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="POST">POST</SelectItem>
+                    <SelectItem value="GET">GET</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">URL参数名称（GET请求时使用）</label>
+                <Input
+                  placeholder="url"
+                  value={formData.urlParamName}
+                  onChange={(e) => setFormData({ ...formData, urlParamName: e.target.value })}
+                />
+              </div>
+
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium mb-2">API 密钥（可选）</label>
                 <div className="relative">
@@ -229,6 +306,40 @@ export default function ParsersConfigPage() {
                   </Button>
                 </div>
               </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium mb-2">自定义请求头（JSON格式）</label>
+                <Textarea
+                  placeholder='{"accept": "application/json", "x-requested-with": "XMLHttpRequest"}'
+                  value={formData.customHeaders}
+                  onChange={(e) => setFormData({ ...formData, customHeaders: e.target.value })}
+                  className="min-h-[80px] font-mono text-sm"
+                />
+              </div>
+
+              {formData.requestMethod === 'POST' && (
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium mb-2">自定义POST参数（JSON格式）</label>
+                  <Textarea
+                    placeholder='{"platform": "douyin", "params": "value"}'
+                    value={formData.customBodyParams}
+                    onChange={(e) => setFormData({ ...formData, customBodyParams: e.target.value })}
+                    className="min-h-[80px] font-mono text-sm"
+                  />
+                </div>
+              )}
+
+              {formData.requestMethod === 'GET' && (
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium mb-2">自定义GET参数（JSON格式）</label>
+                  <Textarea
+                    placeholder='{"platform": "douyin", "version": "1.0"}'
+                    value={formData.customQueryParams}
+                    onChange={(e) => setFormData({ ...formData, customQueryParams: e.target.value })}
+                    className="min-h-[80px] font-mono text-sm"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex items-center space-x-3">

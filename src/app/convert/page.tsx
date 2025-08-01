@@ -22,7 +22,7 @@ import {
 import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
-import { CompactPreview, PreviewActions } from '@/components/preview'
+import { TwoColumnPreview } from '@/components/preview'
 import Link from 'next/link'
 
 // {{ AURA: Add - Loading 组件用于 Suspense fallback }}
@@ -163,8 +163,8 @@ function ConvertPageContent() {
     }
   }
 
-  // 处理确认上传
-  const handleConfirmUpload = async () => {
+  // {{ AURA: Modify - 优化上传函数以改善感知性能 }}
+  const handleConfirmUpload = () => {
     if (!previewState.previewData || !selectedWebDAV) {
       alert('请选择WebDAV服务器')
       return
@@ -177,65 +177,69 @@ function ConvertPageContent() {
       return
     }
 
+    // 立即更新UI状态，显示加载动画
     setIsConverting(true)
     setProgress(0)
+    setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
 
-    try {
-      // 更新任务状态为上传中
-      setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
-      setProgress(50)
+    // 使用setTimeout将网络请求延迟到下一个事件循环
+    // 这可以确保UI渲染不会阻塞网络请求的发出
+    setTimeout(async () => {
+      try {
+        setProgress(50)
 
-      // 基于已解析的数据进行上传
-      const filePath = await ConversionService.uploadParsedMedia(
-        previewState.previewData,
-        webdav
-      )
+        // 基于已解析的数据进行上传
+        const filePath = await ConversionService.uploadParsedMedia(
+          previewState.previewData!,
+          webdav
+        )
 
-      // 更新任务状态为成功
-      const finalTask = {
-        ...currentTask!,
-        status: TaskStatus.SUCCESS,
-        completedAt: new Date(),
-        uploadResult: {
-          success: true,
-          filePath
+        // 更新任务状态为成功
+        const finalTask = {
+          ...currentTask!,
+          status: TaskStatus.SUCCESS,
+          completedAt: new Date(),
+          uploadResult: {
+            success: true,
+            filePath
+          }
         }
+
+        setCurrentTask(finalTask)
+        setProgress(100)
+
+        console.log('上传成功:', filePath)
+
+        // 保存到历史记录
+        HistoryManager.addRecord({
+          id: ConversionService.generateTaskId(),
+          type: 'single',
+          task: finalTask,
+          createdAt: new Date()
+        })
+
+        // 重置预览状态
+        setPreviewState({
+          isPreviewMode: false,
+          showPreview: false,
+          previewData: null
+        })
+
+      } catch (error) {
+        console.error('上传过程出现异常:', error)
+        setCurrentTask(prev => {
+          if (!prev) return null
+          return {
+            ...prev,
+            status: TaskStatus.FAILED,
+            error: error instanceof Error ? error.message : '上传过程发生未知错误',
+            completedAt: new Date()
+          }
+        })
+      } finally {
+        setIsConverting(false)
       }
-
-      setCurrentTask(finalTask)
-      setProgress(100)
-
-      console.log('上传成功:', filePath)
-
-      // 保存到历史记录
-      HistoryManager.addRecord({
-        id: ConversionService.generateTaskId(),
-        type: 'single',
-        task: finalTask,
-        createdAt: new Date()
-      })
-
-      // 重置预览状态
-      setPreviewState({
-        isPreviewMode: false,
-        showPreview: false,
-        previewData: null
-      })
-
-    } catch (error) {
-      console.error('上传过程出现异常:', error)
-      setCurrentTask(prev => {
-        if (!prev) return null
-        return {
-          ...prev,
-          status: TaskStatus.FAILED,
-          error: error instanceof Error ? error.message : '上传过程发生未知错误',
-          completedAt: new Date()
-        }
-      })
-    } finally {
-      setIsConverting(false)
-    }
+    }, 0)
   }
 
   // 重新解析
@@ -350,7 +354,7 @@ function ConvertPageContent() {
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
               <LinkIcon className="w-5 h-5" />
-              <span>1. 输入链接与配置</span>
+              <span>输入链接与配置</span>
             </CardTitle>
             <CardDescription>
               粘贴视频分享链接，然后选择解析服务和存储位置。
@@ -415,15 +419,6 @@ function ConvertPageContent() {
         {/* 步骤二：操作与预览 */}
         {/* {{ AURA: Modify - 将解析按钮和状态预览整合 }} */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <Eye className="w-5 h-5" />
-              <span>2. 解析与预览</span>
-            </CardTitle>
-            <CardDescription>
-              检查解析结果，确认无误后执行上传操作。
-            </CardDescription>
-          </CardHeader>
           <CardContent>
             {/* 主操作按钮区域 */}
             {!previewState.isPreviewMode && (
@@ -446,41 +441,17 @@ function ConvertPageContent() {
             {/* 状态和预览区域 */}
             {currentTask && (
               <div className="space-y-4 pt-4 border-t">
-                {/* 任务状态 */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium">任务状态</span>
-                    <Badge className={getStatusColor(currentTask.status)}>
-                      <div className="flex items-center space-x-1">
-                        {getStatusIcon(currentTask.status)}
-                        <span>{getStatusText(currentTask.status)}</span>
-                      </div>
-                    </Badge>
-                  </div>
-                  {isConverting && (
-                    <div className="space-y-2">
-                      <Progress value={progress} className="w-full" />
-                      <p className="text-xs text-muted-foreground text-center">{progress.toFixed(0)}%</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* 紧凑预览 */}
-                {currentTask.parsedVideoInfo && (
-                  <div className="border-t pt-4">
-                    <CompactPreview mediaInfo={currentTask.parsedVideoInfo} />
-                  </div>
-                )}
-
-                {/* 操作按钮 */}
+                {/* {{ AURA: Modify - 任务状态显示逻辑已移入 TwoColumnPreview 组件 }} */}
+                {/* 双栏预览布局 */}
                 {previewState.isPreviewMode && previewState.previewData && (
                   <div className="border-t pt-4">
-                    <PreviewActions
+                    <TwoColumnPreview
                       mediaInfo={previewState.previewData}
                       isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
                       onConfirmUpload={handleConfirmUpload}
                       onReparse={handleReparse}
-                      className="space-y-3"
+                      currentTask={currentTask}
+                      progress={progress}
                     />
                   </div>
                 )}

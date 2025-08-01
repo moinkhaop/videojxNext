@@ -104,7 +104,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
       {/* 图片显示区域 - 采用aspect-ratio确保正确比例 */}
       <div className="relative w-full bg-gray-50 aspect-video">
         {/* 当前图片容器 */}
-        <div 
+        <div
           className="absolute inset-0 flex items-center justify-center cursor-pointer"
           onClick={handleImageClick}
         >
@@ -129,37 +129,39 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
         {images.length > 1 && (
           <>
             {/* 左侧按钮 */}
+            {/* {{ AURA: Modify - 改进导航控件样式 }} */}
             <Button
-              variant="secondary"
-              size="sm"
-              className="absolute left-3 top-1/2 transform -translate-y-1/2 bg-white/90 hover:bg-white text-gray-800 border border-gray-200 shadow-md z-10 rounded-full w-10 h-10 p-0 opacity-80 hover:opacity-100 transition-all duration-200"
+              variant="ghost"
+              size="icon"
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white rounded-full w-10 h-10 hover:bg-black/70 transition-all duration-200 opacity-60 hover:opacity-100 focus:ring-2 focus:ring-white focus:ring-offset-2"
               onClick={(e) => {
                 e.stopPropagation()
                 goToPrevious()
               }}
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="w-6 h-6" />
             </Button>
             
             {/* 右侧按钮 */}
             <Button
-              variant="secondary"
-              size="sm"
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 bg-white/90 hover:bg-white text-gray-800 border border-gray-200 shadow-md z-10 rounded-full w-10 h-10 p-0 opacity-80 hover:opacity-100 transition-all duration-200"
+              variant="ghost"
+              size="icon"
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white rounded-full w-10 h-10 hover:bg-black/70 transition-all duration-200 opacity-60 hover:opacity-100 focus:ring-2 focus:ring-white focus:ring-offset-2"
               onClick={(e) => {
                 e.stopPropagation()
                 goToNext()
               }}
             >
-              <ChevronRight className="w-5 h-5" />
+              <ChevronRight className="w-6 h-6" />
             </Button>
           </>
         )}
 
         {/* 图片计数标签 */}
-        <Badge 
-          variant="secondary" 
-          className="absolute top-2 right-2 bg-black bg-opacity-70 text-white text-xs z-10"
+        {/* {{ AURA: Modify - 增加位置指示器样式 }} */}
+        <Badge
+          variant="secondary"
+          className="absolute bottom-2 right-2 bg-black/60 text-white text-sm font-medium py-1 px-3 rounded-full z-10"
         >
           {currentIndex + 1} / {images.length}
         </Badge>
@@ -213,14 +215,14 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
 
         {/* 缩略图导航 - 仅在图片数量适中时显示 */}
         {images.length > 1 && images.length <= 8 && (
-          <div className="flex space-x-1 overflow-x-auto pb-1">
+          <div className="flex space-x-2 overflow-x-auto pb-1">
             {images.map((image, index) => (
               <button
                 key={index}
-                className={`flex-shrink-0 w-10 h-10 rounded border-2 overflow-hidden transition-all duration-200 ${
-                  index === currentIndex 
-                    ? 'border-blue-500 ring-1 ring-blue-200' 
-                    : 'border-gray-200 hover:border-gray-300'
+                className={`flex-shrink-0 w-16 h-16 rounded-md border-2 overflow-hidden transition-all duration-200 transform hover:scale-105 ${
+                  index === currentIndex
+                    ? 'border-blue-600 ring-2 ring-blue-300'
+                    : 'border-gray-300 hover:border-blue-400'
                 }`}
                 onClick={(e) => {
                   e.stopPropagation()
