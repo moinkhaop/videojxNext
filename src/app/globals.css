@@ -102,3 +102,30 @@ html {
 .absolute.-bottom-0\.5.left-1\/2.transform.-translate-x-1\/2.w-1.h-1.bg-primary-foreground.rounded-full {
   background-color: transparent !important;
 }
+
+/* 防止内容超出屏幕宽度 */
+body {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* 为所有元素应用基础换行规则 */
+* {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+/* 特殊处理卡片组件中的长链接 */
+.card-content {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+}
+
+/* 处理预览区域的文本换行 */
+.compact-preview-text {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+}
