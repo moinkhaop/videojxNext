@@ -27,7 +27,7 @@ export function PreviewArea({
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
 
   return (
-    <div className={`space-y-6 ${className}`}>
+    <div className={`space-y-6 max-w-4xl mx-auto ${className}`}>
       {/* 预览区域标题 */}
       <div className="flex items-center space-x-2">
         {isVideo ? (

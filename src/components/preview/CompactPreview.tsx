@@ -35,7 +35,7 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
   }
 
   return (
-    <div className={`w-full ${className}`}>
+    <div className={`w-full max-w-md mx-auto ${className}`}>
       {/* {{ AURA: Add - 紧凑预览标题 }} */}
       <div className="flex items-center space-x-2 mb-3">
         {isVideo ? (

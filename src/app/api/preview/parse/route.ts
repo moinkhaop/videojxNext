@@ -12,62 +12,74 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
+    // {{ AURA: Modify - 重构请求构建逻辑以支持自定义参数 }}
     // 构建请求到第三方解析API
     let finalApiUrl = parserConfig.apiUrl;
-    let method = 'POST'; // 默认使用POST
+    let method = parserConfig.requestMethod || 'POST'; // 使用配置的请求方法
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 
-    // 判断是否需要使用GET请求（根据配置或API URL格式）
-    const isGetRequest = 
-      parserConfig.requestMethod === 'GET' ||
-      parserConfig.useGetMethod === true ||
-      parserConfig.apiUrl.includes('?url=') || 
-      parserConfig.apiUrl.includes('jxcxin') ||
-      parserConfig.apiUrl.includes('apis.') ||
-      parserConfig.name.toLowerCase().includes('get');
+    // 添加自定义请求头
+    if (parserConfig.customHeaders) {
+      Object.assign(headers, parserConfig.customHeaders);
+    }
 
-    // 根据API类型构建最终请求
-    if (isGetRequest) {
-      method = 'GET';
+    // 根据请求方法构建最终请求
+    if (method === 'GET') {
+      // 构建GET请求的查询参数
+      // {{ AURA: Fix - 修复GET请求URL重复参数的问题 }}
+      const url = new URL(finalApiUrl);
       
+      // 添加视频URL参数
       const urlParamName = parserConfig.urlParamName || 'url';
+      // {{ AURA: Fix - 使用 .set 覆盖可能已存在的URL参数，而不是 .append }}
+      url.searchParams.set(urlParamName, videoUrl);
       
-      if (parserConfig.apiUrl.includes('jxcxin')) {
-        if (parserConfig.apiUrl.endsWith('?url=')) {
-          finalApiUrl = `${parserConfig.apiUrl}${encodeURIComponent(videoUrl)}`;
-        } else if (parserConfig.apiUrl.includes('?')) {
-          finalApiUrl = `${parserConfig.apiUrl}&url=${encodeURIComponent(videoUrl)}`;
-        } else {
-          finalApiUrl = `${parserConfig.apiUrl}?url=${encodeURIComponent(videoUrl)}`;
-        }
-      } 
-      else {
-        if (parserConfig.apiUrl.endsWith('=')) {
-          finalApiUrl = `${parserConfig.apiUrl}${encodeURIComponent(videoUrl)}`;
-        } else if (parserConfig.apiUrl.includes('?')) {
-          finalApiUrl = `${parserConfig.apiUrl}&${urlParamName}=${encodeURIComponent(videoUrl)}`;
-        } else {
-          finalApiUrl = `${parserConfig.apiUrl}?${urlParamName}=${encodeURIComponent(videoUrl)}`;
-        }
+      // 添加自定义查询参数
+      if (parserConfig.customQueryParams) {
+        Object.entries(parserConfig.customQueryParams).forEach(([key, value]) => {
+          url.searchParams.append(key, String(value));
+        });
       }
+      
+      finalApiUrl = url.toString();
     } else {
+      // POST请求设置Content-Type
       headers['Content-Type'] = 'application/json';
     }
 
+    // 添加API密钥
     if (parserConfig.apiKey) {
       headers['Authorization'] = `Bearer ${parserConfig.apiKey}`
       headers['X-API-Key'] = parserConfig.apiKey
+    }
+
+    // {{ AURA: Fix - 修复POST请求自定义Body无效的问题 }}
+    let body: any = {};
+    if (method === 'POST') {
+      const urlParamName = parserConfig.urlParamName || 'url';
+      body[urlParamName] = videoUrl;
+      if (parserConfig.customBodyParams) {
+        Object.assign(body, parserConfig.customBodyParams);
+      }
     }
 
     const requestOptions: RequestInit = {
       method,
       headers,
       ...(method === 'POST' && {
-        body: JSON.stringify({ url: videoUrl })
+        body: JSON.stringify(body)
       })
     };
+
+    // {{ AURA: Add - 添加请求日志 }}
+    console.log('[预览解析] 发送请求到第三方API:', {
+      url: finalApiUrl,
+      method: method,
+      headers: Object.keys(headers),
+      videoUrl: videoUrl.substring(0, 50) + '...'
+    });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -78,11 +90,26 @@ export async function POST(request: NextRequest) {
         ...requestOptions,
         signal: controller.signal
       });
+      
+      console.log('[预览解析] 收到API响应:', {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('content-type')
+      });
       clearTimeout(timeoutId);
       if (!response.ok) {
+        const errorText = await response.text().catch(() => '无法获取错误内容');
+        console.error('[预览解析] API请求失败:', {
+          status: response.status,
+          statusText: response.statusText,
+          url: finalApiUrl,
+          method: method,
+          errorText: errorText.substring(0, 500)
+        });
+        
         return NextResponse.json({
           success: false,
-          error: `解析API返回错误: ${response.status}`
+          error: `解析API返回错误 (${response.status}): ${response.statusText}. 详情: ${errorText.substring(0, 200)}`
         }, { status: response.status })
       }
     } catch (fetchError) {
@@ -114,6 +141,9 @@ export async function POST(request: NextRequest) {
         }, { status: 500 })
       }
     }
+
+    // {{ AURA: Add - 添加完整的API响应日志 }}
+    console.log('[预览解析] 第三方API响应JSON:', JSON.stringify(data, null, 2));
 
     let parsedInfo: ParsedVideoInfo
     
@@ -162,14 +192,56 @@ export async function POST(request: NextRequest) {
             }
           }
           
+          // {{ AURA: Fix - 确保jxcxin成功解析时也返回原始数据 }}
           return NextResponse.json({
             success: true,
             data: parsedInfo,
-            message: '解析成功，已生成预览数据'
+            message: '解析成功，已生成预览数据',
+            rawData: data
           });
         } else {
-          throw new Error(data.msg || '解析失败');
+          // {{ AURA: Modify - 改进jxcxin API的错误处理 }}
+          let errorMessage = data.msg || '解析失败';
+          if (data.code === 404) {
+            errorMessage = `解析失败：视频链接无效或已失效 (${data.msg || '404错误'})`;
+          } else if (data.code === 500) {
+            errorMessage = `解析失败：服务器内部错误 (${data.msg || '500错误'})`;
+          } else {
+            errorMessage = `解析失败：${data.msg || '未知错误'} (错误代码: ${data.code})`;
+          }
+          
+          console.error('[预览解析] jxcxin API返回错误:', {
+            code: data.code,
+            msg: data.msg,
+            url: videoUrl,
+            fullResponse: data
+          });
+          
+          throw new Error(errorMessage);
         }
+      }
+      
+      // {{ AURA: Add - 添加对xiazaitool等API格式的错误处理 }}
+      // 检查xiazaitool等API的错误格式
+      if (data.success === false && (data.status || data.message)) {
+        let errorMessage = data.message || '解析失败';
+        if (data.status === 500) {
+          errorMessage = `解析失败：${data.message || '服务器内部错误'}`;
+        } else if (data.status === 404) {
+          errorMessage = `解析失败：${data.message || '资源未找到'}`;
+        } else if (data.status) {
+          errorMessage = `解析失败：${data.message || '未知错误'} (状态码: ${data.status})`;
+        }
+        
+        console.error('[预览解析] xiazaitool类API返回错误:', {
+          status: data.status,
+          success: data.success,
+          message: data.message,
+          url: videoUrl,
+          fullResponse: data
+        });
+        
+        throw new Error(errorMessage);
       }
       
       if (data.success === true || data.code === 200 || data.code === 0) {
@@ -257,21 +329,44 @@ export async function POST(request: NextRequest) {
         throw new Error(errorMsg)
       }
     } catch (error) {
+      console.error('[预览解析] 数据处理失败:', {
+        error: error instanceof Error ? error.message : '未知错误',
+        stack: error instanceof Error ? error.stack : undefined,
+        apiUrl: finalApiUrl,
+        rawDataPreview: JSON.stringify(data).substring(0, 500)
+      });
+      
       return NextResponse.json({
         success: false,
-        error: error instanceof Error ? error.message : '解析视频信息失败，API返回数据格式不兼容'
+        error: error instanceof Error ? error.message : '解析视频信息失败，API返回数据格式不兼容',
+        rawData: data // {{ AURA: Fix - 在解析失败时也返回原始数据以供调试 }}
       }, { status: 400 })
     }
 
     const result: PreviewParseResponse = {
       success: true,
       data: parsedInfo,
-      message: '解析成功，已生成预览数据'
+      message: '解析成功，已生成预览数据',
+      rawData: data
     }
+
+    // {{ AURA: Add - 添加成功解析的详细日志 }}
+    console.log('[预览解析] 解析成功:', {
+      apiUrl: finalApiUrl,
+      title: parsedInfo.title,
+      mediaType: parsedInfo.mediaType,
+      author: parsedInfo.author,
+      rawDataPreview: JSON.stringify(data).substring(0, 300) + '...'
+    });
 
     return NextResponse.json(result)
 
   } catch (error) {
+    console.error('[预览解析] 顶层错误捕获:', {
+      error: error instanceof Error ? error.message : '未知错误',
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : '解析过程中发生未知错误'
