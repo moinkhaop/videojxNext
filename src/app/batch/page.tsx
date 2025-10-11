@@ -352,27 +352,13 @@ export default function BatchPage() {
   const urlCount = ConversionService.parseVideoUrls(videoUrls.trim()).length
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-purple-50/20 dark:to-purple-950/20">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-gradient-to-br from-purple-500/10 to-purple-600/10 rounded-lg">
-              <List className="w-7 h-7 text-purple-600 dark:text-purple-400" />
-            </div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 to-purple-500 bg-clip-text text-transparent">
-              批量转存
-            </h1>
-          </div>
-          <p className="text-muted-foreground ml-14">
-            一次性处理多个视频链接，自动队列管理，支持进度跟踪
-          </p>
-        </div>
-
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+      <div className="container mx-auto px-4 py-6 max-w-7xl">
         {/* 配置检查 */}
         {(parsers.length === 0 || webdavServers.length === 0) && (
-          <Alert className="mb-6 border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30">
-            <Settings className="h-5 w-5 text-orange-600" />
-            <AlertDescription>
+          <Alert className="mb-6 border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
+            <Settings className="h-4 w-4 text-orange-600" />
+            <AlertDescription className="text-sm">
               请先配置解析API和WebDAV服务器。
               <Link href="/settings" className="ml-2 text-primary hover:underline font-semibold">
                 前往设置
@@ -382,19 +368,20 @@ export default function BatchPage() {
         )}
 
         <div className="space-y-6">
-          {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
-          {/* 步骤一：输入与配置 */}
-          <Card className="border-2 hover:border-purple-300 dark:hover:border-purple-700 transition-all duration-300 shadow-lg">
-            <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950/30 dark:to-pink-950/30">
-              <CardTitle className="flex items-center space-x-2">
-                <div className="p-2 bg-purple-500/10 rounded-lg">
-                  <List className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+          {/* 输入与配置 */}
+          <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl shadow-md">
+                  <List className="w-5 h-5 text-white" />
                 </div>
-                <span>1. 输入与配置</span>
-              </CardTitle>
-              <CardDescription>
-                粘贴视频链接列表（每行一个），选择解析服务和存储位置。
-              </CardDescription>
+                <div>
+                  <CardTitle className="text-lg font-bold">输入与配置</CardTitle>
+                  <CardDescription className="text-xs mt-0.5">
+                    粘贴视频链接列表或用户主页链接
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -570,27 +557,40 @@ https://www.douyin.com/user/MS4w...
                 </Select>
               </div>
             </div>
-            <div className="pt-2">
+            <div className="pt-4">
               {!isProcessing ? (
                 <Button
                   onClick={handleStartBatch}
                   disabled={urlCount === 0 || !selectedParser || !selectedWebDAV}
-                  className="w-full"
+                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all"
                   size="lg"
                 >
-                  <Play className="w-4 h-4 mr-2" />
+                  <Play className="w-5 h-5 mr-2" />
                   {inputMode === BatchInputMode.DOUYIN_USER
                     ? `解析抖音用户并批量转存 (${videoLimit}个视频)`
                     : `开始批量转存 (${urlCount}个链接)`
                   }
                 </Button>
               ) : (
-                <div className="flex space-x-2">
-                  <Button variant="outline" onClick={() => setIsPaused(!isPaused)} className="flex-1" disabled>
-                    {isPaused ? <><Play className="w-4 h-4 mr-2" />继续</> : <><Pause className="w-4 h-4 mr-2" />暂停</>}
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsPaused(!isPaused)}
+                    className="h-12 border-2"
+                    disabled
+                  >
+                    {isPaused ? (
+                      <><Play className="w-5 h-5 mr-2" />继续</>
+                    ) : (
+                      <><Pause className="w-5 h-5 mr-2" />暂停</>
+                    )}
                   </Button>
-                  <Button variant="destructive" onClick={resetBatch}>
-                    <Square className="w-4 h-4 mr-2" />
+                  <Button
+                    variant="destructive"
+                    onClick={resetBatch}
+                    className="h-12 shadow-md hover:shadow-lg transition-all"
+                  >
+                    <Square className="w-5 h-5 mr-2" />
                     停止并重置
                   </Button>
                 </div>
@@ -599,56 +599,88 @@ https://www.douyin.com/user/MS4w...
           </CardContent>
         </Card>
 
-          {/* 步骤二：任务进度 */}
+          {/* 任务进度 */}
           {currentBatch && (
-            <Card className="border-2 hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-300 shadow-lg">
-              <CardHeader className="bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
-                <div className="flex items-center space-x-2">
-                  <div className="p-2 bg-emerald-500/10 rounded-lg">
-                    <Play className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-xl shadow-md">
+                    <Play className="w-5 h-5 text-white" />
                   </div>
-                  <CardTitle>2. 任务进度</CardTitle>
+                  <div>
+                    <CardTitle className="text-lg font-bold">任务进度</CardTitle>
+                    <CardDescription className="text-xs mt-0.5">
+                      实时显示批量转存进度和任务状态
+                    </CardDescription>
+                  </div>
                 </div>
-                <CardDescription>
-                  实时显示批量转存进度和每个任务的状态。
-                </CardDescription>
               </CardHeader>
             <CardContent className="space-y-6">
               {/* 总体进度 */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">总体进度</h4>
-                  <span className="text-sm text-muted-foreground">
+              <div className="p-4 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 rounded-lg border border-blue-100 dark:border-blue-900">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-gray-900 dark:text-white">总体进度</h4>
+                  <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
                     {currentBatch.completedTasks}/{currentBatch.totalTasks} 完成
                   </span>
                 </div>
-                <Progress value={overallProgress} className="w-full" />
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>{overallProgress.toFixed(1)}%</span>
-                  <span>
-                    成功: {currentBatch.tasks.filter(t => t.status === TaskStatus.SUCCESS).length} |
-                    失败: {currentBatch.tasks.filter(t => t.status === TaskStatus.FAILED).length}
-                  </span>
+                <Progress value={overallProgress} className="h-3 mb-3" />
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="text-center p-2 bg-white dark:bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">进度</div>
+                    <div className="font-bold text-blue-600 dark:text-blue-400">{overallProgress.toFixed(1)}%</div>
+                  </div>
+                  <div className="text-center p-2 bg-white dark:bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">成功</div>
+                    <div className="font-bold text-green-600 dark:text-green-400">
+                      {currentBatch.tasks.filter(t => t.status === TaskStatus.SUCCESS).length}
+                    </div>
+                  </div>
+                  <div className="text-center p-2 bg-white dark:bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">失败</div>
+                    <div className="font-bold text-red-600 dark:text-red-400">
+                      {currentBatch.tasks.filter(t => t.status === TaskStatus.FAILED).length}
+                    </div>
+                  </div>
                 </div>
               </div>
 
               {/* 任务列表 */}
-              <div className="space-y-2">
-                <h4 className="font-medium">任务详情</h4>
-                <div className="max-h-96 overflow-y-auto space-y-2 p-1">
+              <div className="space-y-3">
+                <h4 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <div className="w-1 h-5 bg-gradient-to-b from-emerald-500 to-teal-500 rounded-full"></div>
+                  任务详情
+                </h4>
+                <div className="max-h-[500px] overflow-y-auto space-y-2 pr-2">
                   {currentBatch.tasks.map((task, index) => (
-                    <div key={task.id} className="flex items-center space-x-3 p-3 border rounded-lg bg-card hover:bg-muted/50">
-                      <div className="flex-shrink-0">{getStatusIcon(task.status)}</div>
-                      <div className="flex-grow min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium">任务 {index + 1}</span>
-                          <Badge key={`batch-task-badge-${task.id}`} className={`text-xs ${getStatusBadgeColor(task.status)}`} variant="outline">
-                            {getStatusText(task.status)}
-                          </Badge>
+                    <div key={task.id} className="group p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-white to-gray-50 dark:from-gray-900 dark:to-gray-800 hover:shadow-md transition-all">
+                      <div className="flex items-start gap-3">
+                        <div className="flex-shrink-0 mt-0.5">{getStatusIcon(task.status)}</div>
+                        <div className="flex-grow min-w-0">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                              任务 {index + 1}
+                            </span>
+                            <Badge className={`text-xs ${getStatusBadgeColor(task.status)}`} variant="outline">
+                              {getStatusText(task.status)}
+                            </Badge>
+                          </div>
+                          {task.videoTitle && (
+                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate mb-1" title={task.videoTitle}>
+                              {task.videoTitle}
+                            </p>
+                          )}
+                          <p className="text-xs text-gray-600 dark:text-gray-400 truncate" title={task.videoUrl}>
+                            {task.videoUrl}
+                          </p>
+                          {task.error && (
+                            <div className="mt-2 p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded">
+                              <p className="text-xs text-red-700 dark:text-red-300" title={task.error}>
+                                <span className="font-semibold">错误:</span> {task.error}
+                              </p>
+                            </div>
+                          )}
                         </div>
-                        <p className="text-xs text-muted-foreground truncate" title={task.videoUrl}>{task.videoUrl}</p>
-                        {task.videoTitle && <p className="text-xs text-foreground truncate mt-1" title={task.videoTitle}>{task.videoTitle}</p>}
-                        {task.error && <p className="text-xs text-red-600 mt-1" title={task.error}>错误: {task.error}</p>}
                       </div>
                     </div>
                   ))}
@@ -656,10 +688,27 @@ https://www.douyin.com/user/MS4w...
               </div>
 
               {/* 批量任务信息 */}
-              <div className="text-xs text-muted-foreground pt-4 border-t space-y-1">
-                <p>任务名称: {currentBatch.name}</p>
-                <p>创建时间: {currentBatch.createdAt.toLocaleString()}</p>
-                {currentBatch.completedAt && <p>完成时间: {currentBatch.completedAt.toLocaleString()}</p>}
+              <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">任务名称</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{currentBatch.name}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">创建时间</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {currentBatch.createdAt.toLocaleString()}
+                    </span>
+                  </div>
+                  {currentBatch.completedAt && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">完成时间</span>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {currentBatch.completedAt.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
               </CardContent>
             </Card>

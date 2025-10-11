@@ -315,6 +315,37 @@ export class ConversionService {
     return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   }
 
+  // 测试WebDAV连接
+  static async testWebDAVConnection(webdavConfig: WebDAVConfig): Promise<{ success: boolean; message?: string }> {
+    try {
+      console.log(`[WebDAV测试] 开始测试连接: ${webdavConfig.name}`)
+
+      const response = await fetch('/api/proxy/webdav/test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ webdavConfig })
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        console.log(`[WebDAV测试] 连接成功`)
+        return { success: true, message: '连接成功' }
+      } else {
+        console.error(`[WebDAV测试] 连接失败:`, result.error)
+        return { success: false, message: result.error || '连接失败' }
+      }
+    } catch (error) {
+      console.error('[WebDAV测试] 测试过程出错:', error)
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : '测试连接时发生未知错误'
+      }
+    }
+  }
+
   // 验证URL格式
   private static isValidUrl(url: string): boolean {
     try {

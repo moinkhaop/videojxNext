@@ -111,6 +111,10 @@ export interface ParsedVideoInfo {
   author?: string; // 作者信息
   avatar?: string; // 作者头像URL
   signature?: string; // 作者签名
+  short_id?: string; // 短ID
+  uid?: string; // 用户ID
+  like?: number; // 点赞数
+  cover?: string; // 封面URL
   time?: number | string; // 发布时间戳或日期字符串
   publishTime?: Date; // {{ AURA: Add - 发布时间Date对象 }}
   description?: string; // 描述文本
@@ -119,14 +123,14 @@ export interface ParsedVideoInfo {
   uploadDate?: string; // {{ AURA: Add - 添加上传日期字段 }}
   width?: number; // {{ AURA: Add - 视频宽度 }}
   height?: number; // {{ AURA: Add - 视频高度 }}
-  
+
   // 视频相关字段
   url?: string; // 视频URL（视频类型时使用）
   duration?: number;
   fileSize?: number;
   format?: string;
   thumbnail?: string;
-  
+
   // 图集相关字段
   images?: ImageInfo[]; // 图片列表（图集类型时使用）
   imageCount?: number; // 图片数量

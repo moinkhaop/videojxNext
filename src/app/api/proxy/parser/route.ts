@@ -189,7 +189,14 @@ export async function POST(request: NextRequest) {
             
             parsedInfo = {
               title: jxData.title || jxData.desc || '未知图集',
-              author: extractAuthor(jxData),
+              author: jxData.author || jxData.nickname || extractAuthor(jxData),
+              avatar: jxData.avatar,
+              signature: jxData.signature,
+              short_id: jxData.short_id,
+              uid: jxData.uid,
+              like: jxData.like,
+              cover: jxData.cover,
+              time: jxData.time,
               description: extractDescription(jxData),
               mediaType: MediaType.IMAGE_ALBUM,
               images: images,
@@ -200,7 +207,14 @@ export async function POST(request: NextRequest) {
             // 视频类型
             parsedInfo = {
               title: jxData.title || jxData.desc || '未知标题',
-              author: extractAuthor(jxData),
+              author: jxData.author || jxData.nickname || extractAuthor(jxData),
+              avatar: jxData.avatar,
+              signature: jxData.signature,
+              short_id: jxData.short_id,
+              uid: jxData.uid,
+              like: jxData.like,
+              cover: jxData.cover,
+              time: jxData.time,
               description: extractDescription(jxData),
               mediaType: MediaType.VIDEO,
               url: jxData.url || jxData.video_url || jxData.playAddr || '',

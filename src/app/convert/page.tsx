@@ -387,28 +387,13 @@ function ConvertPageContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-blue-50/20 dark:to-blue-950/20">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
-        {/* 页面标题 */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-gradient-to-br from-blue-500/10 to-blue-600/10 rounded-lg">
-              <LinkIcon className="w-7 h-7 text-blue-600 dark:text-blue-400" />
-            </div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
-              单链接转存
-            </h1>
-          </div>
-          <p className="text-muted-foreground ml-14">
-            输入视频分享链接，先解析预览内容，确认无误后再上传到WebDAV服务器
-          </p>
-        </div>
-
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+      <div className="container mx-auto px-4 py-6 max-w-7xl">
         {/* 配置检查 */}
         {(parsers.length === 0 || webdavServers.length === 0) && (
-          <Alert className="mb-6 border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30">
-            <Settings className="h-5 w-5 text-orange-600" />
-            <AlertDescription>
+          <Alert className="mb-6 border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
+            <Settings className="h-4 w-4 text-orange-600" />
+            <AlertDescription className="text-sm">
               请先配置解析API和WebDAV服务器。
               <Link href="/settings" className="ml-2 text-primary hover:underline font-semibold">
                 前往设置
@@ -417,185 +402,228 @@ function ConvertPageContent() {
           </Alert>
         )}
 
-        {/* 中间：操作区域（两列布局） */}
-        <div className="space-y-6">
-          {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
-          {/* 步骤一：输入与配置 */}
-          <Card className="border-2 hover:border-blue-300 dark:hover:border-blue-700 transition-all duration-300 shadow-lg">
-            <CardHeader className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950/30 dark:to-cyan-950/30">
-              <CardTitle className="flex items-center space-x-2">
-                <div className="p-2 bg-blue-500/10 rounded-lg">
-                  <LinkIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                </div>
-                <span>输入链接与配置</span>
-              </CardTitle>
-              <CardDescription>
-                粘贴视频分享链接，然后选择解析服务和存储位置。
-              </CardDescription>
-            </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 左侧输入 */}
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium">视频链接</label>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handlePasteFromClipboard}
-                      disabled={isConverting || previewState.isPreviewMode}
-                      className="h-7"
-                    >
-                      <Clipboard className="w-3 h-3 mr-1" />
-                      粘贴
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={clipboardEnabled ? "default" : "outline"}
-                      size="sm"
-                      onClick={toggleClipboardDetection}
-                      disabled={isConverting || previewState.isPreviewMode}
-                      className="h-7"
-                    >
-                      {clipboardEnabled ? (
-                        <><ClipboardCheck className="w-3 h-3 mr-1" />自动检测中</>
-                      ) : (
-                        <><Clipboard className="w-3 h-3 mr-1" />自动检测</>
-                      )}
-                    </Button>
+        {/* 主要内容区域 - 左右分栏布局 */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* 左侧：输入与配置区域 (40%) */}
+          <div className="lg:col-span-2">
+            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm min-h-[600px] flex flex-col">
+              <CardHeader className="pb-4 flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl shadow-md">
+                    <LinkIcon className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg font-bold">输入与配置</CardTitle>
+                    <CardDescription className="text-xs mt-0.5">
+                      粘贴链接并选择服务
+                    </CardDescription>
                   </div>
                 </div>
-                <Textarea
-                  placeholder="请粘贴视频分享链接..."
-                  value={videoUrl}
-                  onChange={(e) => setVideoUrl(e.target.value)}
-                  className="min-h-[120px]"
-                  disabled={isConverting || previewState.isPreviewMode}
-                />
-                {clipboardEnabled && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    ✓ 剪贴板自动检测已启用，复制视频链接将自动填充
-                  </p>
-                )}
-              </div>
-            </div>
-            {/* 右侧选择 */}
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">解析API</label>
-                <Select value={selectedParser} onValueChange={setSelectedParser} disabled={isConverting || previewState.isPreviewMode}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择解析API" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {parsers.map((parser) => (
-                      <SelectItem key={parser.id} value={parser.id}>
-                        <div className="flex items-center justify-between w-full">
-                          <span>{parser.name}</span>
-                          {parser.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">WebDAV服务器</label>
-                <Select value={selectedWebDAV} onValueChange={setSelectedWebDAV} disabled={isConverting}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择WebDAV服务器" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {webdavServers.map((server) => (
-                      <SelectItem key={server.id} value={server.id}>
-                        <div className="flex items-center justify-between w-full">
-                          <span>{server.name}</span>
-                          {server.isDefault && <Badge variant="secondary" className="ml-2">默认</Badge>}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-          {/* 步骤二：操作与预览 */}
-          {/* {{ AURA: Modify - 将解析按钮和状态预览整合 }} */}
-          <Card className="border-2 hover:border-purple-300 dark:hover:border-purple-700 transition-all duration-300 shadow-lg">
-            <CardContent>
-            {/* 主操作按钮区域 */}
-            {!previewState.isPreviewMode && (
-              <div className="text-center py-4">
-                <Button
-                  onClick={handleParseAndPreview}
-                  disabled={isConverting || !videoUrl.trim() || !selectedParser}
-                  size="lg"
-                  className="w-full max-w-xs"
-                >
-                  {isConverting ? (
-                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />解析中...</>
-                  ) : (
-                    <><Eye className="w-4 h-4 mr-2" />解析/预览</>
+              </CardHeader>
+              <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium">视频链接</label>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePasteFromClipboard}
+                        disabled={isConverting || previewState.isPreviewMode}
+                        className="h-7 text-xs"
+                      >
+                        <Clipboard className="w-3 h-3 mr-1" />
+                        粘贴
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={clipboardEnabled ? "default" : "outline"}
+                        size="sm"
+                        onClick={toggleClipboardDetection}
+                        disabled={isConverting || previewState.isPreviewMode}
+                        className="h-7 text-xs"
+                      >
+                        {clipboardEnabled ? (
+                          <><ClipboardCheck className="w-3 h-3 mr-1" />检测中</>
+                        ) : (
+                          <><Clipboard className="w-3 h-3 mr-1" />自动</>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                  <Textarea
+                    placeholder="请粘贴视频分享链接..."
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                    className="min-h-[160px] text-sm"
+                    disabled={isConverting || previewState.isPreviewMode}
+                  />
+                  {clipboardEnabled && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      ✓ 剪贴板自动检测已启用
+                    </p>
                   )}
-                </Button>
-              </div>
-            )}
 
-            {/* 状态和预览区域 */}
-            {currentTask && (
-              <div className="space-y-4 pt-4 border-t">
-                {/* {{ AURA: Modify - 任务状态显示逻辑已移入 TwoColumnPreview 组件 }} */}
-                {/* 双栏预览布局 */}
-                {previewState.isPreviewMode && previewState.previewData && (
-                  <div className="border-t pt-4">
-                    <TwoColumnPreview
-                      mediaInfo={previewState.previewData}
-                      isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
-                      onConfirmUpload={handleConfirmUpload}
-                      onReparse={handleReparse}
-                      currentTask={currentTask}
-                      progress={progress}
-                    />
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">解析API</label>
+                    <Select value={selectedParser} onValueChange={setSelectedParser} disabled={isConverting || previewState.isPreviewMode}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="选择解析API" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {parsers.map((parser) => (
+                          <SelectItem key={parser.id} value={parser.id}>
+                            <div className="flex items-center justify-between w-full">
+                              <span>{parser.name}</span>
+                              {parser.isDefault && <Badge variant="secondary" className="ml-2 text-xs">默认</Badge>}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
 
-                {/* 错误信息 */}
-                {currentTask.error && (
-                  <Alert className="border-red-200 bg-red-50">
-                    <XCircle className="h-4 w-4 text-red-500" />
-                    <AlertDescription className="text-red-700">
-                      <p><strong>错误信息:</strong> {currentTask.error}</p>
-                    </AlertDescription>
-                  </Alert>
-                )}
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">WebDAV服务器</label>
+                    <Select value={selectedWebDAV} onValueChange={setSelectedWebDAV} disabled={isConverting}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="选择WebDAV服务器" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {webdavServers.map((server) => (
+                          <SelectItem key={server.id} value={server.id}>
+                            <div className="flex items-center justify-between w-full">
+                              <span>{server.name}</span>
+                              {server.isDefault && <Badge variant="secondary" className="ml-2 text-xs">默认</Badge>}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-                {/* 成功信息 */}
-                {currentTask.status === TaskStatus.SUCCESS && currentTask.uploadResult?.filePath && (
-                  <Alert className="border-green-200 bg-green-50">
-                    <CheckCircle className="h-4 w-4 text-green-500" />
-                    <AlertDescription className="text-green-700">
-                      转存成功！文件已保存到: {decodeURIComponent(currentTask.uploadResult.filePath)}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {/* 重置按钮 */}
-                <div className="pt-4 border-t">
-                  <Button variant="outline" onClick={resetForm} className="w-full">
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    开始新的转存
+                {/* 解析按钮 - 始终显示在底部 */}
+                <div className="pt-4">
+                  <Button
+                    onClick={handleParseAndPreview}
+                    disabled={isConverting || !videoUrl.trim() || !selectedParser || previewState.isPreviewMode}
+                    className="w-full bg-blue-600 hover:bg-blue-700"
+                  >
+                    {isConverting ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />解析中...</>
+                    ) : (
+                      <><Eye className="w-4 h-4 mr-2" />解析预览</>
+                    )}
                   </Button>
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 右侧：预览与结果区域 (60%) */}
+          <div className="lg:col-span-3">
+            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm min-h-[600px] flex flex-col">
+              <CardHeader className="pb-4 flex-shrink-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl shadow-md">
+                      <Eye className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg font-bold">预览与结果</CardTitle>
+                      <CardDescription className="text-xs mt-0.5">
+                        解析后的内容将在此展示
+                      </CardDescription>
+                    </div>
+                  </div>
+                  {/* 状态徽章 */}
+                  {currentTask && (
+                    <Badge className={getStatusColor(currentTask.status)}>
+                      <div className="flex items-center gap-1.5">
+                        {getStatusIcon(currentTask.status)}
+                        <span>{getStatusText(currentTask.status)}</span>
+                      </div>
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="flex-1 flex flex-col overflow-auto">
+                {/* 空状态提示 */}
+                {!currentTask && (
+                  <div className="flex flex-col items-center justify-center flex-1 text-center">
+                    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 mb-6 shadow-lg">
+                      <Eye className="w-12 h-12 text-purple-600 dark:text-purple-400" />
+                    </div>
+                    <h3 className="text-xl font-bold mb-3 bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+                      等待解析
+                    </h3>
+                    <p className="text-sm text-muted-foreground max-w-md leading-relaxed">
+                      请在左侧输入视频链接并点击"解析预览"按钮，解析结果将在这里显示
+                    </p>
+                  </div>
+                )}
+
+                {/* 预览内容 */}
+                {currentTask && (
+                  <div className="space-y-4">
+                    {/* 双栏预览布局 */}
+                    {previewState.isPreviewMode && previewState.previewData && (
+                      <TwoColumnPreview
+                        mediaInfo={previewState.previewData}
+                        isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
+                        onConfirmUpload={handleConfirmUpload}
+                        onReparse={handleReparse}
+                        currentTask={currentTask}
+                        progress={progress}
+                      />
+                    )}
+
+                    {/* 错误信息 */}
+                    {currentTask.error && (
+                      <Alert className="border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-950/30 shadow-sm">
+                        <XCircle className="h-4 w-4 text-red-500" />
+                        <AlertDescription className="text-red-700 dark:text-red-300">
+                          <p className="font-medium"><strong>错误信息:</strong> {currentTask.error}</p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {/* 成功信息 */}
+                    {currentTask.status === TaskStatus.SUCCESS && currentTask.uploadResult?.filePath && (
+                      <Alert className="border-green-200 dark:border-green-800 bg-green-50/80 dark:bg-green-950/30 shadow-sm">
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                        <AlertDescription className="text-green-700 dark:text-green-300 text-sm">
+                          <div className="space-y-2">
+                            <p className="font-semibold text-base">转存成功！</p>
+                            <p className="text-xs break-all">
+                              文件路径: {decodeURIComponent(currentTask.uploadResult.filePath)}
+                            </p>
+                          </div>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {/* 重置按钮 */}
+                    {(currentTask.status === TaskStatus.SUCCESS || currentTask.status === TaskStatus.FAILED) && (
+                      <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <Button
+                          variant="outline"
+                          onClick={resetForm}
+                          className="w-full h-11 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 hover:from-blue-100 hover:to-purple-100 dark:hover:from-blue-900/30 dark:hover:to-purple-900/30 border-blue-200 dark:border-blue-800"
+                        >
+                          <RotateCcw className="w-4 h-4 mr-2" />
+                          开始新的转存
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
-        {/* {{ AURA: Remove - 移除底部独立预览区域，预览功能已集成到右侧状态区域 }} */}
       </div>
     </div>
   )
