@@ -315,6 +315,52 @@ export class ConversionService {
     return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   }
 
+  // 验证文件名
+  static validateFilename(filename: string): {
+    sanitized: string;
+    isValid: boolean;
+    issues: string[]
+  } {
+    const issues: string[] = []
+
+    // 检测特殊字符
+    const specialChars = FilenameSanitizer.detectSpecialChars(filename)
+    if (specialChars.length > 0) {
+      issues.push(`包含特殊字符: ${specialChars.join(', ')}`)
+    }
+
+    // 检测控制字符
+    if (/[\x00-\x1f\x7f-\x9f]/.test(filename)) {
+      issues.push('包含控制字符')
+    }
+
+    // 检测 Windows 保留名称
+    const nameWithoutExt = filename.replace(/\.[^.]*$/, '')
+    const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9']
+    if (reservedNames.includes(nameWithoutExt.toUpperCase())) {
+      issues.push('文件名是 Windows 保留名称')
+    }
+
+    // 检测文件名长度
+    if (filename.length > 255) {
+      issues.push('文件名过长')
+    }
+
+    // 规范化文件名
+    const sanitized = FilenameSanitizer.sanitize(filename, {
+      replacement: '_',
+      maxLength: 255,
+      preserveExtension: true,
+      addTimestamp: false
+    })
+
+    return {
+      sanitized,
+      isValid: issues.length === 0,
+      issues
+    }
+  }
+
   // 测试WebDAV连接
   static async testWebDAVConnection(webdavConfig: WebDAVConfig): Promise<{ success: boolean; message?: string }> {
     try {
