@@ -3,6 +3,7 @@
 import { ParsedVideoInfo, MediaType, ConversionTask, TaskStatus } from '@/types'
 import { VideoPreview } from './VideoPreview'
 import { ImageCarousel } from './ImageCarousel'
+import { ImageGallery } from './ImageGallery'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +25,8 @@ import {
   HardDrive,
   CheckCircle,
   XCircle,
+  Grid,
+  List
 } from 'lucide-react'
 
 interface TwoColumnPreviewProps {
@@ -106,6 +109,9 @@ export function TwoColumnPreview({
 }: TwoColumnPreviewProps) {
   const isVideo = mediaInfo.mediaType === MediaType.VIDEO
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
+  
+  // {{ AURA: Add - 智能显示模式选择 }}
+  const useEnhancedGallery = isImageAlbum && mediaInfo.images && mediaInfo.images.length > 3
 
   // 复制链接到剪贴板
   const handleCopyLink = async () => {
@@ -172,63 +178,78 @@ export function TwoColumnPreview({
       </div>
 
       {/* 双栏布局容器 - 响应式设计 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+      <div className={`grid gap-4 lg:gap-6 ${
+        useEnhancedGallery ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'
+      }`}>
         
-        {/* 左侧：视频播放器区域 (2/3宽度) */}
-        <div className="lg:col-span-2">
+        {/* 媒体预览区域 - 图集使用增强显示 */}
+        <div className={useEnhancedGallery ? 'col-span-1' : 'lg:col-span-2'}>
           <Card className="overflow-hidden">
             <CardContent className="p-0">
               {/* 媒体播放区域 */}
-              <div className="relative bg-black aspect-video">
-                {isVideo && mediaInfo.url ? (
-                  <VideoPreview
-                    videoUrl={mediaInfo.url}
-                    thumbnail={mediaInfo.thumbnail}
+              {useEnhancedGallery ? (
+                // {{ AURA: Add - 使用新的ImageGallery组件 }}
+                <div className="p-4">
+                  <ImageGallery
+                    images={mediaInfo.images!}
                     title={mediaInfo.title}
-                    className="w-full h-full"
+                    autoSelectMode={true}
+                    className="w-full"
                   />
-                ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
-                  <ImageCarousel
-                    images={mediaInfo.images}
-                    title={mediaInfo.title}
-                    className="w-full h-full"
-                  />
-                ) : (
-                  // 错误状态
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center text-white">
-                      <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
-                      <p className="text-lg font-medium mb-2">无法预览内容</p>
-                      <p className="text-sm opacity-75">
-                        {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
-                      </p>
+                </div>
+              ) : (
+                <div className="relative bg-black aspect-video">
+                  {isVideo && mediaInfo.url ? (
+                    <VideoPreview
+                      videoUrl={mediaInfo.url}
+                      thumbnail={mediaInfo.thumbnail}
+                      title={mediaInfo.title}
+                      className="w-full h-full"
+                    />
+                  ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
+                    <ImageCarousel
+                      images={mediaInfo.images}
+                      title={mediaInfo.title}
+                      className="w-full h-full"
+                    />
+                  ) : (
+                    // 错误状态
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center text-white">
+                        <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
+                        <p className="text-lg font-medium mb-2">无法预览内容</p>
+                        <p className="text-sm opacity-75">
+                          {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
-              {/* 视频标题栏 */}
-              <div className="p-4 bg-white border-t">
-                <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">
-                  {mediaInfo.title || '未知标题'}
-                </h3>
-                {mediaInfo.author && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    作者: {mediaInfo.author}
-                  </p>
-                )}
-              </div>
+              {/* 视频标题栏 - 仅在非增强模式显示 */}
+              {!useEnhancedGallery && (
+                <div className="p-4 bg-white border-t">
+                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">
+                    {mediaInfo.title || '未知标题'}
+                  </h3>
+                  {mediaInfo.author && (
+                    <p className="text-sm text-gray-600 mt-1">
+                      作者: {mediaInfo.author}
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
 
-        {/* 右侧：信息和操作区域 (1/3宽度) */}
-        <div className="lg:col-span-1">
-          <div className="flex flex-col space-y-4">
-            
+        {/* 右侧：信息和操作区域 - 响应式宽度调整 */}
+        <div className={useEnhancedGallery ? 'mt-6' : 'lg:col-span-1'}>
+          <div className={`${useEnhancedGallery ? 'grid grid-cols-1 md:grid-cols-3 gap-4' : 'flex flex-col space-y-4'}`}>
             {/* {{ AURA: Add - 任务状态模块已移入此组件 }} */}
             {currentTask && (
-              <Card className="flex-shrink-0">
+              <Card className={`flex-shrink-0 ${useEnhancedGallery ? 'flex-1' : ''}`}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between gap-2 mb-3">
                     <h4 className="font-semibold text-gray-900 flex-shrink-0">任务状态</h4>
@@ -251,8 +272,8 @@ export function TwoColumnPreview({
               </Card>
             )}
 
-            {/* 视频详细信息卡片 */}
-            <Card>
+            {/* 媒体详细信息卡片 */}
+            <Card className={useEnhancedGallery ? 'flex-1' : ''}>
               <CardContent className="p-4">
                 <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
                   {isVideo ? (
@@ -264,6 +285,24 @@ export function TwoColumnPreview({
                 </h4>
                 
                 <div className="space-y-3 text-sm">
+                  {/* 标题信息 - 增强模式下显示 */}
+                  {useEnhancedGallery && (
+                    <>
+                      <div className="flex items-center justify-between mb-3 pb-3 border-b">
+                        <span className="text-gray-600">标题</span>
+                        <span className="font-medium text-right flex-1 ml-4 text-sm">
+                          {mediaInfo.title || '未知标题'}
+                        </span>
+                      </div>
+                      {mediaInfo.author && (
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-gray-600">作者</span>
+                          <span className="font-medium">{mediaInfo.author}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+
                   {/* 媒体类型 */}
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">类型</span>
@@ -330,7 +369,7 @@ export function TwoColumnPreview({
                 </div>
 
                 {/* 描述信息 */}
-                {mediaInfo.description && (
+                {mediaInfo.description && !useEnhancedGallery && (
                   <div className="mt-4 pt-4 border-t">
                     <p className="text-xs text-gray-600 mb-2">描述</p>
                     <p className="text-sm text-gray-700 line-clamp-4 leading-relaxed">
@@ -342,7 +381,7 @@ export function TwoColumnPreview({
             </Card>
 
             {/* 操作按钮卡片 */}
-            <Card>
+            <Card className={useEnhancedGallery ? 'flex-1' : ''}>
               <CardContent className="p-4">
                 <h4 className="font-semibold text-gray-900 mb-4">操作选项</h4>
                 
@@ -351,7 +390,7 @@ export function TwoColumnPreview({
                   <Button 
                     onClick={onConfirmUpload} 
                     disabled={isUploading}
-                    className="w-full h-11 text-base font-medium"
+                    className={`w-full h-11 text-base font-medium ${useEnhancedGallery ? 'mb-3' : ''}`}
                     size="lg"
                   >
                     {isUploading ? (
@@ -368,7 +407,7 @@ export function TwoColumnPreview({
                   </Button>
 
                   {/* 次要操作按钮组 */}
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className={`grid grid-cols-2 gap-2 ${useEnhancedGallery ? '' : 'mb-3'}`}>
                     <Button 
                       variant="outline" 
                       size="sm"
@@ -391,28 +430,30 @@ export function TwoColumnPreview({
                     </Button>
                   </div>
 
-                  {/* 工具按钮组 */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={handleCopyLink}
-                      className="h-9 text-xs"
-                    >
-                      <Copy className="w-4 h-4 mr-1" />
-                      复制链接
-                    </Button>
+                  {/* 工具按钮组 - 仅在非增强模式显示 */}
+                  {!useEnhancedGallery && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={handleCopyLink}
+                        className="h-9 text-xs"
+                      >
+                        <Copy className="w-4 h-4 mr-1" />
+                        复制链接
+                      </Button>
 
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={handleOpenInNewTab}
-                      className="h-9 text-xs"
-                    >
-                      <ExternalLink className="w-4 h-4 mr-1" />
-                      新窗口
-                    </Button>
-                  </div>
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={handleOpenInNewTab}
+                        className="h-9 text-xs"
+                      >
+                        <ExternalLink className="w-4 h-4 mr-1" />
+                        新窗口
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 {/* 上传进度提示 */}

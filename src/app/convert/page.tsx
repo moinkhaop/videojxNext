@@ -9,20 +9,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { 
-  CheckCircle, 
-  XCircle, 
-  Loader2, 
+import {
+  CheckCircle,
+  XCircle,
+  Loader2,
   Settings,
   Link as LinkIcon,
   Eye,
   Upload,
-  RotateCcw
+  RotateCcw,
+  Clipboard,
+  ClipboardCheck
 } from 'lucide-react'
 import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
 import { TwoColumnPreview } from '@/components/preview'
+import { ClipboardDetector } from '@/lib/clipboard'
 import Link from 'next/link'
 
 // {{ AURA: Add - Loading 组件用于 Suspense fallback }}
@@ -54,6 +57,10 @@ function ConvertPageContent() {
     previewData: null
   })
 
+  // 剪贴板检测状态
+  const [clipboardEnabled, setClipboardEnabled] = useState(false)
+  const [lastClipboardUrl, setLastClipboardUrl] = useState('')
+
   useEffect(() => {
     // 加载配置
     const loadedParsers = ConfigManager.getParsers()
@@ -72,13 +79,69 @@ function ConvertPageContent() {
 
   // {{ AURA: Add - 处理URL参数自动填充 }}
   const searchParams = useSearchParams()
-  
+
   useEffect(() => {
     const urlParam = searchParams.get('url')
     if (urlParam) {
       setVideoUrl(decodeURIComponent(urlParam))
     }
   }, [searchParams])
+
+  // 剪贴板自动检测
+  useEffect(() => {
+    if (!clipboardEnabled) return
+
+    const handleClipboardDetection = (url: string) => {
+      // 如果正在转换或已在预览模式，不自动填充
+      if (isConverting || previewState.isPreviewMode) return
+
+      // 避免重复填充相同的URL
+      if (url === lastClipboardUrl || url === videoUrl) return
+
+      setLastClipboardUrl(url)
+      setVideoUrl(url)
+      console.log('从剪贴板检测到视频链接:', url)
+    }
+
+    ClipboardDetector.startMonitoring(handleClipboardDetection, 1000)
+
+    return () => {
+      ClipboardDetector.stopMonitoring()
+    }
+  }, [clipboardEnabled, isConverting, previewState.isPreviewMode, lastClipboardUrl, videoUrl])
+
+  // 手动从剪贴板粘贴
+  const handlePasteFromClipboard = async () => {
+    try {
+      const url = await ClipboardDetector.checkOnce()
+      if (url) {
+        setVideoUrl(url)
+        setLastClipboardUrl(url)
+        console.log('手动粘贴视频链接:', url)
+      } else {
+        alert('剪贴板中未检测到视频链接')
+      }
+    } catch (error) {
+      console.error('读取剪贴板失败:', error)
+      alert('无法读取剪贴板，请手动粘贴链接')
+    }
+  }
+
+  // 切换剪贴板自动检测
+  const toggleClipboardDetection = async () => {
+    if (!clipboardEnabled) {
+      // 启用前请求权限
+      const hasPermission = await ClipboardDetector.requestPermission()
+      if (hasPermission) {
+        setClipboardEnabled(true)
+      } else {
+        alert('需要剪贴板权限才能启用自动检测功能')
+      }
+    } else {
+      setClipboardEnabled(false)
+      ClipboardDetector.reset()
+    }
+  }
 
   // 提取视频链接
   const extractVideoLink = (input: string): string => {
@@ -324,47 +387,86 @@ function ConvertPageContent() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-6xl">
-      {/* 页面标题 */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">单链接转存</h1>
-        <p className="text-muted-foreground">
-          输入视频分享链接，先解析预览内容，确认无误后再上传到WebDAV服务器
-        </p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-blue-50/20 dark:to-blue-950/20">
+      <div className="container mx-auto px-4 py-8 max-w-6xl">
+        {/* 页面标题 */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-gradient-to-br from-blue-500/10 to-blue-600/10 rounded-lg">
+              <LinkIcon className="w-7 h-7 text-blue-600 dark:text-blue-400" />
+            </div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
+              单链接转存
+            </h1>
+          </div>
+          <p className="text-muted-foreground ml-14">
+            输入视频分享链接，先解析预览内容，确认无误后再上传到WebDAV服务器
+          </p>
+        </div>
 
-      {/* 配置检查 */}
-      {(parsers.length === 0 || webdavServers.length === 0) && (
-        <Alert className="mb-6">
-          <Settings className="h-4 w-4" />
-          <AlertDescription>
-            请先配置解析API和WebDAV服务器。
-            <Link href="/settings" className="ml-2 text-primary hover:underline">
-              前往设置
-            </Link>
-          </AlertDescription>
-        </Alert>
-      )}
+        {/* 配置检查 */}
+        {(parsers.length === 0 || webdavServers.length === 0) && (
+          <Alert className="mb-6 border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30">
+            <Settings className="h-5 w-5 text-orange-600" />
+            <AlertDescription>
+              请先配置解析API和WebDAV服务器。
+              <Link href="/settings" className="ml-2 text-primary hover:underline font-semibold">
+                前往设置
+              </Link>
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {/* 中间：操作区域（两列布局） */}
-      <div className="space-y-6">
-        {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
-        {/* 步骤一：输入与配置 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <LinkIcon className="w-5 h-5" />
-              <span>输入链接与配置</span>
-            </CardTitle>
-            <CardDescription>
-              粘贴视频分享链接，然后选择解析服务和存储位置。
-            </CardDescription>
-          </CardHeader>
+        {/* 中间：操作区域（两列布局） */}
+        <div className="space-y-6">
+          {/* {{ AURA: Modify - 布局调整为单列流式布局 }} */}
+          {/* 步骤一：输入与配置 */}
+          <Card className="border-2 hover:border-blue-300 dark:hover:border-blue-700 transition-all duration-300 shadow-lg">
+            <CardHeader className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950/30 dark:to-cyan-950/30">
+              <CardTitle className="flex items-center space-x-2">
+                <div className="p-2 bg-blue-500/10 rounded-lg">
+                  <LinkIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <span>输入链接与配置</span>
+              </CardTitle>
+              <CardDescription>
+                粘贴视频分享链接，然后选择解析服务和存储位置。
+              </CardDescription>
+            </CardHeader>
           <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* 左侧输入 */}
             <div className="space-y-4">
               <div>
-                <label className="text-sm font-medium mb-2 block">视频链接</label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium">视频链接</label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePasteFromClipboard}
+                      disabled={isConverting || previewState.isPreviewMode}
+                      className="h-7"
+                    >
+                      <Clipboard className="w-3 h-3 mr-1" />
+                      粘贴
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={clipboardEnabled ? "default" : "outline"}
+                      size="sm"
+                      onClick={toggleClipboardDetection}
+                      disabled={isConverting || previewState.isPreviewMode}
+                      className="h-7"
+                    >
+                      {clipboardEnabled ? (
+                        <><ClipboardCheck className="w-3 h-3 mr-1" />自动检测中</>
+                      ) : (
+                        <><Clipboard className="w-3 h-3 mr-1" />自动检测</>
+                      )}
+                    </Button>
+                  </div>
+                </div>
                 <Textarea
                   placeholder="请粘贴视频分享链接..."
                   value={videoUrl}
@@ -372,6 +474,11 @@ function ConvertPageContent() {
                   className="min-h-[120px]"
                   disabled={isConverting || previewState.isPreviewMode}
                 />
+                {clipboardEnabled && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    ✓ 剪贴板自动检测已启用，复制视频链接将自动填充
+                  </p>
+                )}
               </div>
             </div>
             {/* 右侧选择 */}
@@ -416,10 +523,10 @@ function ConvertPageContent() {
           </CardContent>
         </Card>
 
-        {/* 步骤二：操作与预览 */}
-        {/* {{ AURA: Modify - 将解析按钮和状态预览整合 }} */}
-        <Card>
-          <CardContent>
+          {/* 步骤二：操作与预览 */}
+          {/* {{ AURA: Modify - 将解析按钮和状态预览整合 }} */}
+          <Card className="border-2 hover:border-purple-300 dark:hover:border-purple-700 transition-all duration-300 shadow-lg">
+            <CardContent>
             {/* 主操作按钮区域 */}
             {!previewState.isPreviewMode && (
               <div className="text-center py-4">
@@ -487,9 +594,9 @@ function ConvertPageContent() {
             )}
           </CardContent>
         </Card>
+        </div>
+        {/* {{ AURA: Remove - 移除底部独立预览区域，预览功能已集成到右侧状态区域 }} */}
       </div>
-
-      {/* {{ AURA: Remove - 移除底部独立预览区域，预览功能已集成到右侧状态区域 }} */}
     </div>
   )
 }

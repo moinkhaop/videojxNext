@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>剪贴板检测功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        #log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .video-url { color: blue; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>剪贴板自动检测功能测试</h1>
+
+    <div class="test-section">
+        <h2>测试步骤</h2>
+        <ol>
+            <li>点击"启动自动检测"按钮</li>
+            <li>复制以下任意视频链接：
+                <ul>
+                    <li>https://www.douyin.com/video/7234567890123456789</li>
+                    <li>https://www.bilibili.com/video/BV1xx411c7mD</li>
+                    <li>https://www.youtube.com/watch?v=dQw4w9WgXcQ</li>
+                </ul>
+            </li>
+            <li>观察下方日志，应该自动检测到视频链接</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>测试链接（点击复制）</h2>
+        <button onclick="copyToClipboard('https://www.douyin.com/video/7234567890123456789')">
+            复制抖音链接
+        </button>
+        <button onclick="copyToClipboard('https://www.bilibili.com/video/BV1xx411c7mD')">
+            复制B站链接
+        </button>
+        <button onclick="copyToClipboard('https://www.youtube.com/watch?v=dQw4w9WgXcQ')">
+            复制YouTube链接
+        </button>
+        <button onclick="copyToClipboard('这是一段文本，没有视频链接')">
+            复制普通文本
+        </button>
+    </div>
+
+    <div class="test-section">
+        <h2>控制面板</h2>
+        <button id="toggleBtn" onclick="toggleMonitoring()">启动自动检测</button>
+        <button onclick="checkOnce()">手动检测一次</button>
+        <button onclick="clearLog()">清空日志</button>
+        <div style="margin-top: 10px;">
+            <strong>状态：</strong><span id="status">未启动</span>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>检测日志</h2>
+        <div id="log"></div>
+    </div>
+
+    <script type="module">
+        // 支持的视频平台域名模式
+        const VIDEO_PLATFORMS = [
+            'douyin.com',
+            'tiktok.com',
+            'bilibili.com',
+            'youtube.com',
+            'youtu.be',
+            'xiaohongshu.com',
+            'xhslink.com',
+            'kuaishou.com',
+            'weibo.com',
+            'instagram.com',
+            'twitter.com',
+            'x.com',
+            'facebook.com',
+            'vimeo.com',
+        ];
+
+        let lastDetectedUrl = '';
+        let isMonitoring = false;
+        let monitorInterval = null;
+
+        function detectVideoUrl(text) {
+            if (!text || typeof text !== 'string') return null;
+
+            const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&=\/]*))/g;
+            const urls = text.match(urlRegex);
+
+            if (!urls || urls.length === 0) return null;
+
+            for (const url of urls) {
+                if (isVideoUrl(url)) {
+                    return url.replace(/\/$/, '');
+                }
+            }
+
+            return null;
+        }
+
+        function isVideoUrl(url) {
+            try {
+                const urlObj = new URL(url);
+                return VIDEO_PLATFORMS.some(platform =>
+                    urlObj.hostname.includes(platform)
+                );
+            } catch {
+                return false;
+            }
+        }
+
+        async function detectFromClipboard() {
+            try {
+                const text = await navigator.clipboard.readText();
+                const videoUrl = detectVideoUrl(text);
+
+                if (videoUrl && videoUrl !== lastDetectedUrl) {
+                    lastDetectedUrl = videoUrl;
+                    return videoUrl;
+                }
+
+                return null;
+            } catch (error) {
+                log('剪贴板读取失败: ' + error.message, 'error');
+                return null;
+            }
+        }
+
+        function startMonitoring() {
+            if (isMonitoring) return;
+
+            isMonitoring = true;
+            document.getElementById('status').textContent = '监听中...';
+            document.getElementById('toggleBtn').textContent = '停止自动检测';
+
+            monitorInterval = setInterval(async () => {
+                const url = await detectFromClipboard();
+                if (url) {
+                    log('✓ 检测到视频链接: ' + url, 'success');
+                }
+            }, 1000);
+
+            log('自动检测已启动', 'success');
+        }
+
+        function stopMonitoring() {
+            if (monitorInterval) {
+                clearInterval(monitorInterval);
+                monitorInterval = null;
+            }
+            isMonitoring = false;
+            document.getElementById('status').textContent = '已停止';
+            document.getElementById('toggleBtn').textContent = '启动自动检测';
+            log('自动检测已停止', 'success');
+        }
+
+        window.toggleMonitoring = function() {
+            if (isMonitoring) {
+                stopMonitoring();
+            } else {
+                startMonitoring();
+            }
+        };
+
+        window.checkOnce = async function() {
+            log('执行手动检测...', 'success');
+            const url = await detectFromClipboard();
+            if (url) {
+                log('✓ 检测到视频链接: ' + url, 'success');
+            } else {
+                log('未检测到视频链接', 'error');
+            }
+        };
+
+        window.copyToClipboard = async function(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                log('已复制到剪贴板: ' + text, 'success');
+            } catch (error) {
+                log('复制失败: ' + error.message, 'error');
+            }
+        };
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = type;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        window.clearLog = function() {
+            document.getElementById('log').innerHTML = '';
+            log('日志已清空', 'success');
+        };
+
+        // 初始化日志
+        log('测试页面已加载，请点击"启动自动检测"开始测试', 'success');
+    </script>
+</body>
+</html>

@@ -169,9 +169,9 @@ export default function HistoryPage() {
 
   const renderSingleTaskRecord = (record: HistoryRecord) => {
     const task = record.task as ConversionTask
-    
+
     return (
-      <Card key={record.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => handleAutoFillFromHistory(record)}>
+      <Card key={record.id} className="border-2 border-border hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-xl transition-all duration-300 cursor-pointer hover:-translate-y-1" onClick={() => handleAutoFillFromHistory(record)}>
         <CardContent className="p-4">
           <div className="flex items-start justify-between">
             <div className="flex items-center space-x-4 flex-grow">
@@ -228,9 +228,9 @@ export default function HistoryPage() {
 
   const renderBatchTaskRecord = (record: HistoryRecord) => {
     const batch = record.task as BatchTask
-    
+
     return (
-      <Card key={record.id} className="hover:shadow-md transition-shadow">
+      <Card key={record.id} className="border-2 border-border hover:border-purple-300 dark:hover:border-purple-700 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
         <CardContent className="p-4">
           <div className="flex items-start justify-between">
             <div className="flex items-center space-x-4">
@@ -281,17 +281,25 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-6xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">历史记录</h1>
-        <p className="text-muted-foreground">
-          查看和管理所有转存任务的历史记录
-        </p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-emerald-50/20 dark:to-emerald-950/20">
+      <div className="container mx-auto px-4 py-8 max-w-6xl">
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-gradient-to-br from-emerald-500/10 to-emerald-600/10 rounded-lg">
+              <History className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">
+              历史记录
+            </h1>
+          </div>
+          <p className="text-muted-foreground ml-14">
+            查看和管理所有转存任务的历史记录
+          </p>
+        </div>
 
-      {/* {{ AURA: Modify - 重新设计筛选和操作栏 }} */}
-      <div className="mb-6 bg-card border rounded-xl shadow-sm">
-        <div className="p-5">
+        {/* {{ AURA: Modify - 重新设计筛选和操作栏 }} */}
+        <Card className="mb-6 border-2 hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-300 shadow-lg">
+          <CardContent className="p-5">
           {/* 搜索和筛选区域 */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
             {/* 搜索框 */}
@@ -376,14 +384,14 @@ export default function HistoryPage() {
                   清空记录
                 </Button>
               )}
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
+          </CardContent>
+        </Card>
 
-      {/* 历史记录列表 */}
-      {filteredRecords.length === 0 ? (
-        <Card>
+        {/* 历史记录列表 */}
+        {filteredRecords.length === 0 ? (
+          <Card className="border-2 shadow-lg">
           <CardContent className="py-12">
             <div className="text-center text-muted-foreground">
               <History className="w-12 h-12 mx-auto mb-4 opacity-50" />
@@ -407,10 +415,11 @@ export default function HistoryPage() {
                 ? renderSingleTaskRecord(record)
                 : renderBatchTaskRecord(record)
               }
-            </div>
-          )}
-        </div>
-      )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

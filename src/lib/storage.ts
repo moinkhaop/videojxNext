@@ -69,7 +69,23 @@ export class ConfigManager {
     } catch (error) {
       console.error('获取解析器配置失败:', error)
     }
-    return []
+    
+    // {{ AURA: Add - 如果没有配置的解析器，返回默认解析器 }}
+    return this.getDefaultParsers()
+  }
+
+  // {{ AURA: Add - 获取默认解析器配置 }}
+  static getDefaultParsers(): VideoParserConfig[] {
+    return [
+      {
+        id: 'default_parser_1',
+        name: '默认解析器',
+        apiUrl: '/api/proxy/parser',
+        isDefault: true,
+        requestMethod: 'POST',
+        urlParamName: 'url'
+      }
+    ]
   }
 
   // 保存解析器配置

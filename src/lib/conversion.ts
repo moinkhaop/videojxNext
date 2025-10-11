@@ -1,604 +1,289 @@
-import { ConversionTask, BatchTask, TaskStatus, VideoParserConfig, WebDAVConfig, ParsedVideoInfo, MediaType, PreviewParseResponse } from '@/types'
+import { 
+  ConversionTask, 
+  BatchTask, 
+  TaskStatus, 
+  VideoParserConfig, 
+  EnhancedVideoParserConfig,
+  WebDAVConfig, 
+  ParsedVideoInfo, 
+  MediaType, 
+  PreviewParseResponse, 
+  BatchInputMode, 
+  ExtendedBatchTask, 
+  DouyinUserParseRequest,
+  ParserCapability,
+  SupportedPlatform
+} from '@/types'
 import { CleanupService } from './cleanup'
 import { FilenameSanitizer } from './filename-sanitizer'
-
-
-
-
+import { parserRouter } from './parser-router'
+import { apiCapabilityDetector } from './capability-detector'
 
 export class ConversionService {
-  // 解析视频链接
-  static async parseVideo(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
-    // 首先验证输入参数
-    if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
-      throw new Error('视频URL为空')
-    }
-    
-    if (!parserConfig || !parserConfig.apiUrl) {
-      throw new Error('解析API配置无效')
-    }
-    
+  // {{ AURA: Modify - 使用多API适配器系统的抖音用户主页解析方法 }}
+  static async parseDouyinUser(
+    userUrl: string, 
+    limit: number = 20,
+    parsers?: EnhancedVideoParserConfig[]
+  ): Promise<ParsedVideoInfo[]> {
     try {
-      // 处理分享文本，提取真实URL
-      const extractedUrl = this.extractRealUrl(videoUrl)
-      console.log(`[转存] 提取到URL: ${extractedUrl}`)
-      console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
+      console.log(`[抖音用户解析] 开始解析用户主页: ${userUrl}, 限制: ${limit}`)
       
-      const response = await fetch('/api/proxy/parser', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          videoUrl: extractedUrl, // 使用提取后的URL
-          parserConfig
-        })
-      })
-
-      // {{ AURA: Modify - 添加解析API的JSON错误处理 }}
-      let result;
-      try {
-        const responseText = await response.text();
-        console.log(`[转存] 解析API响应状态: ${response.status}, 内容长度: ${responseText.length}`);
+      // 如果提供了解析器列表，使用智能路由系统
+      if (parsers && parsers.length > 0) {
+        const routeResult = parserRouter.selectBestParser(
+          BatchInputMode.DOUYIN_USER,
+          SupportedPlatform.DOUYIN,
+          parsers
+        );
         
-        if (!responseText.trim()) {
-          throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`);
-        }
-        
-        result = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('[转存] 解析API JSON解析失败:', parseError);
-        console.error('[转存] 解析API响应状态:', response.status, response.statusText);
-        
-        // 尝试获取部分响应内容用于调试
-        const responseText = await response.text().catch(() => '无法获取响应文本');
-        const truncatedText = responseText.substring(0, 500);
-        
-        throw new Error(`解析API JSON解析失败 (HTTP ${response.status}): ${parseError instanceof Error ? parseError.message : '未知解析错误'}. 响应片段: ${truncatedText}`);
-      }
-      
-      if (!result.success) {
-        throw new Error(result.error || '视频解析失败')
-      }
-      
-      // 验证返回的数据
-      if (!result.data) {
-        throw new Error('API返回的数据为空')
-      }
-      
-      // {{ AURA: Modify - 移除测试API调用，直接验证数据完整性 }}
-      // 对于视频类型，检查URL字段
-      if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
-        throw new Error('视频解析成功但未返回有效的视频URL')
-      }
-      
-      // 对于视频类型，确保URL字段是有效的网址
-      if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
-        try {
-          new URL(result.data.url)
-        } catch {
-          throw new Error(`返回的URL无效: ${result.data.url}`)
-        }
-      }
-      
-      // 对于图集类型，检查图片数组
-      if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
-        if (!result.data.images || result.data.images.length === 0) {
-          throw new Error('图集解析成功但没有找到任何图片')
-        }
-        console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
-      }
-
-      console.log(`[转存] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
-      // {{ AURA: Modify - 修复图集解析时url.substring错误，添加类型判断 }}
-      if (result.data.mediaType === MediaType.VIDEO && result.data.url && typeof result.data.url === 'string') {
-        console.log(`[转存] 视频URL: ${result.data.url.substring(0, 50)}...`)
-      } else if (result.data.mediaType === MediaType.IMAGE_ALBUM && result.data.images) {
-        console.log(`[转存] 图集包含 ${result.data.images.length} 张图片`)
-      }
-      
-      return result.data
-    } catch (error) {
-      console.error('[转存] 视频解析错误:', error)
-      throw error
-    }
-  }
-
-  // {{ AURA: Add - 仅解析视频信息，不进行上传（用于预览功能） }}
-  static async parseOnly(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
-    // 首先验证输入参数
-    if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
-      throw new Error('视频URL为空')
-    }
-    
-    if (!parserConfig || !parserConfig.apiUrl) {
-      throw new Error('解析API配置无效')
-    }
-    
-    try {
-      // 处理分享文本，提取真实URL
-      const extractedUrl = this.extractRealUrl(videoUrl)
-      console.log(`[预览解析] 提取到URL: ${extractedUrl}`)
-      console.log(`[预览解析] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
-      
-      const response = await fetch('/api/preview/parse', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          videoUrl: extractedUrl,
-          parserConfig
-        })
-      })
-
-      let result: PreviewParseResponse;
-      try {
-        const responseText = await response.text();
-        console.log(`[预览解析] API响应状态: ${response.status}, 内容长度: ${responseText.length}`);
-        
-        if (!responseText.trim()) {
-          throw new Error(`预览解析服务器返回空响应 (HTTP ${response.status})`);
-        }
-        
-        result = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('[预览解析] JSON解析失败:', parseError);
-        throw new Error(`预览解析API解析失败: ${parseError instanceof Error ? parseError.message : '未知解析错误'}`);
-      }
-      
-      if (!result.success) {
-        throw new Error(result.error || '视频解析失败')
-      }
-      
-      // 验证返回的数据
-      if (!result.data) {
-        throw new Error('预览API返回的数据为空')
-      }
-      
-      // 对于视频类型，检查URL字段
-      if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
-        throw new Error('视频解析成功但未返回有效的视频URL')
-      }
-      
-      // 对于图集类型，检查图片数组
-      if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
-        if (!result.data.images || result.data.images.length === 0) {
-          throw new Error('图集解析成功但没有找到任何图片')
-        }
-        console.log(`[预览解析] 图集解析成功，包含 ${result.data.images.length} 张图片`)
-      }
-
-      console.log(`[预览解析] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
-      
-      return result.data
-    } catch (error) {
-      console.error('[预览解析] 视频解析错误:', error)
-      throw error
-    }
-  }
-
-  // {{ AURA: Add - 基于已解析的媒体信息进行上传（用于预览确认后的上传） }}
-  static async uploadParsedMedia(
-    mediaInfo: ParsedVideoInfo,
-    webdavConfig: WebDAVConfig,
-    folderPath?: string
-  ): Promise<string> {
-    try {
-      console.log(`[预览上传] 开始上传${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${mediaInfo.title}`)
-      
-      // 直接调用现有的上传方法
-      const filePath = await this.uploadToWebDAV(mediaInfo, webdavConfig, folderPath)
-      
-      console.log(`[预览上传] 上传成功: ${filePath}`)
-      return filePath
-    } catch (error) {
-      console.error('[预览上传] 上传失败:', error)
-      throw error
-    }
-  }
-
-  // 上传媒体到WebDAV
-  static async uploadToWebDAV(
-    mediaInfo: ParsedVideoInfo,
-    webdavConfig: WebDAVConfig,
-    folderPath?: string
-  ): Promise<string> {
-    const maxRetries = 5; // 增加最大重试次数到5次
-    let attempt = 0;
-    let lastError;
-    
-    // 根据媒体类型生成文件名
-    let fileName = '';
-    if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
-      // 视频文件名
-      const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url);
-      fileName = this.generateFileName(mediaInfo.title, format);
-    } else if (mediaInfo.mediaType === MediaType.IMAGE_ALBUM && mediaInfo.images && mediaInfo.images.length > 0) {
-      // 图集文件夹名 - 使用解析后的标题名称
-      fileName = this.generateFolderName(mediaInfo.title);
-    }
-    
-    while (attempt < maxRetries) {
-      try {
-        attempt++;
-        console.log(`[转存] WebDAV上传尝试 ${attempt}/${maxRetries}: ${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}`);
-        
-        const response = await fetch('/api/proxy/webdav', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined, // 视频URL
-            images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined, // 图集图片列表
-            webdavConfig,
-            fileName, // 文件名
-            folderPath: folderPath || ''
-          })
-        });
-
-        // {{ AURA: Modify - 添加更强的JSON解析错误处理 }}
-        let result;
-        try {
-          const responseText = await response.text();
-          console.log(`[转存] 原始响应状态: ${response.status}, 内容长度: ${responseText.length}`);
-          
-          if (!responseText.trim()) {
-            throw new Error(`服务器返回空响应 (HTTP ${response.status})`);
-          }
-          
-          result = JSON.parse(responseText);
-        } catch (parseError) {
-          console.error('[转存] JSON解析失败:', parseError);
-          console.error('[转存] 响应状态:', response.status, response.statusText);
-          
-          // 尝试获取部分响应内容用于调试
-          const responseText = await response.text().catch(() => '无法获取响应文本');
-          const truncatedText = responseText.substring(0, 500);
-          
-          throw new Error(`JSON解析失败 (HTTP ${response.status}): ${parseError instanceof Error ? parseError.message : '未知解析错误'}. 响应片段: ${truncatedText}`);
-        }
-        
-        if (!result.success) {
-          // 对于403/401错误，在第一次尝试时进行重试
-          const shouldRetryImmediately =
-            (result.error?.includes('403') || result.error?.includes('401')) &&
-            attempt === 1;
+        if (routeResult.primary) {
+          try {
+            console.log(`[抖音用户解析] 使用解析器: ${routeResult.primary.name}`)
+            return await parserRouter.executeParseRequest(
+              routeResult.primary,
+              userUrl,
+              ParserCapability.USER_PAGE,
+              limit
+            );
+          } catch (error) {
+            console.error(`[抖音用户解析] 主解析器失败: ${error}`)
             
-          if (shouldRetryImmediately) {
-            console.log('[转存] 权限错误，立即进行重试');
-            // 等待一小段时间后立即重试
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            continue;
+            // 尝试备用解析器
+            for (const fallback of routeResult.fallbacks) {
+              try {
+                console.log(`[抖音用户解析] 尝试备用解析器: ${fallback.name}`)
+                // 备用解析器通常是单视频解析，需要先获取用户视频列表
+                throw new Error('需要实现单视频降级逻辑')
+              } catch (fallbackError) {
+                console.error(`[抖音用户解析] 备用解析器失败: ${fallbackError}`)
+                continue;
+              }
+            }
+            
+            throw error; // 所有解析器都失败
           }
-          
-          // 对于404错误，提供更具体的错误信息
-          let errorMessage = result.error || '媒体上传失败';
-          if (result.error?.includes('404')) {
-            errorMessage = `上传路径不存在 (404)。请检查WebDAV服务器地址和路径配置是否正确。错误详情: ${result.error}`;
-          }
-          
-          throw new Error(errorMessage);
-        }
-
-        console.log(`[转存] 上传成功，尝试次数: ${attempt}`);
-        return result.filePath;
-        
-      } catch (error) {
-        lastError = error;
-        console.error(`[转存] 上传尝试 ${attempt} 失败:`, error);
-        
-        // 检查是否需要重试
-        const shouldRetry = this.shouldRetryUpload(error, attempt);
-        if (attempt < maxRetries && shouldRetry) {
-          // 使用指数退避策略
-          const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // 最大等待10秒
-          console.log(`[转存] 等待 ${waitTime/1000} 秒后重试...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
         } else {
-          break; // 不再重试
+          throw new Error('没有找到支持用户主页解析的API')
         }
+      }
+      
+      // 兼容模式：使用原有的固定API端点
+      const request: DouyinUserParseRequest = {
+        url: userUrl,
+        limit: limit
+      }
+      
+      const response = await fetch('/api/douyin/user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request)
+      })
+      
+      if (!response.ok) {
+        throw new Error(`抖音用户解析API请求失败: ${response.status}`)
+      }
+      
+      const result = await response.json()
+      
+      if (!result.success) {
+        throw new Error(result.error || '抖音用户解析失败')
+      }
+      
+      console.log(`[抖音用户解析] 解析成功，获取到 ${result.data.videos.length} 个视频`)
+      return result.data.videos
+      
+    } catch (error) {
+      console.error('[抖音用户解析] 解析失败:', error)
+      throw error
+    }
+  }
+
+  // {{ AURA: Add - 智能识别输入类型：普通链接 vs 抖音用户主页 }}
+  static detectInputMode(input: string): BatchInputMode {
+    const trimmedInput = input.trim()
+    
+    // 检查是否是抖音用户主页链接
+    const douyinUserPatterns = [
+      /douyin\.com\/user\//i,
+      /iesdouyin\.com\/share\/user\//i,
+      /v\.douyin\.com\/.*\/user\//i
+    ]
+    
+    for (const pattern of douyinUserPatterns) {
+      if (pattern.test(trimmedInput)) {
+        return BatchInputMode.DOUYIN_USER
       }
     }
     
-    // 所有尝试都失败
-    console.error('[转存] 所有上传尝试均失败');
-    throw lastError || new Error('视频上传失败，已达到最大重试次数');
+    // 检查是否包含多行（普通批量模式）
+    const lines = trimmedInput.split('\n').filter(line => line.trim())
+    if (lines.length > 1) {
+      return BatchInputMode.NORMAL
+    }
+    
+    // 单行输入默认为普通模式
+    return BatchInputMode.NORMAL
   }
 
-  // 单个视频转存
-  static async convertSingle(
-    task: ConversionTask,
-    parserConfig: VideoParserConfig,
-    webdavConfig: WebDAVConfig,
-    onProgress?: (progress: number, status: TaskStatus) => void
-  ): Promise<ConversionTask> {
-    try {
-      // 更新状态为解析中
-      task.status = TaskStatus.PARSING
-      onProgress?.(20, TaskStatus.PARSING)
-      
-      console.log(`[转存] 开始解析视频: ${task.videoUrl}`)
-      console.log(`[转存] 使用解析器: ${parserConfig.name} (${parserConfig.apiUrl})`)
-
-      // 解析视频
-      try {
-        // 添加视频URL格式检查
-        if (!this.isValidUrl(task.videoUrl)) {
-          throw new Error('视频链接格式无效，请确保以http://或https://开头')
-        }
-        
-        // {{ AURA: Modify - 移除备用测试模式，直接使用主解析结果 }}
-        let parsedInfo;
-        
-        try {
-          parsedInfo = await this.parseVideo(task.videoUrl, parserConfig)
-          console.log(`[转存] 解析成功，媒体类型: ${parsedInfo.mediaType}`)
-        } catch (parseError) {
-          console.error('[转存] 解析失败:', parseError)
-          throw parseError
-        }
-        
-        task.parsedVideoInfo = parsedInfo
-        task.videoTitle = parsedInfo.title
-        console.log(`[转存] 解析完成: ${parsedInfo.title}`)
-      } catch (error) {
-        console.error('[转存] 视频解析失败:', error)
-        task.status = TaskStatus.FAILED
-        let errorMsg = error instanceof Error ? error.message : '视频解析失败'
-        
-        // 添加更友好的错误信息
-        if (errorMsg.includes('URL为空')) {
-          errorMsg = 'URL为空 - 解析API无法提取视频URL，请尝试其他解析API或检查链接'
-        }
-        
-        task.error = errorMsg
-        task.completedAt = new Date()
-        return task
+  // {{ AURA: Add - 扩展的批量转存方法，支持抖音用户模式 }}
+  static async convertExtendedBatch(
+    batchTask: ExtendedBatchTask,
+    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
+  ): Promise<ExtendedBatchTask> {
+    
+    if (batchTask.inputMode === BatchInputMode.DOUYIN_USER) {
+      return await this.convertDouyinUserBatch(batchTask, onProgress)
+    } else {
+      // 使用原有的批量转存方法
+      const originalBatch = await this.convertBatch(batchTask, onProgress)
+      return {
+        ...originalBatch,
+        inputMode: BatchInputMode.NORMAL
       }
-
-      onProgress?.(50, TaskStatus.PARSING)
-      
-      // 更新状态为上传中
-      task.status = TaskStatus.UPLOADING
-      onProgress?.(60, TaskStatus.UPLOADING)
-
-      // 上传媒体
-      const filePath = await this.uploadToWebDAV(
-        task.parsedVideoInfo!, 
-        webdavConfig
-      )
-
-      // 更新任务状态
-      task.status = TaskStatus.SUCCESS
-      task.completedAt = new Date()
-      task.uploadResult = {
-        success: true,
-        filePath
-      }
-
-      onProgress?.(100, TaskStatus.SUCCESS)
-
-// 任务完成后执行清理
-      await CleanupService.cleanupAfterTaskCompletion(task);
-      return task
-    } catch (error) {
-      // 更新任务为失败状态
-      task.status = TaskStatus.FAILED
-      task.completedAt = new Date()
-      task.error = error instanceof Error ? error.message : '转存过程中发生未知错误'
-      task.uploadResult = {
-        success: false,
-        error: task.error
-      }
-
-// 任务完成后执行清理
-      await CleanupService.cleanupAfterTaskCompletion(task);
-      onProgress?.(0, TaskStatus.FAILED)
-
-      return task
     }
   }
 
-  // 批量转存
-  static async convertBatch(
-    batchTask: BatchTask,
+  // {{ AURA: Add - 抖音用户批量转存方法 }}
+  private static async convertDouyinUserBatch(
+    batchTask: ExtendedBatchTask,
     onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
-  ): Promise<BatchTask> {
+  ): Promise<ExtendedBatchTask> {
+    
     batchTask.status = TaskStatus.PARSING
     
-    const totalTasks = batchTask.tasks.length
-    let completedTasks = 0
-
-    for (let i = 0; i < batchTask.tasks.length; i++) {
-      const task = batchTask.tasks[i]
-      
-      try {
-        // 处理单个任务
-        const updatedTask = await this.convertSingle(
-          task,
-          batchTask.parserConfig,
-          batchTask.webdavConfig,
-          (progress, status) => {
-            // 计算总体进度
-            const taskProgress = (completedTasks + progress / 100) / totalTasks * 100
-            onProgress?.(taskProgress, task)
-          }
-        )
-
-        batchTask.tasks[i] = updatedTask
-        
-        if (updatedTask.status === TaskStatus.SUCCESS) {
-          completedTasks++
-        }
-
-      } catch (error) {
-        console.error(`批量任务中的单个任务失败:`, error)
-        // 继续处理下一个任务
-      }
-
-      // 更新批量任务状态
-      batchTask.completedTasks = completedTasks
-      
-      // 计算总体进度
-      const overallProgress = (i + 1) / totalTasks * 100
-      onProgress?.(overallProgress, task)
-
-      // 添加延迟避免请求过于频繁
-      if (i < batchTask.tasks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-      }
-    }
-
-    // 更新批量任务最终状态
-    batchTask.completedAt = new Date()
-    
-    if (completedTasks === totalTasks) {
-      batchTask.status = TaskStatus.SUCCESS
-// 批量任务完成后执行清理
-      await CleanupService.cleanupAfterTaskCompletion(batchTask);
-    } else if (completedTasks === 0) {
-      batchTask.status = TaskStatus.FAILED
-    } else {
-      batchTask.status = TaskStatus.SUCCESS // 部分成功也标记为成功
-    }
-
-    return batchTask
-  }
-
-  // {{ AURA: Modify - 增强文件名生成，更好地处理特殊字符 }}
-  // 生成文件名
-  private static generateFileName(title: string, format: string): string {
-    console.log(`[文件名生成] 原始标题: "${title}"`);
-    
-    // 首先检测特殊字符
-    const specialChars = FilenameSanitizer.detectSpecialChars(title);
-    if (specialChars.length > 0) {
-      console.log(`[文件名生成] 检测到特殊字符: ${specialChars.join(', ')}`);
-    }
-    
-    // 使用增强的FilenameSanitizer进行文件名规范化
-    const sanitizedTitle = FilenameSanitizer.sanitize(title, {
-      replacement: '_',
-      maxLength: 80, // 减少长度为时间戳留出空间
-      preserveExtension: false,
-      addTimestamp: true
-    });
-
-    // 移除可能的扩展名，确保格式正确
-    const nameWithoutExt = sanitizedTitle.replace(/\.[^.]*$/, '');
-    const finalName = `${nameWithoutExt}.${format}`;
-    
-    console.log(`[文件名生成] 最终文件名: "${finalName}"`);
-    return finalName;
-  }
-
-  // 生成文件夹名（用于图集）
-  private static generateFolderName(title: string): string {
-    // {{ AURA: Modify - 使用FilenameSanitizer进行文件夹名规范化 }}
-    return FilenameSanitizer.sanitize(title, {
-      replacement: '_',
-      maxLength: 100,
-      preserveExtension: false,
-      addTimestamp: false
-    });
-  }
-
-  // 测试WebDAV连接
-  static async testWebDAVConnection(webdavConfig: WebDAVConfig): Promise<{ success: boolean; message: string }> {
     try {
-      // 确保URL编码正确，避免特殊字符问题
-      const params = new URLSearchParams({
-        serverUrl: encodeURIComponent(webdavConfig.url),
-        username: encodeURIComponent(webdavConfig.username),
-        password: encodeURIComponent(webdavConfig.password)
-      })
-
-      console.log(`[WebDAV] 测试连接: ${webdavConfig.url}`)
-      const response = await fetch(`/api/proxy/webdav?${params.toString()}`)
-      const result = await response.json()
-
-      return {
-        success: result.success,
-        message: result.success ? '连接测试成功' : result.error || '连接测试失败'
+      // 第一阶段：解析用户主页获取视频列表
+      onProgress?.(10, undefined)
+      
+      if (!batchTask.sourceUrl) {
+        throw new Error('缺少用户主页URL')
       }
+      
+      console.log(`[抖音用户批量转存] 开始解析用户主页: ${batchTask.sourceUrl}`)
+      
+      // 根据任务数量确定解析限制
+      const limit = batchTask.totalTasks || 20
+      const userVideos = await this.parseDouyinUser(batchTask.sourceUrl, limit)
+      
+      // 更新批量任务信息
+      batchTask.totalSourceVideos = userVideos.length
+      batchTask.totalTasks = userVideos.length
+      
+      // 创建任务列表
+      batchTask.tasks = userVideos.map((video, index) => ({
+        id: this.generateTaskId(),
+        videoUrl: video.url || '', // 使用解析后的视频URL
+        videoTitle: video.title,
+        status: TaskStatus.PENDING,
+        createdAt: new Date(),
+        parsedVideoInfo: video // 预先设置解析信息
+      }))
+      
+      onProgress?.(20, undefined)
+      console.log(`[抖音用户批量转存] 获取到 ${userVideos.length} 个视频，开始批量转存`)
+      
+      // 第二阶段：批量上传
+      const totalTasks = batchTask.tasks.length
+      let completedTasks = 0
+      
+      for (let i = 0; i < batchTask.tasks.length; i++) {
+        const task = batchTask.tasks[i]
+        
+        try {
+          // 跳过解析阶段，直接上传（因为已经有解析信息）
+          task.status = TaskStatus.UPLOADING
+          onProgress?.(20 + (i / totalTasks) * 70, task)
+          
+          console.log(`[抖音用户批量转存] 上传视频 ${i + 1}/${totalTasks}: ${task.videoTitle}`)
+          
+          // 上传到WebDAV
+          const filePath = await this.uploadToWebDAV(
+            task.parsedVideoInfo!,
+            batchTask.webdavConfig
+          )
+          
+          // 更新任务状态
+          task.status = TaskStatus.SUCCESS
+          task.completedAt = new Date()
+          task.uploadResult = {
+            success: true,
+            filePath
+          }
+          
+          completedTasks++
+          console.log(`[抖音用户批量转存] 上传成功: ${task.videoTitle}`)
+          
+        } catch (error) {
+          console.error(`[抖音用户批量转存] 任务失败:`, error)
+          task.status = TaskStatus.FAILED
+          task.completedAt = new Date()
+          task.error = error instanceof Error ? error.message : '上传失败'
+          task.uploadResult = {
+            success: false,
+            error: task.error
+          }
+        }
+        
+        // 更新批量任务状态
+        batchTask.completedTasks = completedTasks
+        
+        // 添加延迟避免请求过于频繁
+        if (i < batchTask.tasks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      }
+      
+      // 更新最终状态
+      batchTask.completedAt = new Date()
+      
+      if (completedTasks === totalTasks) {
+        batchTask.status = TaskStatus.SUCCESS
+        await CleanupService.cleanupAfterTaskCompletion(batchTask);
+      } else if (completedTasks === 0) {
+        batchTask.status = TaskStatus.FAILED
+      } else {
+        batchTask.status = TaskStatus.SUCCESS // 部分成功也标记为成功
+      }
+      
+      onProgress?.(100, undefined)
+      console.log(`[抖音用户批量转存] 批量转存完成，成功: ${completedTasks}/${totalTasks}`)
+      
+      return batchTask
+      
     } catch (error) {
-      console.error('[WebDAV] 连接测试错误:', error)
+      console.error('[抖音用户批量转存] 批量转存失败:', error)
+      batchTask.status = TaskStatus.FAILED
+      batchTask.completedAt = new Date()
+      throw error
+    }
+  }
+
+  // {{ AURA: Add - 解析器配置增强工具方法 }}
+  static async enhanceParserConfigs(parsers: VideoParserConfig[]): Promise<EnhancedVideoParserConfig[]> {
+    return await apiCapabilityDetector.updateParserCapabilities(parsers);
+  }
+  
+  // {{ AURA: Add - 获取或创建抖音用户解析器 }}
+  static getOrCreateDouyinUserParser(parsers: VideoParserConfig[]): EnhancedVideoParserConfig {
+    // 检查是否已有抖音用户解析器
+    const existingUserParser = parsers.find(p => 
+      p.apiUrl.includes('cenguigui.cn') && p.apiUrl.includes('user.php')
+    );
+    
+    if (existingUserParser) {
       return {
-        success: false,
-        message: error instanceof Error ? error.message : '连接测试失败'
-      }
-    }
-  }
-
-  // {{ AURA: Add - 文件名规范化方法，用于处理用户上传的文件 }}
-  static sanitizeUploadFilename(filename: string): string {
-    console.log(`[文件名规范化] 原始文件名: ${filename}`);
-    
-    // 检测特殊符号
-    const specialChars = FilenameSanitizer.detectSpecialChars(filename);
-    if (specialChars.length > 0) {
-      console.log(`[文件名规范化] 检测到特殊符号: ${specialChars.join(', ')}`);
+        ...existingUserParser,
+        capabilities: [ParserCapability.USER_PAGE],
+        supportedPlatforms: [SupportedPlatform.DOUYIN],
+        responseAdapter: 'douyin_user_api'
+      };
     }
     
-    // 进行规范化处理
-    const sanitized = FilenameSanitizer.sanitize(filename, {
-      replacement: '_',
-      maxLength: 150,
-      preserveExtension: true,
-      addTimestamp: false
-    });
-    
-    console.log(`[文件名规范化] 规范化后文件名: ${sanitized}`);
-    return sanitized;
-  }
-
-  // {{ AURA: Add - 批量文件名规范化方法 }}
-  static sanitizeUploadFilenames(filenames: string[]): string[] {
-    console.log(`[批量文件名规范化] 处理 ${filenames.length} 个文件名`);
-    
-    const sanitized = FilenameSanitizer.sanitizeBatch(filenames, {
-      replacement: '_',
-      maxLength: 150,
-      preserveExtension: true,
-      addTimestamp: false
-    });
-    
-    // 输出处理结果
-    for (let i = 0; i < filenames.length; i++) {
-      if (filenames[i] !== sanitized[i]) {
-        console.log(`[批量文件名规范化] ${filenames[i]} -> ${sanitized[i]}`);
-      }
-    }
-    
-    return sanitized;
-  }
-
-  // {{ AURA: Add - 验证文件名是否符合规范 }}
-  static validateFilename(filename: string): {
-    isValid: boolean;
-    issues: string[];
-    sanitized: string;
-  } {
-    const validation = FilenameSanitizer.validate(filename);
-    const sanitized = this.sanitizeUploadFilename(filename);
-    
-    return {
-      isValid: validation.isValid,
-      issues: validation.issues,
-      sanitized: sanitized
-    };
-  }
-
-  // 生成任务ID
-  static generateTaskId(): string {
-    return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-  }
-
-  // 生成批量任务ID
-  static generateBatchId(): string {
-    return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    // 创建默认的抖音用户解析器
+    return apiCapabilityDetector.createDouyinUserParser();
   }
 
   // 解析视频链接列表
@@ -618,6 +303,16 @@ export class ConversionService {
     }
     
     return urls
+  }
+
+  // 生成任务ID
+  static generateTaskId(): string {
+    return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  }
+
+  // 生成批量任务ID
+  static generateBatchId(): string {
+    return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   }
 
   // 验证URL格式
@@ -656,123 +351,367 @@ export class ConversionService {
     return input
   }
 
-  // 估算文件大小（基于时长）
-  static estimateFileSize(duration?: number): number {
-    if (!duration) return 0
-    // 假设平均码率为 1Mbps
-    return duration * 1024 * 1024 / 8
-  }
-
-  // 格式化文件大小
-  static formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 B'
+  // 上传媒体到WebDAV
+  static async uploadToWebDAV(
+    mediaInfo: ParsedVideoInfo,
+    webdavConfig: WebDAVConfig,
+    folderPath?: string
+  ): Promise<string> {
+    const maxRetries = 5
+    let attempt = 0
+    let lastError
     
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-  }
-
-  // 格式化时长
-  static formatDuration(seconds: number): string {
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = Math.floor(seconds % 60)
-    
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-    } else {
-      return `${minutes}:${secs.toString().padStart(2, '0')}`
-    }
-  }
-  
-  // {{ AURA: Add - 智能视频格式推断方法 }}
-  private static inferVideoFormat(providedFormat: string | undefined, videoUrl?: string): string {
-    // 支持的视频格式列表
-    const validFormats = [
-      'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v',
-      '3gp', 'f4v', 'asf', 'rm', 'rmvb', 'vob', 'ogv', 'm2ts', 'mts'
-    ];
-    
-    // 验证提供的格式
-    if (providedFormat && validFormats.includes(providedFormat.toLowerCase())) {
-      return providedFormat.toLowerCase();
+    // 根据媒体类型生成文件名
+    let fileName = ''
+    if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
+      const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url)
+      fileName = this.generateFileName(mediaInfo.title, format)
+    } else if (mediaInfo.mediaType === MediaType.IMAGE_ALBUM && mediaInfo.images && mediaInfo.images.length > 0) {
+      fileName = this.generateFolderName(mediaInfo.title)
     }
     
-    // 从URL推断
-    if (videoUrl) {
-      const urlFormat = this.extractFormatFromUrl(videoUrl);
-      if (urlFormat && validFormats.includes(urlFormat.toLowerCase())) {
-        return urlFormat.toLowerCase();
+    while (attempt < maxRetries) {
+      try {
+        attempt++
+        console.log(`[转存] WebDAV上传尝试 ${attempt}/${maxRetries}: ${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}`)
+        
+        const response = await fetch('/api/proxy/webdav', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined,
+            images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined,
+            webdavConfig,
+            fileName,
+            folderPath: folderPath || ''
+          })
+        })
+
+        const responseText = await response.text()
+        if (!responseText.trim()) {
+          throw new Error(`服务器返回空响应 (HTTP ${response.status})`)
+        }
+        
+        const result = JSON.parse(responseText)
+        
+        if (!result.success) {
+          throw new Error(result.error || '媒体上传失败')
+        }
+
+        console.log(`[转存] 上传成功，尝试次数: ${attempt}`)
+        return result.filePath
+        
+      } catch (error) {
+        lastError = error
+        console.error(`[转存] 上传尝试 ${attempt} 失败:`, error)
+        
+        if (attempt < maxRetries) {
+          const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000)
+          console.log(`[转存] 等待 ${waitTime/1000} 秒后重试...`)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+        } else {
+          break
+        }
       }
     }
     
-    // 默认mp4
-    return 'mp4';
+    console.error('[转存] 所有上传尝试均失败')
+    throw lastError || new Error('视频上传失败，已达到最大重试次数')
+  }
+
+  // 批量转存
+  static async convertBatch(
+    batchTask: BatchTask,
+    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
+  ): Promise<BatchTask> {
+    batchTask.status = TaskStatus.PARSING
+    
+    const totalTasks = batchTask.tasks.length
+    let completedTasks = 0
+
+    for (let i = 0; i < batchTask.tasks.length; i++) {
+      const task = batchTask.tasks[i]
+      
+      try {
+        // 处理单个任务
+        const updatedTask = await this.convertSingle(
+          task,
+          batchTask.parserConfig,
+          batchTask.webdavConfig,
+          (progress, status) => {
+            // 计算总体进度
+            const taskProgress = (completedTasks + progress / 100) / totalTasks * 100
+            onProgress?.(taskProgress, task)
+          }
+        )
+
+        batchTask.tasks[i] = updatedTask
+        
+        if (updatedTask.status === TaskStatus.SUCCESS) {
+          completedTasks++
+        }
+
+      } catch (error) {
+        console.error(`批量任务中的单个任务失败:`, error)
+      }
+
+      batchTask.completedTasks = completedTasks
+      
+      const overallProgress = (i + 1) / totalTasks * 100
+      onProgress?.(overallProgress, task)
+
+      if (i < batchTask.tasks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    }
+
+    batchTask.completedAt = new Date()
+    
+    if (completedTasks === totalTasks) {
+      batchTask.status = TaskStatus.SUCCESS
+      await CleanupService.cleanupAfterTaskCompletion(batchTask)
+    } else if (completedTasks === 0) {
+      batchTask.status = TaskStatus.FAILED
+    } else {
+      batchTask.status = TaskStatus.SUCCESS
+    }
+
+    return batchTask
+  }
+
+  // 单个视频转存
+  static async convertSingle(
+    task: ConversionTask,
+    parserConfig: VideoParserConfig,
+    webdavConfig: WebDAVConfig,
+    onProgress?: (progress: number, status: TaskStatus) => void
+  ): Promise<ConversionTask> {
+    try {
+      task.status = TaskStatus.PARSING
+      onProgress?.(20, TaskStatus.PARSING)
+      
+      console.log(`[转存] 开始解析视频: ${task.videoUrl}`)
+      console.log(`[转存] 使用解析器: ${parserConfig.name} (${parserConfig.apiUrl})`)
+
+      // 解析视频
+      try {
+        if (!this.isValidUrl(task.videoUrl)) {
+          throw new Error('视频链接格式无效，请确保以http://或https://开头')
+        }
+        
+        const parsedInfo = await this.parseVideo(task.videoUrl, parserConfig)
+        console.log(`[转存] 解析成功，媒体类型: ${parsedInfo.mediaType}`)
+        
+        task.parsedVideoInfo = parsedInfo
+        task.videoTitle = parsedInfo.title
+        console.log(`[转存] 解析完成: ${parsedInfo.title}`)
+      } catch (error) {
+        console.error('[转存] 视频解析失败:', error)
+        task.status = TaskStatus.FAILED
+        let errorMsg = error instanceof Error ? error.message : '视频解析失败'
+        
+        if (errorMsg.includes('URL为空')) {
+          errorMsg = 'URL为空 - 解析API无法提取视频URL，请尝试其他解析API或检查链接'
+        }
+        
+        task.error = errorMsg
+        task.completedAt = new Date()
+        return task
+      }
+
+      onProgress?.(50, TaskStatus.PARSING)
+      
+      task.status = TaskStatus.UPLOADING
+      onProgress?.(60, TaskStatus.UPLOADING)
+
+      const filePath = await this.uploadToWebDAV(
+        task.parsedVideoInfo!, 
+        webdavConfig
+      )
+
+      task.status = TaskStatus.SUCCESS
+      task.completedAt = new Date()
+      task.uploadResult = {
+        success: true,
+        filePath
+      }
+
+      onProgress?.(100, TaskStatus.SUCCESS)
+
+      await CleanupService.cleanupAfterTaskCompletion(task)
+      return task
+    } catch (error) {
+      task.status = TaskStatus.FAILED
+      task.completedAt = new Date()
+      task.error = error instanceof Error ? error.message : '转存过程中发生未知错误'
+      task.uploadResult = {
+        success: false,
+        error: task.error
+      }
+
+      await CleanupService.cleanupAfterTaskCompletion(task)
+      onProgress?.(0, TaskStatus.FAILED)
+
+      return task
+    }
+  }
+
+  // 仅解析视频链接（不上传）
+  static async parseOnly(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
+    return await this.parseVideo(videoUrl, parserConfig)
+  }
+
+  // 上传已解析的媒体（基于预览数据）
+  static async uploadParsedMedia(
+    parsedInfo: ParsedVideoInfo,
+    webdavConfig: WebDAVConfig,
+    folderPath?: string
+  ): Promise<string> {
+    console.log(`[上传] 开始上传已解析的媒体: ${parsedInfo.title}`)
+    return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath)
+  }
+
+  // 解析视频链接
+  static async parseVideo(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
+    if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
+      throw new Error('视频URL为空')
+    }
+    
+    if (!parserConfig || !parserConfig.apiUrl) {
+      throw new Error('解析API配置无效')
+    }
+    
+    try {
+      const extractedUrl = this.extractRealUrl(videoUrl)
+      console.log(`[转存] 提取到URL: ${extractedUrl}`)
+      console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
+      
+      const response = await fetch('/api/proxy/parser', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoUrl: extractedUrl,
+          parserConfig
+        })
+      })
+
+      const responseText = await response.text()
+      console.log(`[转存] 解析API响应状态: ${response.status}, 内容长度: ${responseText.length}`)
+      
+      if (!responseText.trim()) {
+        throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
+      }
+      
+      const result = JSON.parse(responseText)
+      
+      if (!result.success) {
+        throw new Error(result.error || '视频解析失败')
+      }
+      
+      if (!result.data) {
+        throw new Error('API返回的数据为空')
+      }
+      
+      if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
+        throw new Error('视频解析成功但未返回有效的视频URL')
+      }
+      
+      if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
+        try {
+          new URL(result.data.url)
+        } catch {
+          throw new Error(`返回的URL无效: ${result.data.url}`)
+        }
+      }
+      
+      if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
+        if (!result.data.images || result.data.images.length === 0) {
+          throw new Error('图集解析成功但没有找到任何图片')
+        }
+        console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
+      }
+
+      console.log(`[转存] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
+      return result.data
+    } catch (error) {
+      console.error('[转存] 视频解析错误:', error)
+      throw error
+    }
+  }
+
+  // 生成文件名
+  private static generateFileName(title: string, format: string): string {
+    console.log(`[文件名生成] 原始标题: "${title}"`)
+    
+    const specialChars = FilenameSanitizer.detectSpecialChars(title)
+    if (specialChars.length > 0) {
+      console.log(`[文件名生成] 检测到特殊字符: ${specialChars.join(', ')}`)
+    }
+    
+    const sanitizedTitle = FilenameSanitizer.sanitize(title, {
+      replacement: '_',
+      maxLength: 80,
+      preserveExtension: false,
+      addTimestamp: true
+    })
+
+    const nameWithoutExt = sanitizedTitle.replace(/\.[^.]*$/, '')
+    const finalName = `${nameWithoutExt}.${format}`
+    
+    console.log(`[文件名生成] 最终文件名: "${finalName}"`)
+    return finalName
+  }
+
+  // 生成文件夹名（用于图集）
+  private static generateFolderName(title: string): string {
+    return FilenameSanitizer.sanitize(title, {
+      replacement: '_',
+      maxLength: 100,
+      preserveExtension: false,
+      addTimestamp: false
+    })
+  }
+
+  // 智能视频格式推断方法
+  private static inferVideoFormat(providedFormat: string | undefined, videoUrl?: string): string {
+    const validFormats = [
+      'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v',
+      '3gp', 'f4v', 'asf', 'rm', 'rmvb', 'vob', 'ogv', 'm2ts', 'mts'
+    ]
+    
+    if (providedFormat && validFormats.includes(providedFormat.toLowerCase())) {
+      return providedFormat.toLowerCase()
+    }
+    
+    if (videoUrl) {
+      const urlFormat = this.extractFormatFromUrl(videoUrl)
+      if (urlFormat && validFormats.includes(urlFormat.toLowerCase())) {
+        return urlFormat.toLowerCase()
+      }
+    }
+    
+    return 'mp4'
   }
   
-  // {{ AURA: Add - 从URL提取格式扩展名 }}
+  // 从URL提取格式扩展名
   private static extractFormatFromUrl(url: string): string | null {
     try {
-      const urlObj = new URL(url);
-      const pathname = urlObj.pathname;
-      const lastDotIndex = pathname.lastIndexOf('.');
+      const urlObj = new URL(url)
+      const pathname = urlObj.pathname
+      const lastDotIndex = pathname.lastIndexOf('.')
       
       if (lastDotIndex !== -1) {
-        const extension = pathname.substring(lastDotIndex + 1);
-        return extension.toLowerCase();
+        const extension = pathname.substring(lastDotIndex + 1)
+        return extension.toLowerCase()
       }
     } catch (e) {
       // URL解析失败，忽略错误
     }
     
-    return null;
-  }
-  
-  // {{ AURA: Add - 验证视频格式是否有效 }}
-  private static isValidVideoFormat(format: string): boolean {
-    const validFormats = [
-      'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v',
-      '3gp', 'f4v', 'asf', 'rm', 'rmvb', 'vob', 'ogv', 'm2ts', 'mts'
-    ];
-    return validFormats.includes(format.toLowerCase());
-  }
-  
-  // {{ AURA: Add - 判断是否应该重试上传 }}
-  private static shouldRetryUpload(error: any, attempt: number): boolean {
-    // 如果是最后一次尝试，不重试
-    if (attempt >= 5) {
-      return false;
-    }
-    
-    // 检查错误类型
-    if (error) {
-      const errorMessage = (error.message || error.toString()).toLowerCase();
-      
-      // 对于网络错误始终重试
-      if (errorMessage.includes('network error') ||
-          errorMessage.includes('fetch failed') ||
-          errorMessage.includes('econnreset') ||
-          errorMessage.includes('timeout')) {
-        return true;
-      }
-      
-      // 对于服务器错误(5xx)始终重试
-      if (errorMessage.includes('500') ||
-          errorMessage.includes('502') ||
-          errorMessage.includes('503') ||
-          errorMessage.includes('504')) {
-        return true;
-      }
-      
-      // 对于权限错误(403/401)仅在第一次尝试时重试
-      if ((errorMessage.includes('403') || errorMessage.includes('401')) && attempt === 1) {
-        return true;
-      }
-    }
-    
-    // 默认情况下，对于前几次尝试允许重试
-    return attempt < 3;
+    return null
   }
 }

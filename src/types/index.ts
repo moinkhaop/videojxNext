@@ -1,3 +1,19 @@
+// {{ AURA: Add - 解析器能力枚举 }}
+export enum ParserCapability {
+  SINGLE_VIDEO = 'single_video',
+  USER_PAGE = 'user_page',
+  BATCH_PROCESSING = 'batch_processing'
+}
+
+// {{ AURA: Add - 平台支持枚举 }}
+export enum SupportedPlatform {
+  DOUYIN = 'douyin',
+  KUAISHOU = 'kuaishou',
+  BILIBILI = 'bilibili',
+  XIAOHONGSHU = 'xiaohongshu',
+  UNIVERSAL = 'universal'
+}
+
 // 视频解析API配置类型
 export interface VideoParserConfig {
   id: string;
@@ -12,6 +28,18 @@ export interface VideoParserConfig {
   customHeaders?: Record<string, string>; // 自定义请求头
   customBodyParams?: Record<string, any>; // POST请求时的自定义参数
   customQueryParams?: Record<string, string>; // GET请求时的自定义查询参数
+  // {{ AURA: Add - 解析器能力标识 }}
+  capabilities?: ParserCapability[]; // 支持的解析能力
+  supportedPlatforms?: SupportedPlatform[]; // 支持的平台
+  userPageEndpoint?: string; // 用户主页专用端点
+  responseAdapter?: string; // 响应适配器标识
+}
+
+// {{ AURA: Add - 增强的解析器配置接口 }}
+export interface EnhancedVideoParserConfig extends VideoParserConfig {
+  capabilities: ParserCapability[]; // 必填
+  supportedPlatforms: SupportedPlatform[]; // 必填
+  responseAdapter: string; // 必填
 }
 
 // WebDAV服务器配置类型
@@ -84,10 +112,13 @@ export interface ParsedVideoInfo {
   avatar?: string; // 作者头像URL
   signature?: string; // 作者签名
   time?: number | string; // 发布时间戳或日期字符串
+  publishTime?: Date; // {{ AURA: Add - 发布时间Date对象 }}
   description?: string; // 描述文本
   mediaType: MediaType; // 媒体类型：视频或图集
   viewCount?: string; // {{ AURA: Add - 添加观看次数字段 }}
   uploadDate?: string; // {{ AURA: Add - 添加上传日期字段 }}
+  width?: number; // {{ AURA: Add - 视频宽度 }}
+  height?: number; // {{ AURA: Add - 视频高度 }}
   
   // 视频相关字段
   url?: string; // 视频URL（视频类型时使用）
@@ -182,4 +213,82 @@ export interface PreviewState {
   isPreviewMode: boolean;     // 是否处于预览模式
   showPreview: boolean;       // 是否显示预览内容
   previewData: ParsedVideoInfo | null; // 预览数据
+}
+
+// {{ AURA: Add - 抖音用户API返回数据结构定义 }}
+// 抖音单个视频信息
+export interface DouyinVideoItem {
+  aweme_id: string;
+  nickname: string;
+  avatar: string;
+  share_url: string;
+  author: string;
+  title: string;
+  comment: number;
+  play: number;
+  like: number;
+  pic: string;
+  pic_list: string[];
+  type: string;
+  video_info: {
+    id: string;
+    pic: string;
+    pic_list: string[];
+    height: number;
+    width: number;
+    size: string;
+    url: string;
+    download: string;
+    download2: string;
+  };
+  music_info: {
+    id: number;
+    title: string;
+    author: string;
+    pic: string;
+    pic_list: string[];
+    url: string;
+    url_list: string[];
+    duration: string;
+    height: number;
+    width: number;
+    owner_nickname: string;
+  };
+  images_info: {
+    images: string[];
+    height: string;
+    width: string;
+  };
+  hot_words: {
+    text_extra: string[];
+    hashtag_id: string;
+    start: number;
+  };
+  time: string;
+}
+
+// 抖音用户API响应类型
+export interface DouyinUserApiResponse {
+  code: number;
+  msg: string;
+  data: DouyinVideoItem[];
+}
+
+// 抖音用户解析请求类型
+export interface DouyinUserParseRequest {
+  url: string; // 用户主页链接
+  limit?: number; // 解析数量限制，默认20
+}
+
+// 批量处理输入模式枚举
+export enum BatchInputMode {
+  NORMAL = 'normal',    // 普通模式：多个视频链接
+  DOUYIN_USER = 'douyin_user'  // 抖音用户模式：用户主页链接
+}
+
+// 扩展的批量任务类型
+export interface ExtendedBatchTask extends BatchTask {
+  inputMode: BatchInputMode;
+  sourceUrl?: string; // 用户主页链接（抖音用户模式时使用）
+  totalSourceVideos?: number; // 源用户总视频数量
 }
