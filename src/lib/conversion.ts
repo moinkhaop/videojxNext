@@ -361,6 +361,31 @@ export class ConversionService {
     }
   }
 
+  // 格式化时长（秒转为可读格式）
+  static formatDuration(seconds: number): string {
+    if (!seconds || seconds < 0) return '00:00'
+
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const secs = Math.floor(seconds % 60)
+
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+    }
+    return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
+
+  // 格式化文件大小（字节转为可读格式）
+  static formatFileSize(bytes: number): string {
+    if (!bytes || bytes === 0) return '0 B'
+
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const k = 1024
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+
+    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${units[i]}`
+  }
+
   // 测试WebDAV连接
   static async testWebDAVConnection(webdavConfig: WebDAVConfig): Promise<{ success: boolean; message?: string }> {
     try {
