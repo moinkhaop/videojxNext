@@ -153,21 +153,36 @@ export class ParserRouter {
       }
       
       const rawResponse = await response.json();
-      
-      // 使用适配器处理响应
-      const adapter = adapterRegistry.get(parser.responseAdapter);
+
+      // 首先尝试使用指定的适配器
+      let adapter = adapterRegistry.get(parser.responseAdapter);
       if (!adapter) {
-        throw new Error(`未找到适配器: ${parser.responseAdapter}`);
-      }
-      
-      if (!adapter.canHandle(rawResponse)) {
-        const error = adapter.extractError(rawResponse);
-        if (error) {
-          throw new Error(error);
+        console.warn(`[解析器路由] 未找到指定适配器: ${parser.responseAdapter}，尝试自动选择`);
+        adapter = adapterRegistry.getCompatibleAdapter(rawResponse);
+        if (!adapter) {
+          throw new Error(`无法找到兼容的适配器处理此响应`);
         }
-        throw new Error('响应格式不匹配');
+        console.log(`[解析器路由] 自动选择了适配器: ${adapter.id}`);
       }
-      
+
+      // 如果指定的适配器无法处理，尝试自动选择
+      if (!adapter.canHandle(rawResponse)) {
+        console.warn(`[解析器路由] 适配器 ${adapter.id} 无法处理响应，尝试自动选择`);
+
+        // 尝试自动选择兼容的适配器
+        const compatibleAdapter = adapterRegistry.getCompatibleAdapter(rawResponse);
+        if (compatibleAdapter) {
+          console.log(`[解析器路由] 自动选择了适配器: ${compatibleAdapter.id}`);
+          adapter = compatibleAdapter;
+        } else {
+          const error = adapter.extractError(rawResponse);
+          if (error) {
+            throw new Error(error);
+          }
+          throw new Error('响应格式不匹配，且无法找到兼容的适配器');
+        }
+      }
+
       // 根据能力类型调用相应的适配方法
       if (capability === ParserCapability.USER_PAGE) {
         const videos = adapter.adaptUserPage(rawResponse);

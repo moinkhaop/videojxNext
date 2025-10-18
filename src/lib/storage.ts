@@ -1,4 +1,4 @@
-import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry } from '@/types'
+import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry, HistoryStats, TaskStatus, Tag, ParserCapability, SupportedPlatform } from '@/types'
 
 
 // 加密相关工具
@@ -54,45 +54,99 @@ export class ConfigManager {
     }
   }
 
-  // 获取解析器配置
+  // 获取解析器配置（合并内置默认配置和用户自定义配置，过滤禁用项）
   static getParsers(): VideoParserConfig[] {
+    const builtinParsers = this.getDefaultParsers()
+
     try {
       const stored = localStorage.getItem(this.PARSERS_KEY)
       if (stored) {
-        const parsers = JSON.parse(stored)
+        const userParsers = JSON.parse(stored)
         // 解密敏感信息
-        return parsers.map((parser: VideoParserConfig) => ({
+        const decryptedUserParsers = userParsers.map((parser: VideoParserConfig) => ({
           ...parser,
           apiKey: parser.apiKey ? StorageEncryption.decrypt(parser.apiKey) : undefined
         }))
+
+        // 合并内置配置和用户配置（用户配置可以覆盖内置配置）
+        const mergedParsers = [...builtinParsers]
+        const builtinIds = new Set(builtinParsers.map(p => p.id))
+
+        decryptedUserParsers.forEach((userParser: VideoParserConfig) => {
+          if (builtinIds.has(userParser.id)) {
+            // 用户配置覆盖内置配置
+            const index = mergedParsers.findIndex(p => p.id === userParser.id)
+            if (index !== -1) {
+              mergedParsers[index] = userParser
+            }
+          } else {
+            // 添加新的用户配置
+            mergedParsers.push(userParser)
+          }
+        })
+
+        // 过滤掉被禁用的配置
+        return mergedParsers.filter(p => !p.disabled)
       }
     } catch (error) {
       console.error('获取解析器配置失败:', error)
     }
-    
-    // {{ AURA: Add - 如果没有配置的解析器，返回默认解析器 }}
-    return this.getDefaultParsers()
+
+    // 如果没有用户配置，返回默认解析器
+    return builtinParsers
   }
 
   // {{ AURA: Add - 获取默认解析器配置 }}
   static getDefaultParsers(): VideoParserConfig[] {
     return [
       {
-        id: 'default_parser_1',
-        name: '默认解析器',
-        apiUrl: '/api/proxy/parser',
+        id: 'builtin_parser_jxcxin',
+        name: '默认抖音解析器',
+        apiUrl: 'https://apis.jxcxin.cn/api/douyin',
         isDefault: true,
-        requestMethod: 'POST',
-        urlParamName: 'url'
+        isBuiltin: true, // {{ AURA: Add - 标记为内置配置 }}
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        capabilities: [ParserCapability.SINGLE_VIDEO],
+        supportedPlatforms: [SupportedPlatform.DOUYIN]
       }
     ]
   }
 
-  // 保存解析器配置
+  // {{ AURA: Add - 获取默认WebDAV服务器配置 }}
+  static getDefaultWebDAVServers(): WebDAVConfig[] {
+    return [
+      {
+        id: 'builtin_webdav_e3one',
+        name: 'E3one',
+        url: 'https://app.koofr.net/dav/E3one',
+        username: 'tuguo@proton.me',
+        password: 'evg8drocizzqb681',
+        basePath: '/public/dy',
+        isDefault: true
+      }
+    ]
+  }
+
+  // 保存解析器配置（只保存用户自定义的配置和修改）
   static saveParsers(parsers: VideoParserConfig[]): void {
     try {
+      // 过滤掉未修改的内置配置，只保存用户配置
+      const builtinIds = new Set(this.getDefaultParsers().map(p => p.id))
+      const userParsers = parsers.filter(parser => {
+        // 保留：1) 非内置配置 2) 被修改或禁用的内置配置
+        if (!builtinIds.has(parser.id)) {
+          return true
+        }
+        // 检查内置配置是否被修改
+        const builtinParser = this.getDefaultParsers().find(p => p.id === parser.id)
+        if (!builtinParser) return true
+        // 如果配置被禁用或其他属性被修改，则保存
+        return parser.disabled || JSON.stringify(parser) !== JSON.stringify(builtinParser)
+      })
+
       // 加密敏感信息
-      const encryptedParsers = parsers.map(parser => ({
+      const encryptedParsers = userParsers.map(parser => ({
         ...parser,
         apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
       }))
@@ -102,29 +156,67 @@ export class ConfigManager {
     }
   }
 
-  // 获取WebDAV配置
+  // 获取WebDAV配置（合并内置默认配置和用户自定义配置，过滤禁用项）
   static getWebDAVServers(): WebDAVConfig[] {
+    const builtinServers = this.getDefaultWebDAVServers()
+
     try {
       const stored = localStorage.getItem(this.WEBDAV_KEY)
       if (stored) {
-        const servers = JSON.parse(stored)
+        const userServers = JSON.parse(stored)
         // 解密敏感信息
-        return servers.map((server: WebDAVConfig) => ({
+        const decryptedUserServers = userServers.map((server: WebDAVConfig) => ({
           ...server,
           password: StorageEncryption.decrypt(server.password)
         }))
+
+        // 合并内置配置和用户配置（用户配置可以覆盖内置配置）
+        const mergedServers = [...builtinServers]
+        const builtinIds = new Set(builtinServers.map(s => s.id))
+
+        decryptedUserServers.forEach((userServer: WebDAVConfig) => {
+          if (builtinIds.has(userServer.id)) {
+            // 用户配置覆盖内置配置
+            const index = mergedServers.findIndex(s => s.id === userServer.id)
+            if (index !== -1) {
+              mergedServers[index] = userServer
+            }
+          } else {
+            // 添加新的用户配置
+            mergedServers.push(userServer)
+          }
+        })
+
+        // 过滤掉被禁用的配置
+        return mergedServers.filter(s => !s.disabled)
       }
     } catch (error) {
       console.error('获取WebDAV配置失败:', error)
     }
-    return []
+
+    // 如果没有用户配置，返回默认服务器
+    return builtinServers
   }
 
-  // 保存WebDAV配置
+  // 保存WebDAV配置（只保存用户自定义的配置和修改）
   static saveWebDAVServers(servers: WebDAVConfig[]): void {
     try {
+      // 过滤掉未修改的内置配置，只保存用户配置
+      const builtinIds = new Set(this.getDefaultWebDAVServers().map(s => s.id))
+      const userServers = servers.filter(server => {
+        // 保留：1) 非内置配置 2) 被修改或禁用的内置配置
+        if (!builtinIds.has(server.id)) {
+          return true
+        }
+        // 检查内置配置是否被修改
+        const builtinServer = this.getDefaultWebDAVServers().find(s => s.id === server.id)
+        if (!builtinServer) return true
+        // 如果配置被禁用或其他属性被修改，则保存
+        return server.disabled || JSON.stringify(server) !== JSON.stringify(builtinServer)
+      })
+
       // 加密敏感信息
-      const encryptedServers = servers.map(server => ({
+      const encryptedServers = userServers.map(server => ({
         ...server,
         password: StorageEncryption.encrypt(server.password)
       }))
@@ -159,10 +251,74 @@ export class ConfigManager {
     }
   }
 
-  // 删除解析器
+  // 删除解析器（内置配置将被标记为禁用，而不是真正删除）
   static deleteParser(id: string): void {
-    const parsers = this.getParsers().filter(p => p.id !== id)
-    this.saveParsers(parsers)
+    const builtinIds = new Set(this.getDefaultParsers().map(p => p.id))
+
+    if (builtinIds.has(id)) {
+      // 内置配置：保存一个禁用的版本到用户配置中
+      const parser = this.getParsers().find(p => p.id === id)
+      if (parser) {
+        const userParsers = this.getUserParsers()
+        const updatedParser = { ...parser, isDefault: false, disabled: true }
+        const existingIndex = userParsers.findIndex(p => p.id === id)
+        if (existingIndex !== -1) {
+          userParsers[existingIndex] = updatedParser
+        } else {
+          userParsers.push(updatedParser)
+        }
+        this.saveUserParsers(userParsers)
+      }
+    } else {
+      // 用户配置：直接删除
+      const userParsers = this.getUserParsers().filter(p => p.id !== id)
+      this.saveUserParsers(userParsers)
+    }
+  }
+
+  // 获取仅用户添加的解析器配置（不包括内置配置）
+  private static getUserParsers(): VideoParserConfig[] {
+    try {
+      const stored = localStorage.getItem(this.PARSERS_KEY)
+      if (stored) {
+        const parsers = JSON.parse(stored)
+        return parsers.map((parser: VideoParserConfig) => ({
+          ...parser,
+          apiKey: parser.apiKey ? StorageEncryption.decrypt(parser.apiKey) : undefined
+        }))
+      }
+    } catch (error) {
+      console.error('获取用户解析器配置失败:', error)
+    }
+    return []
+  }
+
+  // 保存仅用户的解析器配置
+  private static saveUserParsers(parsers: VideoParserConfig[]): void {
+    try {
+      const encryptedParsers = parsers.map(parser => ({
+        ...parser,
+        apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
+      }))
+      localStorage.setItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
+    } catch (error) {
+      console.error('保存用户解析器配置失败:', error)
+    }
+  }
+
+  // 检查是否为内置解析器
+  static isBuiltinParser(id: string): boolean {
+    return this.getDefaultParsers().some(p => p.id === id)
+  }
+
+  // 恢复内置解析器（删除用户的覆盖配置）
+  static restoreBuiltinParser(id: string): void {
+    if (!this.isBuiltinParser(id)) {
+      console.warn('无法恢复非内置解析器:', id)
+      return
+    }
+    const userParsers = this.getUserParsers().filter(p => p.id !== id)
+    this.saveUserParsers(userParsers)
   }
 
   // 添加WebDAV服务器
@@ -190,10 +346,74 @@ export class ConfigManager {
     }
   }
 
-  // 删除WebDAV服务器
+  // 删除WebDAV服务器（内置配置将被标记为禁用，而不是真正删除）
   static deleteWebDAVServer(id: string): void {
-    const servers = this.getWebDAVServers().filter(s => s.id !== id)
-    this.saveWebDAVServers(servers)
+    const builtinIds = new Set(this.getDefaultWebDAVServers().map(s => s.id))
+
+    if (builtinIds.has(id)) {
+      // 内置配置：保存一个禁用的版本到用户配置中
+      const server = this.getWebDAVServers().find(s => s.id === id)
+      if (server) {
+        const userServers = this.getUserWebDAVServers()
+        const updatedServer = { ...server, isDefault: false, disabled: true }
+        const existingIndex = userServers.findIndex(s => s.id === id)
+        if (existingIndex !== -1) {
+          userServers[existingIndex] = updatedServer
+        } else {
+          userServers.push(updatedServer)
+        }
+        this.saveUserWebDAVServers(userServers)
+      }
+    } else {
+      // 用户配置：直接删除
+      const userServers = this.getUserWebDAVServers().filter(s => s.id !== id)
+      this.saveUserWebDAVServers(userServers)
+    }
+  }
+
+  // 获取仅用户添加的WebDAV服务器配置（不包括内置配置）
+  private static getUserWebDAVServers(): WebDAVConfig[] {
+    try {
+      const stored = localStorage.getItem(this.WEBDAV_KEY)
+      if (stored) {
+        const servers = JSON.parse(stored)
+        return servers.map((server: WebDAVConfig) => ({
+          ...server,
+          password: StorageEncryption.decrypt(server.password)
+        }))
+      }
+    } catch (error) {
+      console.error('获取用户WebDAV配置失败:', error)
+    }
+    return []
+  }
+
+  // 保存仅用户的WebDAV服务器配置
+  private static saveUserWebDAVServers(servers: WebDAVConfig[]): void {
+    try {
+      const encryptedServers = servers.map(server => ({
+        ...server,
+        password: StorageEncryption.encrypt(server.password)
+      }))
+      localStorage.setItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
+    } catch (error) {
+      console.error('保存用户WebDAV配置失败:', error)
+    }
+  }
+
+  // 检查是否为内置WebDAV服务器
+  static isBuiltinWebDAVServer(id: string): boolean {
+    return this.getDefaultWebDAVServers().some(s => s.id === id)
+  }
+
+  // 恢复内置WebDAV服务器（删除用户的覆盖配置）
+  static restoreBuiltinWebDAVServer(id: string): void {
+    if (!this.isBuiltinWebDAVServer(id)) {
+      console.warn('无法恢复非内置WebDAV服务器:', id)
+      return
+    }
+    const userServers = this.getUserWebDAVServers().filter(s => s.id !== id)
+    this.saveUserWebDAVServers(userServers)
   }
 
   // 获取默认解析器
@@ -379,7 +599,7 @@ export class HistoryManager {
   static searchHistory(keyword: string): HistoryRecord[] {
     const records = this.getHistory()
     const lowerKeyword = keyword.toLowerCase()
-    
+
     return records.filter(record => {
       const task = record.task as any
       return (
@@ -388,6 +608,297 @@ export class HistoryManager {
         task.name?.toLowerCase().includes(lowerKeyword)
       )
     })
+  }
+
+  // {{ AURA: Add - 切换收藏状态 }}
+  static toggleFavorite(id: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === id)
+    if (index !== -1) {
+      records[index].isFavorite = !records[index].isFavorite
+      this.saveHistory(records)
+    }
+  }
+
+  // {{ AURA: Add - 更新历史记录 }}
+  static updateRecord(id: string, updates: Partial<HistoryRecord>): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === id)
+    if (index !== -1) {
+      records[index] = { ...records[index], ...updates }
+      this.saveHistory(records)
+    }
+  }
+
+  // {{ AURA: Add - 批量删除历史记录 }}
+  static deleteRecords(ids: string[]): void {
+    const records = this.getHistory().filter(r => !ids.includes(r.id))
+    this.saveHistory(records)
+  }
+
+  // {{ AURA: Add - 获取历史记录统计数据 }}
+  static getStatistics(): HistoryStats {
+    const records = this.getHistory()
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+
+    let totalSuccess = 0
+    let totalFailed = 0
+    let totalPending = 0
+    let todayRecords = 0
+    let thisWeekRecords = 0
+    let thisMonthRecords = 0
+    let favoriteCount = 0
+    const tagUsage: Record<string, number> = {}
+
+    records.forEach(record => {
+      const task = record.task
+
+      // 统计状态
+      if (task.status === TaskStatus.SUCCESS) totalSuccess++
+      else if (task.status === TaskStatus.FAILED) totalFailed++
+      else totalPending++
+
+      // 统计时间范围
+      const recordDate = new Date(record.createdAt)
+      if (recordDate >= today) todayRecords++
+      if (recordDate >= weekAgo) thisWeekRecords++
+      if (recordDate >= monthStart) thisMonthRecords++
+
+      // 统计收藏
+      if (record.isFavorite) favoriteCount++
+
+      // 统计标签使用
+      if (record.tags && record.tags.length > 0) {
+        record.tags.forEach(tagId => {
+          tagUsage[tagId] = (tagUsage[tagId] || 0) + 1
+        })
+      }
+    })
+
+    const successRate = records.length > 0
+      ? Math.round((totalSuccess / records.length) * 100)
+      : 0
+
+    return {
+      totalRecords: records.length,
+      totalSuccess,
+      totalFailed,
+      totalPending,
+      successRate,
+      todayRecords,
+      thisWeekRecords,
+      thisMonthRecords,
+      favoriteCount,
+      tagUsage
+    }
+  }
+
+  // {{ AURA: Add - 导出历史记录为CSV }}
+  static exportToCSV(): string {
+    const records = this.getHistory()
+    const headers = ['ID', '类型', '标题', '链接', '状态', '创建时间', '完成时间', '错误信息', '文件路径']
+
+    const rows = records.map(record => {
+      const task = record.task as any
+      return [
+        record.id,
+        record.type === 'single' ? '单链接' : '批量',
+        task.videoTitle || task.name || '',
+        task.videoUrl || '',
+        task.status,
+        record.createdAt.toLocaleString(),
+        task.completedAt ? task.completedAt.toLocaleString() : '',
+        task.error || '',
+        task.uploadResult?.filePath || ''
+      ].map(field => `"${String(field).replace(/"/g, '""')}"`)
+    })
+
+    return [headers.join(','), ...rows.map(row => row.join(','))].join('\n')
+  }
+
+  // {{ AURA: Add - 导出历史记录为JSON }}
+  static exportToJSON(): string {
+    const records = this.getHistory()
+    return JSON.stringify(records, null, 2)
+  }
+
+  // {{ AURA: Add - 按日期范围筛选 }}
+  static filterByDateRange(startDate: Date, endDate: Date): HistoryRecord[] {
+    const records = this.getHistory()
+    return records.filter(record => {
+      const recordDate = new Date(record.createdAt)
+      return recordDate >= startDate && recordDate <= endDate
+    })
+  }
+
+  // {{ AURA: Add - 按作者筛选 }}
+  static filterByAuthor(author: string): HistoryRecord[] {
+    const records = this.getHistory()
+    return records.filter(record => {
+      const task = record.task as any
+      return task.parsedVideoInfo?.author?.toLowerCase().includes(author.toLowerCase())
+    })
+  }
+
+  // {{ AURA: Add - 获取收藏的历史记录 }}
+  static getFavorites(): HistoryRecord[] {
+    const records = this.getHistory()
+    return records.filter(record => record.isFavorite)
+  }
+
+  // {{ AURA: Add - 为记录添加标签 }}
+  static addTagToRecord(recordId: string, tagId: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1) {
+      if (!records[index].tags) {
+        records[index].tags = []
+      }
+      if (!records[index].tags!.includes(tagId)) {
+        records[index].tags!.push(tagId)
+        this.saveHistory(records)
+      }
+    }
+  }
+
+  // {{ AURA: Add - 从记录移除标签 }}
+  static removeTagFromRecord(recordId: string, tagId: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1 && records[index].tags) {
+      records[index].tags = records[index].tags!.filter(t => t !== tagId)
+      this.saveHistory(records)
+    }
+  }
+
+  // {{ AURA: Add - 按标签筛选记录 }}
+  static filterByTag(tagId: string): HistoryRecord[] {
+    const records = this.getHistory()
+    return records.filter(record => record.tags && record.tags.includes(tagId))
+  }
+
+  // {{ AURA: Add - 更新记录的最后查看时间 }}
+  static updateLastViewedAt(recordId: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1) {
+      records[index].lastViewedAt = new Date()
+      this.saveHistory(records)
+    }
+  }
+}
+
+// {{ AURA: Add - 标签管理器 }}
+export class TagManager {
+  private static readonly TAGS_KEY = 'dyjx_tags'
+
+  // 获取所有标签
+  static getTags(): Tag[] {
+    try {
+      const stored = localStorage.getItem(this.TAGS_KEY)
+      if (stored) {
+        const tags = JSON.parse(stored)
+        return tags.map((tag: any) => ({
+          ...tag,
+          createdAt: new Date(tag.createdAt)
+        }))
+      }
+    } catch (error) {
+      console.error('获取标签失败:', error)
+    }
+    return this.getDefaultTags()
+  }
+
+  // 获取默认标签
+  static getDefaultTags(): Tag[] {
+    return [
+      {
+        id: 'default_work',
+        name: '工作',
+        color: 'blue',
+        createdAt: new Date()
+      },
+      {
+        id: 'default_personal',
+        name: '个人',
+        color: 'green',
+        createdAt: new Date()
+      },
+      {
+        id: 'default_important',
+        name: '重要',
+        color: 'red',
+        createdAt: new Date()
+      },
+      {
+        id: 'default_archive',
+        name: '归档',
+        color: 'gray',
+        createdAt: new Date()
+      }
+    ]
+  }
+
+  // 保存标签
+  static saveTags(tags: Tag[]): void {
+    try {
+      localStorage.setItem(this.TAGS_KEY, JSON.stringify(tags))
+    } catch (error) {
+      console.error('保存标签失败:', error)
+    }
+  }
+
+  // 添加标签
+  static addTag(tag: Omit<Tag, 'id' | 'createdAt'>): Tag {
+    const tags = this.getTags()
+    const newTag: Tag = {
+      id: `tag_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      ...tag,
+      createdAt: new Date()
+    }
+    tags.push(newTag)
+    this.saveTags(tags)
+    return newTag
+  }
+
+  // 更新标签
+  static updateTag(id: string, updates: Partial<Omit<Tag, 'id' | 'createdAt'>>): void {
+    const tags = this.getTags()
+    const index = tags.findIndex(t => t.id === id)
+    if (index !== -1) {
+      tags[index] = { ...tags[index], ...updates }
+      this.saveTags(tags)
+    }
+  }
+
+  // 删除标签
+  static deleteTag(id: string): void {
+    const tags = this.getTags().filter(t => t.id !== id)
+    this.saveTags(tags)
+
+    // 同时从所有历史记录中移除该标签
+    const records = HistoryManager.getHistory()
+    records.forEach(record => {
+      if (record.tags && record.tags.includes(id)) {
+        record.tags = record.tags.filter(t => t !== id)
+      }
+    })
+    HistoryManager.saveHistory(records)
+  }
+
+  // 获取单个标签
+  static getTag(id: string): Tag | null {
+    const tags = this.getTags()
+    return tags.find(t => t.id === id) || null
+  }
+
+  // 批量获取标签
+  static getTagsByIds(ids: string[]): Tag[] {
+    const tags = this.getTags()
+    return tags.filter(t => ids.includes(t.id))
   }
 }
 

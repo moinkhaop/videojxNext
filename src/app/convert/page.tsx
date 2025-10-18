@@ -19,7 +19,8 @@ import {
   Upload,
   RotateCcw,
   Clipboard,
-  ClipboardCheck
+  ClipboardCheck,
+  X
 } from 'lucide-react'
 import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
@@ -63,18 +64,45 @@ function ConvertPageContent() {
 
   useEffect(() => {
     // 加载配置
-    const loadedParsers = ConfigManager.getParsers()
-    const loadedServers = ConfigManager.getWebDAVServers()
-    
-    setParsers(loadedParsers)
-    setWebdavServers(loadedServers)
+    const loadConfiguration = () => {
+      const loadedParsers = ConfigManager.getParsers()
+      const loadedServers = ConfigManager.getWebDAVServers()
 
-    // 设置默认选择
-    const defaultParser = loadedParsers.find(p => p.isDefault) || loadedParsers[0]
-    const defaultServer = loadedServers.find(s => s.isDefault) || loadedServers[0]
-    
-    if (defaultParser) setSelectedParser(defaultParser.id)
-    if (defaultServer) setSelectedWebDAV(defaultServer.id)
+      setParsers(loadedParsers)
+      setWebdavServers(loadedServers)
+
+      // 设置默认选择
+      const defaultParser = loadedParsers.find(p => p.isDefault) || loadedParsers[0]
+      const defaultServer = loadedServers.find(s => s.isDefault) || loadedServers[0]
+
+      if (defaultParser) setSelectedParser(defaultParser.id)
+      if (defaultServer) setSelectedWebDAV(defaultServer.id)
+    }
+
+    loadConfiguration()
+
+    // 监听解析器配置更新事件
+    const handleConfigUpdate = () => {
+      console.log('[单视频转换] 检测到解析器配置更新，重新加载配置')
+      loadConfiguration()
+    }
+
+    window.addEventListener('parsers-config-updated', handleConfigUpdate)
+
+    // 监听页面可见性变化
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[单视频转换] 页面重新可见，刷新配置')
+        loadConfiguration()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('parsers-config-updated', handleConfigUpdate)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [])
 
   // {{ AURA: Add - 处理URL参数自动填充 }}
@@ -141,6 +169,11 @@ function ConvertPageContent() {
       setClipboardEnabled(false)
       ClipboardDetector.reset()
     }
+  }
+
+  // 清空输入框
+  const handleClearInput = () => {
+    setVideoUrl('')
   }
 
   // 提取视频链接
@@ -281,12 +314,8 @@ function ConvertPageContent() {
           createdAt: new Date()
         })
 
-        // 重置预览状态
-        setPreviewState({
-          isPreviewMode: false,
-          showPreview: false,
-          previewData: null
-        })
+        // 保持预览状态，让用户可以查看上传结果
+        // setPreviewState 保持不变，继续显示预览
 
       } catch (error) {
         console.error('上传过程出现异常:', error)
@@ -403,10 +432,10 @@ function ConvertPageContent() {
         )}
 
         {/* 主要内容区域 - 左右分栏布局 */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* 左侧：输入与配置区域 (40%) */}
-          <div className="lg:col-span-2">
-            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm min-h-[600px] flex flex-col">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 lg:items-stretch">
+          {/* 左侧：输入与配置区域 */}
+          <div className="flex lg:col-span-2">
+            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm flex flex-col w-full">
               <CardHeader className="pb-4 flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl shadow-md">
@@ -420,8 +449,8 @@ function ConvertPageContent() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
-                <div className="space-y-4">
+              <CardContent className="flex-1 flex flex-col">
+                <div className="space-y-4 flex-1">
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-sm font-medium">视频链接</label>
                     <div className="flex gap-1">
@@ -449,6 +478,17 @@ function ConvertPageContent() {
                         ) : (
                           <><Clipboard className="w-3 h-3 mr-1" />自动</>
                         )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleClearInput}
+                        disabled={isConverting || previewState.isPreviewMode || !videoUrl.trim()}
+                        className="h-7 text-xs"
+                      >
+                        <X className="w-3 h-3 mr-1" />
+                        清空
                       </Button>
                     </div>
                   </div>
@@ -522,11 +562,11 @@ function ConvertPageContent() {
             </Card>
           </div>
 
-          {/* 右侧：预览与结果区域 (60%) */}
-          <div className="lg:col-span-3">
-            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm min-h-[600px] flex flex-col">
+          {/* 右侧：预览与结果区域 */}
+          <div className="flex lg:col-span-3">
+            <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm flex flex-col w-full">
               <CardHeader className="pb-4 flex-shrink-0">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl shadow-md">
                       <Eye className="w-5 h-5 text-white" />
@@ -538,15 +578,24 @@ function ConvertPageContent() {
                       </CardDescription>
                     </div>
                   </div>
-                  {/* 状态徽章 */}
-                  {currentTask && (
-                    <Badge className={getStatusColor(currentTask.status)}>
-                      <div className="flex items-center gap-1.5">
-                        {getStatusIcon(currentTask.status)}
-                        <span>{getStatusText(currentTask.status)}</span>
-                      </div>
-                    </Badge>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {/* 进度条标签 */}
+                    {(isConverting || currentTask?.status === TaskStatus.PARSING) && (
+                      <Badge variant="outline" className="px-3 py-1.5 border-blue-300 bg-blue-50 dark:bg-blue-950/30">
+                        <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                        <span className="text-sm">{progress}%</span>
+                      </Badge>
+                    )}
+                    {/* 状态徽章 */}
+                    {currentTask && (
+                      <Badge className={getStatusColor(currentTask.status)}>
+                        <div className="flex items-center gap-1.5">
+                          {getStatusIcon(currentTask.status)}
+                          <span>{getStatusText(currentTask.status)}</span>
+                        </div>
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="flex-1 flex flex-col overflow-auto">
@@ -575,6 +624,7 @@ function ConvertPageContent() {
                         isUploading={isConverting && currentTask?.status === TaskStatus.UPLOADING}
                         onConfirmUpload={handleConfirmUpload}
                         onReparse={handleReparse}
+                        onReset={resetForm}
                         currentTask={currentTask}
                         progress={progress}
                       />
@@ -595,28 +645,11 @@ function ConvertPageContent() {
                       <Alert className="border-green-200 dark:border-green-800 bg-green-50/80 dark:bg-green-950/30 shadow-sm">
                         <CheckCircle className="h-4 w-4 text-green-500" />
                         <AlertDescription className="text-green-700 dark:text-green-300 text-sm">
-                          <div className="space-y-2">
-                            <p className="font-semibold text-base">转存成功！</p>
-                            <p className="text-xs break-all">
-                              文件路径: {decodeURIComponent(currentTask.uploadResult.filePath)}
-                            </p>
-                          </div>
+                          <p className="text-xs break-all">
+                            {decodeURIComponent(currentTask.uploadResult.filePath)}
+                          </p>
                         </AlertDescription>
                       </Alert>
-                    )}
-
-                    {/* 重置按钮 */}
-                    {(currentTask.status === TaskStatus.SUCCESS || currentTask.status === TaskStatus.FAILED) && (
-                      <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <Button
-                          variant="outline"
-                          onClick={resetForm}
-                          className="w-full h-11 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 hover:from-blue-100 hover:to-purple-100 dark:hover:from-blue-900/30 dark:hover:to-purple-900/30 border-blue-200 dark:border-blue-800"
-                        >
-                          <RotateCcw className="w-4 h-4 mr-2" />
-                          开始新的转存
-                        </Button>
-                      </div>
                     )}
                   </div>
                 )}

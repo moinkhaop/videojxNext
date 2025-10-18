@@ -20,7 +20,8 @@ import {
   Clock,
   Download,
   Clipboard,
-  ClipboardCheck
+  ClipboardCheck,
+  X
 } from 'lucide-react'
 import {
   BatchTask,
@@ -58,29 +59,45 @@ export default function BatchPage() {
   const [clipboardEnabled, setClipboardEnabled] = useState(false)
   const [lastClipboardUrl, setLastClipboardUrl] = useState('')
 
+  // 实时检测输入模式
+  useEffect(() => {
+    if (videoUrls.trim()) {
+      const detectedMode = ConversionService.detectInputMode(videoUrls.trim())
+      if (detectedMode !== inputMode) {
+        setInputMode(detectedMode)
+        console.log('[批量转存] 输入模式切换:', detectedMode === BatchInputMode.DOUYIN_USER ? '抖音用户模式' : '普通批量模式')
+      }
+    } else {
+      // 输入为空时重置为普通模式
+      if (inputMode !== BatchInputMode.NORMAL) {
+        setInputMode(BatchInputMode.NORMAL)
+      }
+    }
+  }, [videoUrls, inputMode])
+
   useEffect(() => {
     // 加载配置和增强解析器
     const loadConfiguration = async () => {
       const loadedParsers = ConfigManager.getParsers()
       const loadedServers = ConfigManager.getWebDAVServers()
-      
+
       setParsers(loadedParsers)
       setWebdavServers(loadedServers)
 
       // {{ AURA: Add - 增强解析器能力检测 }}
       try {
         const enhanced = await ConversionService.enhanceParserConfigs(loadedParsers)
-        
+
         // 如果没有抖音用户解析器，添加内置的
         const hasDouyinUserParser = enhanced.some(p =>
           p.capabilities?.includes(ParserCapability.USER_PAGE)
         )
-        
+
         if (!hasDouyinUserParser) {
           const douyinUserParser = ConversionService.getOrCreateDouyinUserParser(loadedParsers)
           enhanced.push(douyinUserParser)
         }
-        
+
         setEnhancedParsers(enhanced)
         console.log('[批量转存] 解析器能力检测完成:', enhanced.map(p => `${p.name}(${p.capabilities?.join('/')})`))
       } catch (error) {
@@ -97,12 +114,35 @@ export default function BatchPage() {
       // 设置默认选择
       const defaultParser = loadedParsers.find(p => p.isDefault) || loadedParsers[0]
       const defaultServer = loadedServers.find(s => s.isDefault) || loadedServers[0]
-      
+
       if (defaultParser) setSelectedParser(defaultParser.id)
       if (defaultServer) setSelectedWebDAV(defaultServer.id)
     }
-    
+
     loadConfiguration()
+
+    // 监听解析器配置更新事件
+    const handleConfigUpdate = () => {
+      console.log('[批量转存] 检测��解析器配置更新，重新加载配置')
+      loadConfiguration()
+    }
+
+    window.addEventListener('parsers-config-updated', handleConfigUpdate)
+
+    // 监听页面可见性变化，当页面重新可见时刷新配置
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[批量转存] 页面重新可见，刷新配置')
+        loadConfiguration()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('parsers-config-updated', handleConfigUpdate)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [])
 
   // 剪贴板自动检测
@@ -171,6 +211,11 @@ export default function BatchPage() {
       setClipboardEnabled(false)
       ClipboardDetector.reset()
     }
+  }
+
+  // 清空输入框
+  const handleClearInput = () => {
+    setVideoUrls('')
   }
 
   const handleStartBatch = async () => {
@@ -278,10 +323,19 @@ export default function BatchPage() {
       setCurrentBatch(updatedBatch)
 
       // 保存到历史记录
+      // {{ AURA: Modify - 对于抖音用户模式，简化历史记录，只保存用户主页链接和统计信息 }}
+      const historyTask = updatedBatch.inputMode === BatchInputMode.DOUYIN_USER
+        ? {
+            ...updatedBatch,
+            // 清空tasks数组，只保留统计信息，减少历史记录存储空间
+            tasks: []
+          }
+        : updatedBatch;
+
       HistoryManager.addRecord({
         id: ConversionService.generateTaskId(),
         type: 'batch',
-        task: updatedBatch,
+        task: historyTask,
         createdAt: new Date()
       })
 
@@ -353,7 +407,7 @@ export default function BatchPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
-      <div className="container mx-auto px-4 py-6 max-w-[1800px]">
+      <div className="container mx-auto px-4 py-6 max-w-7xl">
         {/* 配置检查 */}
         {(parsers.length === 0 || webdavServers.length === 0) && (
           <Alert className="mb-6 border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
@@ -370,7 +424,7 @@ export default function BatchPage() {
         {/* 主要内容区域 - 响应式左右分栏布局 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* 左侧：配置控制面板 */}
-          <div className="lg:col-span-5">
+          <div className="lg:col-span-6">
           <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto">
             <CardHeader className="pb-4">
               <div className="flex items-center gap-3">
@@ -424,6 +478,17 @@ export default function BatchPage() {
                   ) : (
                     <><Clipboard className="w-3 h-3 mr-1" />自动添加</>
                   )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearInput}
+                  disabled={isProcessing || !videoUrls.trim()}
+                  className="h-7"
+                >
+                  <X className="w-3 h-3 mr-1" />
+                  清空
                 </Button>
               </div>
               <Textarea
@@ -503,39 +568,18 @@ https://www.douyin.com/user/MS4w...
                           disabled={!isCompatible}
                           className={!isCompatible ? 'opacity-50' : ''}
                         >
-                          <div className="flex items-center justify-between w-full">
-                            <div className="flex items-center space-x-2">
-                              {/* 兼容性状态图标 */}
-                              {isRecommended && <CheckCircle className="w-3 h-3 text-green-500" />}
-                              {!isCompatible && <XCircle className="w-3 h-3 text-red-500" />}
-                              
-                              <span className={!isCompatible ? 'text-gray-400' : ''}>{parser.name}</span>
-                              
+                          <div className="flex items-center gap-2 w-full min-w-0">
+                            {/* 兼容性状态图标 */}
+                            {isRecommended && <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />}
+                            {!isCompatible && <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />}
+
+                            <span className={`truncate ${!isCompatible ? 'text-gray-400' : ''}`}>{parser.name}</span>
+
+                            <div className="flex items-center gap-1 ml-auto flex-shrink-0">
                               {parser.isDefault && <Badge variant="secondary" className="text-xs">默认</Badge>}
                               {isRecommended && <Badge variant="outline" className="text-xs text-green-600 border-green-300">推荐</Badge>}
                             </div>
-                            
-                            {/* 能力徽章 */}
-                            <div className="flex space-x-1">
-                              {parser.capabilities?.includes(ParserCapability.SINGLE_VIDEO) && (
-                                <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600 border-blue-200">
-                                  单视频
-                                </Badge>
-                              )}
-                              {parser.capabilities?.includes(ParserCapability.USER_PAGE) && (
-                                <Badge variant="outline" className="text-xs bg-green-50 text-green-600 border-green-200">
-                                  用户主页
-                                </Badge>
-                              )}
-                            </div>
                           </div>
-                          
-                          {/* 不兼容提示 */}
-                          {!isCompatible && (
-                            <div className="text-xs text-gray-500 mt-1">
-                              此解析器不支持{inputMode === BatchInputMode.DOUYIN_USER ? '用户主页解析' : '当前功能'}
-                            </div>
-                          )}
                         </SelectItem>
                       );
                     })}
@@ -603,7 +647,7 @@ https://www.douyin.com/user/MS4w...
           </div>
 
           {/* 右侧：进度和任务面板 */}
-          <div className="lg:col-span-7">
+          <div className="lg:col-span-6">
             <div className="sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto">
           {currentBatch ? (
             <div className="space-y-6 pr-2">

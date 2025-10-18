@@ -60,6 +60,12 @@ export default function WebDAVConfigPage() {
   }
 
   const handleEditConfig = (config: WebDAVConfig) => {
+    // 禁止编辑内置配置
+    if (ConfigManager.isBuiltinWebDAVServer(config.id)) {
+      alert('内置默认配置不支持编辑')
+      return
+    }
+
     setFormData({
       name: config.name,
       url: config.url,
@@ -302,77 +308,94 @@ export default function WebDAVConfigPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {configs.map((config) => (
-                  <div
-                    key={config.id}
-                    className="group flex items-center justify-between p-4 rounded-lg border border-border hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-all"
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="font-semibold text-sm truncate">{config.name}</h4>
-                          {config.isDefault && (
-                            <Badge className="h-5 px-1.5 text-xs bg-blue-500 hover:bg-blue-500">
-                              默认
-                            </Badge>
+                {configs.map((config) => {
+                  const isBuiltin = ConfigManager.isBuiltinWebDAVServer(config.id)
+                  return (
+                    <div
+                      key={config.id}
+                      className="group flex items-center justify-between p-4 rounded-lg border border-border hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-all"
+                    >
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h4 className="font-semibold text-sm truncate">{config.name}</h4>
+                            {config.isDefault && (
+                              <Badge className="h-5 px-1.5 text-xs bg-blue-500 hover:bg-blue-500">
+                                默认
+                              </Badge>
+                            )}
+                            {isBuiltin && (
+                              <Badge className="h-5 px-1.5 text-xs bg-gray-500 hover:bg-gray-500">
+                                内置
+                              </Badge>
+                            )}
+                          </div>
+                          {!isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">{config.url}</p>
+                              {config.username && <p>用户: {config.username}</p>}
+                            </div>
                           )}
-                        </div>
-                        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-                          <p className="truncate">{config.url}</p>
-                          {config.username && <p>用户: {config.username}</p>}
+                          {/* {isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">内置默认配置（详细信息已隐藏）</p>
+                            </div>
+                          )} */}
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 ml-3">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleTestConnection(config)}
-                        disabled={testingId === config.id}
-                        className="h-8 w-8 p-0"
-                        title="测试连接"
-                      >
-                        {testingId === config.id ? (
-                          <Settings className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <CheckCircle className="w-4 h-4" />
-                        )}
-                      </Button>
-                      {!config.isDefault && (
+                      <div className="flex items-center gap-1 ml-3">
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => handleSetDefault(config.id)}
-                          className="h-8 px-2 text-xs"
-                          title="设为默认"
+                          onClick={() => handleTestConnection(config)}
+                          disabled={testingId === config.id}
+                          className="h-8 w-8 p-0"
+                          title="测试连接"
                         >
-                          设为默认
+                          {testingId === config.id ? (
+                            <Settings className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="w-4 h-4" />
+                          )}
                         </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleEditConfig(config)}
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                        className="h-8 w-8 p-0"
-                        title="编辑"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDeleteConfig(config.id)}
-                        className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                        title="删除"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                        {!config.isDefault && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleSetDefault(config.id)}
+                            className="h-8 px-2 text-xs"
+                            title="设为默认"
+                          >
+                            设为默认
+                          </Button>
+                        )}
+                        {!isBuiltin && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleEditConfig(config)}
+                            disabled={isNewConfig || editingConfig?.id === config.id}
+                            className="h-8 w-8 p-0"
+                            title="编辑"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDeleteConfig(config.id)}
+                          className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          disabled={isNewConfig || editingConfig?.id === config.id}
+                          title="删除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </CardContent>

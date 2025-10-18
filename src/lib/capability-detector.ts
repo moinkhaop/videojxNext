@@ -74,17 +74,24 @@ export class ApiCapabilityDetector {
   // 检测响应格式类型
   detectResponseFormat(parser: VideoParserConfig): string {
     const url = parser.apiUrl.toLowerCase();
-    
-    // 抖音用户API
+    const name = parser.name.toLowerCase();
+
+    // 抖音用户API（优先检测曾贵贵的用户API）
     if (url.includes('cenguigui.cn') && url.includes('user.php')) {
-      return 'douyin_user_api';
+      return 'simplified_douyin_user_api'; // 使用简化适配器
     }
-    
+
+    // 其他抖音用户主页API（通用检测）
+    if (parser.capabilities?.includes(ParserCapability.USER_PAGE) &&
+        (url.includes('douyin') && url.includes('user'))) {
+      return 'simplified_douyin_user_api'; // 默认使用简化适配器
+    }
+
     // 曾贵贵单视频API
     if (url.includes('cenguigui.cn')) {
       return 'cenguigui_single_api';
     }
-    
+
     // 默认通用格式
     return 'universal_api';
   }
@@ -92,36 +99,48 @@ export class ApiCapabilityDetector {
   // 批量更新解析器能力信息
   async updateParserCapabilities(parsers: VideoParserConfig[]): Promise<EnhancedVideoParserConfig[]> {
     const enhanced: EnhancedVideoParserConfig[] = [];
-    
+
     console.log(`[能力检测] 开始检测 ${parsers.length} 个解析器的能力`);
-    
+
     for (const parser of parsers) {
-      const capabilities: ParserCapability[] = [ParserCapability.SINGLE_VIDEO]; // 默认都支持单视频
+      let capabilities: ParserCapability[];
+
+      // 优先使用手动设置的能力
+      if (parser.capabilities && parser.capabilities.length > 0) {
+        capabilities = [...parser.capabilities];
+        console.log(`[能力检测] ${parser.name} 使用手动设置的能力: ${capabilities.join(', ')}`);
+      } else {
+        // 只在没有手动设置时才自动检测
+        capabilities = [ParserCapability.SINGLE_VIDEO]; // 默认都支持单视频
+
+        // 检测用户主页能力
+        if (await this.detectUserPageCapability(parser)) {
+          capabilities.push(ParserCapability.USER_PAGE);
+          console.log(`[能力检测] ${parser.name} 自动检测到用户主页解析能力`);
+        }
+
+        // 检测批量处理能力（基于名称和描述推断）
+        if (parser.name.toLowerCase().includes('batch') ||
+            parser.name.toLowerCase().includes('批量')) {
+          capabilities.push(ParserCapability.BATCH_PROCESSING);
+        }
+
+        console.log(`[能力检测] ${parser.name} 自动检测能力: ${capabilities.join(', ')}`);
+      }
+
       const supportedPlatforms = this.inferSupportedPlatforms(parser);
       const responseAdapter = this.detectResponseFormat(parser);
-      
-      // 检测用户主页能力
-      if (await this.detectUserPageCapability(parser)) {
-        capabilities.push(ParserCapability.USER_PAGE);
-        console.log(`[能力检测] ${parser.name} 支持用户主页解析`);
-      }
-      
-      // 检测批量处理能力（基于名称和描述推断）
-      if (parser.name.toLowerCase().includes('batch') || 
-          parser.name.toLowerCase().includes('批量')) {
-        capabilities.push(ParserCapability.BATCH_PROCESSING);
-      }
-      
+
       enhanced.push({
         ...parser,
         capabilities,
         supportedPlatforms,
         responseAdapter
       });
-      
-      console.log(`[能力检测] ${parser.name} - 能力: ${capabilities.join(', ')} | 平台: ${supportedPlatforms.join(', ')} | 适配器: ${responseAdapter}`);
+
+      console.log(`[能力检测] ${parser.name} - 最终能力: ${capabilities.join(', ')} | 平台: ${supportedPlatforms.join(', ')} | 适配器: ${responseAdapter}`);
     }
-    
+
     return enhanced;
   }
   

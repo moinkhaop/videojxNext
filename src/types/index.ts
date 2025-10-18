@@ -21,6 +21,8 @@ export interface VideoParserConfig {
   apiUrl: string;
   apiKey?: string;
   isDefault?: boolean;
+  disabled?: boolean; // {{ AURA: Add - 是否禁用（用于内置配置）}}
+  isBuiltin?: boolean; // {{ AURA: Add - 是否为内置配置（内置配置不允许编辑和查看详细信息）}}
   useGetMethod?: boolean; // 是否使用GET请求方式
   requestMethod?: 'GET' | 'POST'; // 明确请求方法
   urlParamName?: string; // URL参数名称，默认为'url'
@@ -51,6 +53,8 @@ export interface WebDAVConfig {
   password: string;
   basePath?: string;
   isDefault?: boolean;
+  disabled?: boolean; // {{ AURA: Add - 是否禁用（用于内置配置）}}
+  isBuiltin?: boolean; // {{ AURA: Add - 是否为内置配置（内置配置不允许编辑和查看详细信息）}}
 }
 
 // 任务状态枚举
@@ -168,12 +172,54 @@ export interface CleanupLogEntry {
   details: string;
 }
 
+// {{ AURA: Add - 标签类型 }}
+export interface Tag {
+  id: string;
+  name: string;
+  color: string; // 标签颜色，如 'blue', 'red', 'green' 等
+  createdAt: Date;
+}
+
+// {{ AURA: Add - 历史记录视图模式 }}
+export enum HistoryViewMode {
+  LIST = 'list',       // 列表视图
+  GRID = 'grid',       // 网格视图
+  COMPACT = 'compact'  // 紧凑列表视图
+}
+
+// {{ AURA: Add - 历史记录排序选项 }}
+export enum HistorySortOption {
+  DATE_DESC = 'date_desc',     // 时间降序（最新在前）
+  DATE_ASC = 'date_asc',       // 时间升序（最旧在前）
+  TITLE_ASC = 'title_asc',     // 标题升序
+  TITLE_DESC = 'title_desc',   // 标题降序
+  STATUS = 'status'            // 按状态排序
+}
+
 // 历史记录类型
 export interface HistoryRecord {
   id: string;
   type: 'single' | 'batch';
   task: ConversionTask | BatchTask;
   createdAt: Date;
+  isFavorite?: boolean; // {{ AURA: Add - 收藏标记 }}
+  tags?: string[]; // {{ AURA: Add - 自定义标签（标签ID数组）}}
+  notes?: string; // {{ AURA: Add - 备注 }}
+  lastViewedAt?: Date; // {{ AURA: Add - 最后查看时间 }}
+}
+
+// {{ AURA: Add - 历史记录统计数据 }}
+export interface HistoryStats {
+  totalRecords: number;
+  totalSuccess: number;
+  totalFailed: number;
+  totalPending: number;
+  successRate: number;
+  todayRecords: number;
+  thisWeekRecords: number;
+  thisMonthRecords: number;
+  favoriteCount: number;
+  tagUsage: Record<string, number>; // 标签使用统计
 }
 
 // 应用配置类型

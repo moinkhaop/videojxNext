@@ -35,6 +35,7 @@ interface TwoColumnPreviewProps {
   isUploading?: boolean
   onConfirmUpload: () => void
   onReparse: () => void
+  onReset?: () => void
   className?: string
   currentTask: ConversionTask | null
   progress: number
@@ -104,6 +105,7 @@ export function TwoColumnPreview({
   isUploading = false,
   onConfirmUpload,
   onReparse,
+  onReset,
   className = '',
   currentTask,
   progress,
@@ -166,21 +168,8 @@ export function TwoColumnPreview({
 
   return (
     <div className={`w-full space-y-4 ${className}`}>
-      {/* 进度条 - 解析或上传时显示 */}
-      {(isUploading || currentTask?.status === TaskStatus.PARSING) && (
-        <div className="space-y-2 p-4 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 rounded-lg border border-blue-100 dark:border-blue-900">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-medium text-blue-700 dark:text-blue-300">
-              {currentTask?.status === TaskStatus.PARSING ? '正在解析...' : '正在上传...'}
-            </span>
-            <span className="text-blue-600 dark:text-blue-400 font-semibold">{progress}%</span>
-          </div>
-          <Progress value={progress} className="h-2" />
-        </div>
-      )}
-
       {/* 主内容区域 - 改进的网格布局 */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:items-stretch">
 
         {/* 左侧：媒体预览区域 */}
         <div className={useEnhancedGallery ? "lg:col-span-12" : "lg:col-span-5"}>
@@ -195,50 +184,48 @@ export function TwoColumnPreview({
               />
             </div>
           ) : (
-            // 标准视频/图集预览 - 竖屏格式
-            <div className="flex justify-center">
-              <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800 shadow-md max-w-md w-full">
-                <div className="relative bg-black aspect-[9/16]">
-                  {isVideo && mediaInfo.url ? (
-                    <VideoPreview
-                      videoUrl={mediaInfo.url}
-                      thumbnail={mediaInfo.thumbnail}
-                      title={mediaInfo.title}
-                      className="w-full h-full"
-                    />
-                  ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
-                    <ImageCarousel
-                      images={mediaInfo.images}
-                      title={mediaInfo.title}
-                      className="w-full h-full"
-                    />
-                  ) : (
-                    // 错误状态
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="text-center text-white px-4">
-                        <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
-                        <p className="text-lg font-medium mb-2">无法预览内容</p>
-                        <p className="text-sm opacity-75">
-                          {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
-                        </p>
-                      </div>
+            // 标准视频/图集预览 - 自适应高度
+            <div className="h-full flex flex-col">
+              <div className="flex-1 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800 shadow-md">
+                {isVideo && mediaInfo.url ? (
+                  <VideoPreview
+                    videoUrl={mediaInfo.url}
+                    thumbnail={mediaInfo.thumbnail}
+                    title={mediaInfo.title}
+                    className="w-full h-full"
+                  />
+                ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
+                  <ImageCarousel
+                    images={mediaInfo.images}
+                    title={mediaInfo.title}
+                    className="h-full"
+                  />
+                ) : (
+                  // 错误状态
+                  <div className="h-full flex items-center justify-center bg-black">
+                    <div className="text-center text-white px-4">
+                      <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
+                      <p className="text-lg font-medium mb-2">无法预览内容</p>
+                      <p className="text-sm opacity-75">
+                        {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
+                      </p>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
 
-          {/* 描述信息 - 移到预览下方 */}
-          {mediaInfo.description && (
-            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-1 h-4 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white">描述</h4>
-              </div>
-              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
-                {mediaInfo.description}
-              </p>
+              {/* 描述信息 - 移到预览下方 */}
+              {mediaInfo.description && (
+                <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-1 h-4 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">描述</h4>
+                  </div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
+                    {mediaInfo.description}
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -415,25 +402,53 @@ export function TwoColumnPreview({
             </div>
 
             <div className="p-4 space-y-3">
-              {/* 主要操作 - 确认上传 */}
-              <Button
-                onClick={onConfirmUpload}
-                disabled={isUploading}
-                className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transition-all"
-                size="lg"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                    上传中...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-5 h-5 mr-2" />
-                    确认并上传
-                  </>
-                )}
-              </Button>
+              {/* 主要操作 - 确认上传或成功状态 */}
+              {currentTask?.status === TaskStatus.SUCCESS ? (
+                <>
+                  {/* 上传成功状态 */}
+                  <Button
+                    disabled
+                    className="w-full h-12 text-base font-semibold bg-gradient-to-r from-green-600 to-emerald-600 shadow-lg cursor-default"
+                    size="lg"
+                  >
+                    <CheckCircle className="w-5 h-5 mr-2" />
+                    上传成功
+                  </Button>
+
+                  {/* 开始新的转存按钮 */}
+                  {onReset && (
+                    <Button
+                      onClick={onReset}
+                      variant="outline"
+                      className="w-full h-10 text-sm font-medium border-2 border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 transition-all"
+                      size="lg"
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      开始新的转存
+                    </Button>
+                  )}
+                </>
+              ) : (
+                /* 正常上传按钮 */
+                <Button
+                  onClick={onConfirmUpload}
+                  disabled={isUploading}
+                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transition-all"
+                  size="lg"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      上传中...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-5 h-5 mr-2" />
+                      确认并上传
+                    </>
+                  )}
+                </Button>
+              )}
 
               {/* 次要操作按钮组 */}
               <div className="space-y-2">
@@ -482,18 +497,6 @@ export function TwoColumnPreview({
                   </Button>
                 </div>
               </div>
-
-              {/* 上传进度提示 */}
-              {isUploading && (
-                <div className="p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
-                  <div className="flex items-center text-blue-700 dark:text-blue-300">
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin flex-shrink-0" />
-                    <span className="text-sm font-medium">
-                      正在上传{isVideo ? '视频' : '图集'}到WebDAV服务器...
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 

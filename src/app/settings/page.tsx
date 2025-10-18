@@ -14,7 +14,6 @@ import {
   Download,
   Upload,
   Trash2,
-  Plus,
   CheckCircle,
   XCircle,
   ExternalLink
@@ -27,8 +26,6 @@ export default function SettingsPage() {
   const [parsers, setParsers] = useState<VideoParserConfig[]>([])
   const [webdavServers, setWebdavServers] = useState<WebDAVConfig[]>([])
   const [testingWebDAV, setTestingWebDAV] = useState<string | null>(null)
-  const [showAllWebDAV, setShowAllWebDAV] = useState(false)
-  const [showAllParsers, setShowAllParsers] = useState(false)
 
   useEffect(() => {
     loadConfigs()
@@ -39,15 +36,11 @@ export default function SettingsPage() {
     setWebdavServers(ConfigManager.getWebDAVServers())
   }
 
-  // 获取要显示的WebDAV服务器列表
-  const displayedWebDAVServers = showAllWebDAV
-    ? webdavServers
-    : webdavServers.filter(server => server.isDefault)
+  // 获取要显示的WebDAV服务器列表（仅显示默认）
+  const displayedWebDAVServers = webdavServers.filter(server => server.isDefault)
 
-  // 获取要显示的解析器列表
-  const displayedParsers = showAllParsers
-    ? parsers
-    : parsers.filter(parser => parser.isDefault)
+  // 获取要显示的解析器列表（仅显示默认）
+  const displayedParsers = parsers.filter(parser => parser.isDefault)
 
   const handleTestWebDAV = async (server: WebDAVConfig) => {
     setTestingWebDAV(server.id)
@@ -206,7 +199,7 @@ export default function SettingsPage() {
                     <CardTitle className="text-xl font-bold flex items-center gap-2">
                       WebDAV 服务器
                       <Badge variant="outline" className="font-normal text-xs">
-                        {showAllWebDAV ? `${webdavServers.length} 个` : '默认'}
+                        默认
                       </Badge>
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
@@ -214,25 +207,16 @@ export default function SettingsPage() {
                     </CardDescription>
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <Link href="/settings/webdav">
                   <Button
                     size="sm"
                     variant="outline"
                     className="gap-1.5 h-9"
-                    onClick={() => setShowAllWebDAV(!showAllWebDAV)}
                   >
                     <Settings className="w-4 h-4" />
-                    {showAllWebDAV ? '收起' : '管理'}
+                    管理
                   </Button>
-                  {showAllWebDAV && (
-                    <Link href="/settings/webdav">
-                      <Button size="sm" className="gap-1.5 h-9 bg-blue-600 hover:bg-blue-700">
-                        <Plus className="w-4 h-4" />
-                        添加
-                      </Button>
-                    </Link>
-                  )}
-                </div>
+                </Link>
               </div>
             </CardHeader>
             <CardContent>
@@ -250,25 +234,37 @@ export default function SettingsPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {displayedWebDAVServers.map((server) => (
-                    <div
-                      key={server.id}
-                      className="group flex items-center justify-between p-3 rounded-lg border border-border hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-all"
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h4 className="font-semibold text-sm truncate">{server.name}</h4>
-                            {server.isDefault && (
-                              <Badge className="h-5 px-1.5 text-xs bg-blue-500 hover:bg-blue-500">
-                                默认
-                              </Badge>
+                  {displayedWebDAVServers.map((server) => {
+                    const isBuiltin = ConfigManager.isBuiltinWebDAVServer(server.id)
+                    return (
+                      <div
+                        key={server.id}
+                        className="group flex items-center justify-between p-3 rounded-lg border border-border hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-all"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-sm truncate">{server.name}</h4>
+                              {server.isDefault && (
+                                <Badge className="h-5 px-1.5 text-xs bg-blue-500 hover:bg-blue-500">
+                                  默认
+                                </Badge>
+                              )}
+                              {isBuiltin && (
+                                <Badge className="h-5 px-1.5 text-xs bg-gray-500 hover:bg-gray-500">
+                                  内置
+                                </Badge>
+                              )}
+                            </div>
+                            {!isBuiltin && (
+                              <p className="text-xs text-muted-foreground truncate">{server.url}</p>
                             )}
+                            {/* {isBuiltin && (
+                              <p className="text-xs text-muted-foreground truncate">内置默认配置（详细信息已隐藏）</p>
+                            )} */}
                           </div>
-                          <p className="text-xs text-muted-foreground truncate">{server.url}</p>
                         </div>
-                      </div>
                       <div className="flex items-center gap-1 ml-3">
                         <Button
                           size="sm"
@@ -306,7 +302,8 @@ export default function SettingsPage() {
                         </Button>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </CardContent>
@@ -324,7 +321,7 @@ export default function SettingsPage() {
                     <CardTitle className="text-xl font-bold flex items-center gap-2">
                       视频解析 API
                       <Badge variant="outline" className="font-normal text-xs">
-                        {showAllParsers ? `${parsers.length} 个` : '默认'}
+                        默认
                       </Badge>
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
@@ -332,25 +329,16 @@ export default function SettingsPage() {
                     </CardDescription>
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <Link href="/settings/parsers">
                   <Button
                     size="sm"
                     variant="outline"
                     className="gap-1.5 h-9"
-                    onClick={() => setShowAllParsers(!showAllParsers)}
                   >
                     <Settings className="w-4 h-4" />
-                    {showAllParsers ? '收起' : '管理'}
+                    管理
                   </Button>
-                  {showAllParsers && (
-                    <Link href="/settings/parsers">
-                      <Button size="sm" className="gap-1.5 h-9 bg-purple-600 hover:bg-purple-700">
-                        <Plus className="w-4 h-4" />
-                        添加
-                      </Button>
-                    </Link>
-                  )}
-                </div>
+                </Link>
               </div>
             </CardHeader>
             <CardContent>
@@ -368,25 +356,37 @@ export default function SettingsPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {displayedParsers.map((parser) => (
-                    <div
-                      key={parser.id}
-                      className="group flex items-center justify-between p-3 rounded-lg border border-border hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50/50 dark:hover:bg-purple-950/20 transition-all"
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0"></div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h4 className="font-semibold text-sm truncate">{parser.name}</h4>
-                            {parser.isDefault && (
-                              <Badge className="h-5 px-1.5 text-xs bg-purple-500 hover:bg-purple-500">
-                                默认
-                              </Badge>
+                  {displayedParsers.map((parser) => {
+                    const isBuiltin = ConfigManager.isBuiltinParser(parser.id)
+                    return (
+                      <div
+                        key={parser.id}
+                        className="group flex items-center justify-between p-3 rounded-lg border border-border hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50/50 dark:hover:bg-purple-950/20 transition-all"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0"></div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-sm truncate">{parser.name}</h4>
+                              {parser.isDefault && (
+                                <Badge className="h-5 px-1.5 text-xs bg-purple-500 hover:bg-purple-500">
+                                  默认
+                                </Badge>
+                              )}
+                              {isBuiltin && (
+                                <Badge className="h-5 px-1.5 text-xs bg-gray-500 hover:bg-gray-500">
+                                  内置
+                                </Badge>
+                              )}
+                            </div>
+                            {!isBuiltin && (
+                              <p className="text-xs text-muted-foreground truncate">{parser.apiUrl}</p>
                             )}
+                            {/* {isBuiltin && (
+                              <p className="text-xs text-muted-foreground truncate">内置默认配置（详细信息已隐藏）</p>
+                            )} */}
                           </div>
-                          <p className="text-xs text-muted-foreground truncate">{parser.apiUrl}</p>
                         </div>
-                      </div>
                       <div className="flex items-center gap-1 ml-3">
                         {!parser.isDefault && (
                           <Button
@@ -410,7 +410,8 @@ export default function SettingsPage() {
                         </Button>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </CardContent>

@@ -93,16 +93,16 @@ export class UniversalAdapter implements IResponseAdapter {
 export class CenguiguiSingleAdapter implements IResponseAdapter {
   readonly id = 'cenguigui_single_api';
   readonly supportedCapabilities = [ParserCapability.SINGLE_VIDEO];
-  
+
   canHandle(rawResponse: any): boolean {
     return rawResponse?.code === 200 && rawResponse?.data && !rawResponse?.data?.aweme_list;
   }
-  
+
   adaptSingleVideo(rawResponse: any): ParsedVideoInfo {
     if (!this.canHandle(rawResponse)) {
       throw new Error('无法处理此响应格式');
     }
-    
+
     const data = rawResponse.data;
     return {
       title: data.title || data.desc || '未知标题',
@@ -120,14 +120,81 @@ export class CenguiguiSingleAdapter implements IResponseAdapter {
       height: data.video_info?.height
     };
   }
-  
+
   adaptUserPage(rawResponse: any): ParsedVideoInfo[] {
     throw new Error('曾贵贵单视频API不支持用户主页解析');
   }
-  
+
   extractError(rawResponse: any): string | null {
     if (rawResponse?.code !== 200) {
       return rawResponse?.msg || '解析失败';
+    }
+    return null;
+  }
+}
+
+// 简化抖音用户API适配器（仅返回视频URL列表）
+export class SimplifiedDouyinUserAdapter implements IResponseAdapter {
+  readonly id = 'simplified_douyin_user_api';
+  readonly supportedCapabilities = [ParserCapability.USER_PAGE];
+
+  canHandle(rawResponse: any): boolean {
+    // 检测简化格式：包含 nickname/video_count/video_urls 字段
+    return (
+      rawResponse &&
+      typeof rawResponse === 'object' &&
+      'video_urls' in rawResponse &&
+      Array.isArray(rawResponse.video_urls) &&
+      rawResponse.video_urls.length > 0
+    );
+  }
+
+  adaptSingleVideo(rawResponse: any): ParsedVideoInfo {
+    throw new Error('简化抖音用户API不支持单视频解析');
+  }
+
+  adaptUserPage(rawResponse: any): ParsedVideoInfo[] {
+    if (!this.canHandle(rawResponse)) {
+      throw new Error('无法处理此响应格式');
+    }
+
+    const nickname = rawResponse.nickname || '抖音用户';
+    const videoUrls = rawResponse.video_urls as string[];
+
+    console.log(`[简化适配器] 解析到 ${videoUrls.length} 个视频URL，用户: ${nickname}`);
+
+    // 将每个视频URL转换为ParsedVideoInfo
+    return videoUrls.map((url: string, index: number) => {
+      // 尝试从URL中提取video_id作为标识
+      let videoId = `video_${index + 1}`;
+      const videoIdMatch = url.match(/video_id=([^&]+)/);
+      if (videoIdMatch) {
+        videoId = videoIdMatch[1].substring(0, 12); // 截取前12位作为简短ID
+      }
+
+      return {
+        title: `${nickname} 的视频 #${index + 1} (${videoId})`,
+        url: url,
+        thumbnail: undefined, // 没有缩略图信息
+        mediaType: MediaType.VIDEO,
+        duration: undefined, // 没有时长信息
+        author: nickname,
+        avatar: undefined,
+        publishTime: undefined,
+        description: `来自 ${nickname} 的抖音视频`,
+        viewCount: undefined,
+        format: 'mp4' // 默认格式
+      };
+    });
+  }
+
+  extractError(rawResponse: any): string | null {
+    // 检查是否有错误标识
+    if (rawResponse?.error) {
+      return rawResponse.error;
+    }
+    if (rawResponse?.message && !rawResponse?.video_urls) {
+      return rawResponse.message;
     }
     return null;
   }
@@ -140,6 +207,7 @@ export class AdapterRegistry {
   constructor() {
     // 注册内置适配器
     this.register(new DouyinUserAdapter());
+    this.register(new SimplifiedDouyinUserAdapter()); // 简化抖音用户API适配器
     this.register(new UniversalAdapter());
     this.register(new CenguiguiSingleAdapter());
   }

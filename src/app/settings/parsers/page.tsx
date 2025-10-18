@@ -22,8 +22,9 @@ import {
   Settings,
   TestTube
 } from 'lucide-react'
-import { VideoParserConfig } from '@/types'
+import { VideoParserConfig, ParserCapability } from '@/types'
 import { ConfigManager } from '@/lib/storage'
+import { apiCapabilityDetector } from '@/lib/capability-detector'
 
 export default function ParsersConfigPage() {
   const [configs, setConfigs] = useState<VideoParserConfig[]>([])
@@ -39,7 +40,8 @@ export default function ParsersConfigPage() {
     urlParamName: 'url',
     customHeaders: '{}',
     customBodyParams: '{}',
-    customQueryParams: '{}'
+    customQueryParams: '{}',
+    capabilities: [] as ParserCapability[]
   })
 
   useEffect(() => {
@@ -60,7 +62,8 @@ export default function ParsersConfigPage() {
       urlParamName: 'url',
       customHeaders: '{}',
       customBodyParams: '{}',
-      customQueryParams: '{}'
+      customQueryParams: '{}',
+      capabilities: [ParserCapability.SINGLE_VIDEO] // 默认支持单视频
     })
     setEditingConfig(null)
     setIsNewConfig(true)
@@ -84,6 +87,12 @@ export default function ParsersConfigPage() {
   }
 
   const handleEditConfig = (config: VideoParserConfig) => {
+    // 禁止编辑内置配置
+    if (ConfigManager.isBuiltinParser(config.id)) {
+      alert('内置默认配置不支持编辑')
+      return
+    }
+
     setFormData({
       name: config.name,
       apiUrl: config.apiUrl,
@@ -92,7 +101,8 @@ export default function ParsersConfigPage() {
       urlParamName: config.urlParamName || 'url',
       customHeaders: JSON.stringify(config.customHeaders || {}, null, 2),
       customBodyParams: JSON.stringify(config.customBodyParams || {}, null, 2),
-      customQueryParams: JSON.stringify(config.customQueryParams || {}, null, 2)
+      customQueryParams: JSON.stringify(config.customQueryParams || {}, null, 2),
+      capabilities: config.capabilities || [ParserCapability.SINGLE_VIDEO]
     })
     setEditingConfig(config)
     setIsNewConfig(false)
@@ -138,7 +148,8 @@ export default function ParsersConfigPage() {
       customHeaders: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
       customBodyParams: Object.keys(customBodyParams).length > 0 ? customBodyParams : undefined,
       customQueryParams: Object.keys(customQueryParams).length > 0 ? customQueryParams : undefined,
-      isDefault: configs.length === 0
+      isDefault: configs.length === 0,
+      capabilities: formData.capabilities.length > 0 ? formData.capabilities : undefined
     }
 
     if (isNewConfig) {
@@ -150,6 +161,10 @@ export default function ParsersConfigPage() {
 
     loadConfigs()
     handleCancelEdit()
+
+    // 触发配置更新事件，通知其他页面刷新配置
+    window.dispatchEvent(new CustomEvent('parsers-config-updated'))
+    console.log('[设置] 解析器配置已更新，通知其他页面刷新')
   }
 
   const handleCancelEdit = () => {
@@ -163,20 +178,68 @@ export default function ParsersConfigPage() {
       urlParamName: 'url',
       customHeaders: '{}',
       customBodyParams: '{}',
-      customQueryParams: '{}'
+      customQueryParams: '{}',
+      capabilities: []
     })
+  }
+
+  const handleCapabilityChange = (capability: ParserCapability, checked: boolean) => {
+    setFormData(prev => {
+      const newCapabilities = checked
+        ? [...prev.capabilities, capability]
+        : prev.capabilities.filter(c => c !== capability)
+      return { ...prev, capabilities: newCapabilities }
+    })
+  }
+
+  const handleApiUrlChange = async (url: string) => {
+    setFormData(prev => ({ ...prev, apiUrl: url }))
+
+    // 如果URL不为空，自动检测能力
+    if (url.trim()) {
+      try {
+        const tempConfig: VideoParserConfig = {
+          id: 'temp',
+          name: '',
+          apiUrl: url.trim()
+        }
+
+        const hasUserPage = await apiCapabilityDetector.detectUserPageCapability(tempConfig)
+
+        // 自动添加检测到的能力
+        const newCapabilities = [ParserCapability.SINGLE_VIDEO] // 默认都支持单视频
+        if (hasUserPage) {
+          newCapabilities.push(ParserCapability.USER_PAGE)
+        }
+
+        setFormData(prev => ({
+          ...prev,
+          capabilities: newCapabilities
+        }))
+
+        console.log('[自动检测] API能力检测完成:', newCapabilities)
+      } catch (error) {
+        console.error('[自动检测] 能力检测失败:', error)
+      }
+    }
   }
 
   const handleDeleteConfig = (id: string) => {
     if (confirm('确定要删除这个解析器配置吗？')) {
       ConfigManager.deleteParser(id)
       loadConfigs()
+      // 触发配置更新事件
+      window.dispatchEvent(new CustomEvent('parsers-config-updated'))
+      console.log('[设置] 解析器已删除，通知其他页面刷新')
     }
   }
 
   const handleSetDefault = (id: string) => {
     ConfigManager.updateParser(id, { isDefault: true })
     loadConfigs()
+    // 触发配置更新事件
+    window.dispatchEvent(new CustomEvent('parsers-config-updated'))
+    console.log('[设置] 默认解析器已更新，通知其他页面刷新')
   }
 
   const handleTestParser = async (config: VideoParserConfig) => {
@@ -293,11 +356,14 @@ export default function ParsersConfigPage() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium mb-2">API 地址 *</label>
+                    <label className="block text-sm font-medium mb-2">
+                      API 地址 *
+                      <span className="text-xs text-muted-foreground ml-2">（系统会自动检测能力）</span>
+                    </label>
                     <Input
                       placeholder="https://api.example.com/parse"
                       value={formData.apiUrl}
-                      onChange={(e) => setFormData({ ...formData, apiUrl: e.target.value })}
+                      onChange={(e) => handleApiUrlChange(e.target.value)}
                       className="h-10"
                     />
                   </div>
@@ -348,6 +414,54 @@ export default function ParsersConfigPage() {
                       {showApiKey.new ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </Button>
                   </div>
+                </div>
+
+                {/* 解析能力选择 */}
+                <div>
+                  <label className="block text-sm font-medium mb-2">解析能力</label>
+                  <div className="space-y-2.5 p-4 border rounded-lg bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-900 dark:to-gray-950">
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={formData.capabilities.includes(ParserCapability.SINGLE_VIDEO)}
+                        onChange={(e) => handleCapabilityChange(ParserCapability.SINGLE_VIDEO, e.target.checked)}
+                        className="rounded w-4 h-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <Badge variant="outline" className="h-6 px-2 text-xs bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-800">
+                        单视频
+                      </Badge>
+                      <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">单个视频链接解析</span>
+                    </label>
+
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={formData.capabilities.includes(ParserCapability.USER_PAGE)}
+                        onChange={(e) => handleCapabilityChange(ParserCapability.USER_PAGE, e.target.checked)}
+                        className="rounded w-4 h-4 border-gray-300 text-green-600 focus:ring-green-500"
+                      />
+                      <Badge variant="outline" className="h-6 px-2 text-xs bg-green-50 text-green-600 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800">
+                        用户主页
+                      </Badge>
+                      <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">用户主页批量解析（如抖音用户主页）</span>
+                    </label>
+
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={formData.capabilities.includes(ParserCapability.BATCH_PROCESSING)}
+                        onChange={(e) => handleCapabilityChange(ParserCapability.BATCH_PROCESSING, e.target.checked)}
+                        className="rounded w-4 h-4 border-gray-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      <Badge variant="outline" className="h-6 px-2 text-xs bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400 dark:border-orange-800">
+                        批量处理
+                      </Badge>
+                      <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">批量处理多个视频</span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    💡 提示：至少选择一种解析能力。系统会根据API特征自动推荐。
+                  </p>
                 </div>
 
                 <div>
@@ -417,77 +531,111 @@ export default function ParsersConfigPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {configs.map((config) => (
-                  <div
-                    key={config.id}
-                    className="group flex items-center justify-between p-4 rounded-lg border border-border hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50/50 dark:hover:bg-purple-950/20 transition-all"
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0"></div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="font-semibold text-sm truncate">{config.name}</h4>
-                          {config.isDefault && (
-                            <Badge className="h-5 px-1.5 text-xs bg-purple-500 hover:bg-purple-500">
-                              默认
-                            </Badge>
+                {configs.map((config) => {
+                  const isBuiltin = ConfigManager.isBuiltinParser(config.id)
+                  return (
+                    <div
+                      key={config.id}
+                      className="group flex items-center justify-between p-4 rounded-lg border border-border hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50/50 dark:hover:bg-purple-950/20 transition-all"
+                    >
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0"></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <h4 className="font-semibold text-sm truncate">{config.name}</h4>
+                            {config.isDefault && (
+                              <Badge className="h-5 px-1.5 text-xs bg-purple-500 hover:bg-purple-500">
+                                默认
+                              </Badge>
+                            )}
+                            {isBuiltin && (
+                              <Badge className="h-5 px-1.5 text-xs bg-gray-500 hover:bg-gray-500">
+                                内置
+                              </Badge>
+                            )}
+
+                            {/* 能力标签 */}
+                            {config.capabilities?.includes(ParserCapability.SINGLE_VIDEO) && (
+                              <Badge variant="outline" className="h-5 px-1.5 text-xs bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-800">
+                                单视频
+                              </Badge>
+                            )}
+                            {config.capabilities?.includes(ParserCapability.USER_PAGE) && (
+                              <Badge variant="outline" className="h-5 px-1.5 text-xs bg-green-50 text-green-600 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800">
+                                用户主页
+                              </Badge>
+                            )}
+                            {config.capabilities?.includes(ParserCapability.BATCH_PROCESSING) && (
+                              <Badge variant="outline" className="h-5 px-1.5 text-xs bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400 dark:border-orange-800">
+                                批量处理
+                              </Badge>
+                            )}
+                          </div>
+                          {!isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">{config.apiUrl}</p>
+                              <p>API密钥: {config.apiKey ? '已配置' : '未设置'}</p>
+                            </div>
                           )}
-                        </div>
-                        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-                          <p className="truncate">{config.apiUrl}</p>
-                          <p>API密钥: {config.apiKey ? '已配置' : '未设置'}</p>
+                          {/* {isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">内置默认配置（详细信息已隐藏）</p>
+                            </div>
+                          )} */}
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 ml-3">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleTestParser(config)}
-                        disabled={testingId === config.id}
-                        className="h-8 w-8 p-0"
-                        title="测试解析"
-                      >
-                        {testingId === config.id ? (
-                          <Settings className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <TestTube className="w-4 h-4" />
-                        )}
-                      </Button>
-                      {!config.isDefault && (
+                      <div className="flex items-center gap-1 ml-3">
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => handleSetDefault(config.id)}
-                          className="h-8 px-2 text-xs"
-                          title="设为默认"
+                          onClick={() => handleTestParser(config)}
+                          disabled={testingId === config.id}
+                          className="h-8 w-8 p-0"
+                          title="测试解析"
                         >
-                          设为默认
+                          {testingId === config.id ? (
+                            <Settings className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <TestTube className="w-4 h-4" />
+                          )}
                         </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleEditConfig(config)}
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                        className="h-8 w-8 p-0"
-                        title="编辑"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDeleteConfig(config.id)}
-                        className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                        title="删除"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                        {!config.isDefault && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleSetDefault(config.id)}
+                            className="h-8 px-2 text-xs"
+                            title="设为默认"
+                          >
+                            设为默认
+                          </Button>
+                        )}
+                        {!isBuiltin && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleEditConfig(config)}
+                            disabled={isNewConfig || editingConfig?.id === config.id}
+                            className="h-8 w-8 p-0"
+                            title="编辑"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDeleteConfig(config.id)}
+                          className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          disabled={isNewConfig || editingConfig?.id === config.id}
+                          title="删除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </CardContent>

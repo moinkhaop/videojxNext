@@ -68,21 +68,44 @@
 }
 
 .thumbnail-grid::-webkit-scrollbar {
-  height: 4px;
+  height: 6px;
 }
 
 .thumbnail-grid::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 2px;
+  background: #f1f5f9;
+  border-radius: 3px;
 }
 
 .thumbnail-grid::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 2px;
+  background: #cbd5e1;
+  border-radius: 3px;
+  transition: background 0.2s ease;
 }
 
 .thumbnail-grid::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: #94a3b8;
+}
+
+/* {{ AURA: Add - 图集轮播缩略图滚动条样式 }} */
+.image-carousel-thumbnails::-webkit-scrollbar {
+  height: 6px;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+  margin: 0 8px;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-thumb {
+  background: linear-gradient(to right, #3b82f6, #8b5cf6);
+  border-radius: 3px;
+  transition: all 0.2s ease;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to right, #2563eb, #7c3aed);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
 }
 
 /* 图片选择动画 */
