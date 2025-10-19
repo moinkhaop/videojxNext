@@ -334,8 +334,9 @@ function ConvertPageContent() {
     }, 0)
   }
 
-  // 重新解析
+  // {{ AURA: Modify - 重新解析：自动重新发起解析请求，而不仅仅是清空状态 }}
   const handleReparse = () => {
+    // 重置预览状态
     setPreviewState({
       isPreviewMode: false,
       showPreview: false,
@@ -343,7 +344,14 @@ function ConvertPageContent() {
     })
     setCurrentTask(null)
     setProgress(0)
-    setIsConverting(false)
+    
+    // 自动重新解析（使用相同的链接和解析器）
+    if (videoUrl.trim() && selectedParser) {
+      // 使用setTimeout延迟执行，以确保状态已更新
+      setTimeout(() => {
+        handleParseAndPreview()
+      }, 100)
+    }
   }
 
   const resetForm = () => {

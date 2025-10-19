@@ -54,6 +54,7 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
         {/* 媒体内容预览 */}
         {isVideo && mediaInfo.url ? (
           <VideoPreview
+            key={mediaInfo.url}
             videoUrl={mediaInfo.url}
             thumbnail={mediaInfo.thumbnail}
             title={mediaInfo.title}

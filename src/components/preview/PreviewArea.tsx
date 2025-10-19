@@ -43,19 +43,32 @@ export function PreviewArea({
       {/* 上方：内容预览区 */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">
-            {mediaInfo.title || '未知标题'}
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg">
+              {mediaInfo.title || '未知标题'}
+            </CardTitle>
+            {/* {{ AURA: Add - 显示代理加载状态提示 }} */}
+            {isVideo && mediaInfo.url && (
+              <div className="flex items-center gap-1 px-2 py-1 bg-blue-50 dark:bg-blue-950/30 rounded text-xs text-blue-600 dark:text-blue-400">
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                通过代理加载
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {/* 媒体内容预览 */}
             {isVideo && mediaInfo.url ? (
               <VideoPreview
+                key={mediaInfo.url}
                 videoUrl={mediaInfo.url}
                 thumbnail={mediaInfo.thumbnail}
                 title={mediaInfo.title}
                 className="w-full aspect-video"
+                useProxy={true}
               />
             ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
               <ImageCarousel
@@ -64,16 +77,22 @@ export function PreviewArea({
                 className="w-full"
               />
             ) : (
+              // {{ AURA: Modify - 改进无内容提示，提供更详细的指导 }}
               // 错误状态或无内容
-              <div className="flex items-center justify-center h-64 bg-gray-100 rounded-lg">
+              <div className="flex items-center justify-center h-64 bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-300 dark:border-gray-700">
                 <div className="text-center">
-                  <div className="w-16 h-16 mx-auto mb-4 bg-gray-300 rounded-full flex items-center justify-center">
-                    <AlertTriangle className="w-8 h-8 text-gray-500" />
+                  <div className="w-16 h-16 mx-auto mb-4 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
+                    <AlertTriangle className="w-8 h-8 text-gray-500 dark:text-gray-400" />
                   </div>
-                  <p className="text-gray-500 mb-2">无法预览内容</p>
-                  <p className="text-sm text-gray-400">
-                    {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
+                  <p className="text-gray-600 dark:text-gray-300 mb-2 font-medium">无法预览内容</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                    {isVideo ? '视频URL无效或不可访问，请尝试重新解析' : '图集为空或加载失败'}
                   </p>
+                  {isVideo && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      视频直链可能已过期，点击下方"重新解析"按钮获取新链接
+                    </p>
+                  )}
                 </div>
               </div>
             )}

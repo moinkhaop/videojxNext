@@ -53,6 +53,7 @@ export function PreviewActions({
 
   return (
     <div className={`space-y-4 ${className}`}>
+      {/* {{ AURA: Modify - 改进主要操作按钮，使重新解析更突出 }} */}
       {/* 主要操作按钮 */}
       <div className="flex flex-col sm:flex-row gap-3">
         {/* 确认并上传按钮 */}
@@ -75,12 +76,13 @@ export function PreviewActions({
           )}
         </Button>
 
+        {/* {{ AURA: Modify - 重新解析按钮改为default样式，增强视觉重要性 }} */}
         {/* 重新解析按钮 */}
         <Button 
-          variant="outline" 
           onClick={onReparse}
           disabled={isUploading}
-          className="sm:w-auto"
+          className="sm:w-auto bg-orange-500 hover:bg-orange-600 text-white"
+          size="lg"
         >
           <RotateCcw className="w-4 h-4 mr-2" />
           重新解析
@@ -111,8 +113,6 @@ export function PreviewActions({
           {isVideo ? '下载视频' : '下载图片'}
         </Button>
       </div>
-
-      {/* {{ AURA: Remove - 移除操作说明，简化界面 }} */}
 
       {/* 上传进度提示 */}
       {isUploading && (

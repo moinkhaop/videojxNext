@@ -20,6 +20,7 @@ export function Player({ mediaInfo }: PlayerProps) {
       {/* Video Player */}
       <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
         <VideoPreview
+          key={mediaInfo.url}
           videoUrl={mediaInfo.url!}
           thumbnail={mediaInfo.thumbnail}
           className="w-full h-full"

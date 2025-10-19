@@ -189,6 +189,7 @@ export function TwoColumnPreview({
               <div className="flex-1 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800 shadow-md">
                 {isVideo && mediaInfo.url ? (
                   <VideoPreview
+                    key={mediaInfo.url}
                     videoUrl={mediaInfo.url}
                     thumbnail={mediaInfo.thumbnail}
                     title={mediaInfo.title}

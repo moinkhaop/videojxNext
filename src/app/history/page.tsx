@@ -567,13 +567,33 @@ export default function HistoryPage() {
         {parsedInfo && (
           <div className="mb-6">
             {parsedInfo.mediaType === MediaType.VIDEO && parsedInfo.url && (
-              <div className="aspect-video rounded-lg overflow-hidden border border-border">
-                <VideoPreview
-                  videoUrl={parsedInfo.url}
-                  thumbnail={parsedInfo.cover || parsedInfo.thumbnail}
-                  title={parsedInfo.title}
-                  className="w-full h-full"
-                />
+              <div className="space-y-2">
+                <div className="aspect-video rounded-lg overflow-hidden border border-border">
+                  {/* {{ AURA: Modify - 添加key属性确保视频URL改变时组件重新渲染 }} */}
+                  <VideoPreview
+                    key={`${selectedRecord.id}-${parsedInfo.url}`}
+                    videoUrl={parsedInfo.url}
+                    thumbnail={parsedInfo.cover || parsedInfo.thumbnail}
+                    title={parsedInfo.title}
+                    className="w-full h-full"
+                  />
+                </div>
+                {selectedRecord.type === 'single' && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">
+                      视频无法播放？
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleRetryTask(selectedRecord)}
+                      className="h-7"
+                    >
+                      <RotateCcw className="w-3 h-3 mr-1" />
+                      重新解析
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -672,19 +692,24 @@ export default function HistoryPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => handleCopyUrl(task.videoUrl)}
+                  title="复制链接"
                 >
                   <Copy className="w-4 h-4" />
                 </Button>
-                {task.status === TaskStatus.FAILED && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleRetryTask(selectedRecord)}
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleRetryTask(selectedRecord)}
+                  title="重新解析视频"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </Button>
               </div>
+              {task.status === TaskStatus.SUCCESS && parsedInfo?.url && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  提示：视频直链可能有时效性，如无法播放请点击重新解析
+                </p>
+              )}
             </div>
           )}
 
