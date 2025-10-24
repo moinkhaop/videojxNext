@@ -25,7 +25,7 @@ import {
 import { ConversionTask, TaskStatus, VideoParserConfig, WebDAVConfig, PreviewState, MediaType } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
-import { TwoColumnPreview } from '@/components/preview'
+import { TwoColumnPreview } from '@/components/preview/TwoColumnPreview'
 import { ClipboardDetector } from '@/lib/clipboard'
 import Link from 'next/link'
 
@@ -344,13 +344,144 @@ function ConvertPageContent() {
     })
     setCurrentTask(null)
     setProgress(0)
-    
+
     // 自动重新解析（使用相同的链接和解析器）
     if (videoUrl.trim() && selectedParser) {
       // 使用setTimeout延迟执行，以确保状态已更新
       setTimeout(() => {
         handleParseAndPreview()
       }, 100)
+    }
+  }
+
+  // 直接上传功能：解析并直接上传，不显示预览
+  const handleDirectUpload = async () => {
+    if (!videoUrl.trim()) {
+      alert('请输入视频链接')
+      return
+    }
+
+    const extractedUrl = extractVideoLink(videoUrl)
+
+    if (!selectedParser) {
+      alert('请选择解析API')
+      return
+    }
+
+    if (!selectedWebDAV) {
+      alert('请选择WebDAV服务器')
+      return
+    }
+
+    const parser = parsers.find(p => p.id === selectedParser)
+    const webdav = webdavServers.find(s => s.id === selectedWebDAV)
+
+    if (!parser) {
+      alert('解析API配置信息错误')
+      return
+    }
+
+    if (!webdav) {
+      alert('WebDAV服务器配置信息错误')
+      return
+    }
+
+    setIsConverting(true)
+    setProgress(0)
+
+    if (extractedUrl !== videoUrl.trim()) {
+      console.log(`[直接上传] 从分享文本中提取到URL: ${extractedUrl}`)
+    }
+
+    // 创建转存任务
+    const task: ConversionTask = {
+      id: ConversionService.generateTaskId(),
+      videoUrl: extractedUrl,
+      status: TaskStatus.PARSING,
+      createdAt: new Date()
+    }
+
+    setCurrentTask(task)
+
+    try {
+      // 第一阶段：解析
+      setProgress(20)
+      console.log(`[直接上传] 开始解析视频: ${extractedUrl}`)
+
+      const parsedInfo = await ConversionService.parseOnly(extractedUrl, parser)
+
+      // 更新任务状态
+      setCurrentTask(prev => prev ? {
+        ...prev,
+        status: TaskStatus.PARSED,
+        parsedVideoInfo: parsedInfo,
+        videoTitle: parsedInfo.title
+      } : null)
+
+      setProgress(50)
+      console.log(`[直接上传] 解析成功: ${parsedInfo.title}`)
+
+      // 第二阶段：上传
+      setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
+      setProgress(60)
+
+      const filePath = await ConversionService.uploadParsedMedia(
+        parsedInfo,
+        webdav
+      )
+
+      // 更新任务状态为成功
+      const finalTask = {
+        ...task,
+        status: TaskStatus.SUCCESS,
+        parsedVideoInfo: parsedInfo,
+        videoTitle: parsedInfo.title,
+        completedAt: new Date(),
+        uploadResult: {
+          success: true,
+          filePath
+        }
+      }
+
+      setCurrentTask(finalTask)
+      setProgress(100)
+
+      console.log('直接上传成功:', filePath)
+
+      // 保存到历史记录
+      HistoryManager.addRecord({
+        id: ConversionService.generateTaskId(),
+        type: 'single',
+        task: finalTask,
+        createdAt: new Date()
+      })
+
+      // 直接上传完成，重置表单状态
+      setPreviewState({
+        isPreviewMode: false,
+        showPreview: false,
+        previewData: null
+      })
+
+      // 延迟重置任务状态，让用户看到成功提示
+      setTimeout(() => {
+        setCurrentTask(null)
+        setProgress(0)
+      }, 2000)
+
+    } catch (error) {
+      console.error('直接上传过程出现异常:', error)
+      setCurrentTask(prev => {
+        if (!prev) return null
+        return {
+          ...prev,
+          status: TaskStatus.FAILED,
+          error: error instanceof Error ? error.message : '直接上传过程发生未知错误',
+          completedAt: new Date()
+        }
+      })
+    } finally {
+      setIsConverting(false)
     }
   }
 
@@ -553,18 +684,32 @@ function ConvertPageContent() {
                 </div>
 
                 {/* 解析按钮 - 始终显示在底部 */}
-                <div className="pt-4">
-                  <Button
-                    onClick={handleParseAndPreview}
-                    disabled={isConverting || !videoUrl.trim() || !selectedParser || previewState.isPreviewMode}
-                    className="w-full bg-blue-600 hover:bg-blue-700"
-                  >
-                    {isConverting ? (
-                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />解析中...</>
-                    ) : (
-                      <><Eye className="w-4 h-4 mr-2" />解析预览</>
-                    )}
-                  </Button>
+                <div className="pt-4 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      onClick={handleParseAndPreview}
+                      disabled={isConverting || !videoUrl.trim() || !selectedParser || previewState.isPreviewMode}
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      {isConverting ? (
+                        <><Loader2 className="w-4 h-4 mr-2 animate-spin" />解析中...</>
+                      ) : (
+                        <><Eye className="w-4 h-4 mr-2" />解析预览</>
+                      )}
+                    </Button>
+
+                    <Button
+                      onClick={handleDirectUpload}
+                      disabled={isConverting || !videoUrl.trim() || !selectedParser || !selectedWebDAV}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      {isConverting ? (
+                        <><Loader2 className="w-4 h-4 mr-2 animate-spin" />上传中...</>
+                      ) : (
+                        <><Upload className="w-4 h-4 mr-2" />直接上传</>
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
