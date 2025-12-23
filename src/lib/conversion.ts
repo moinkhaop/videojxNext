@@ -7,6 +7,7 @@ import {
   WebDAVConfig, 
   ParsedVideoInfo, 
   MediaType, 
+  VideoParseResponse,
   PreviewParseResponse, 
   BatchInputMode, 
   ExtendedBatchTask, 
