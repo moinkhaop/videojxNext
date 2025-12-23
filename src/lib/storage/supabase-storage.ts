@@ -127,7 +127,7 @@ export class SupabaseStorageManager {
   async getHistory(): Promise<HistoryRecord[]> {
     try {
       const records = await getHistoryRecords()
-      return records.map(record => ({
+      return records.map((record: any) => ({
         ...record,
         createdAt: new Date(record.createdAt),
         task: {
@@ -173,7 +173,7 @@ export class SupabaseStorageManager {
   async getTags(): Promise<Tag[]> {
     try {
       const tags = await getTags()
-      return tags.map(tag => ({
+      return tags.map((tag: any) => ({
         ...tag,
         createdAt: new Date(tag.createdAt)
       }))

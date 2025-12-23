@@ -1,41 +1,19 @@
 import 'server-only'
-import { createClient } from './server'
-import type { ServerCookieStore } from './server-cookies'
 
-// 更新用户元数据（姓名、头像等）
-export async function updateUserMetadata(updates: {
-  full_name?: string
-  avatar_url?: string
-}, request?: Request, cookieStore?: ServerCookieStore) {
-  const supabase = createClient(request, cookieStore)
-  
-  const { data, error } = await supabase.auth.updateUser({
-    data: updates
-  })
+// TODO: 暂时注释 Supabase 用户资料相关功能。
 
-  if (error) {
-    throw new Error(error.message)
-  }
-
-  return data
-}
-
-// 更新用户密码
-export async function updateUserPassword(
-  newPassword: string,
-  request?: Request,
-  cookieStore?: ServerCookieStore
+export async function updateUserMetadata(
+  _updates: { full_name?: string; avatar_url?: string },
+  _request?: Request,
+  _cookieStore?: unknown
 ) {
-  const supabase = createClient(request, cookieStore)
-  
-  const { data, error } = await supabase.auth.updateUser({
-    password: newPassword
-  })
-
-  if (error) {
-    throw new Error(error.message)
-  }
-
-  return data
+  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
 }
 
+export async function updateUserPassword(
+  _newPassword: string,
+  _request?: Request,
+  _cookieStore?: unknown
+) {
+  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+}

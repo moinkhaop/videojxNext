@@ -62,7 +62,9 @@ export function UserMenu() {
 
   // 获取用户邮箱的首字母作为头像
   const userInitial = user.email?.charAt(0).toUpperCase() || 'U'
-  const userName = user.user_metadata?.full_name || user.email || ''
+  // TODO: 暂时禁用 user_metadata
+  const userName = user.email || ''
+  const avatarUrl = '' // user.user_metadata?.avatar_url
 
   return (
     <DropdownMenu>
@@ -72,7 +74,7 @@ export function UserMenu() {
           className="relative h-10 w-10 rounded-full border-2 border-primary hover:border-primary hover:bg-primary/5 transition-all shadow-sm hover:shadow-md p-0"
         >
           <EnhancedAvatar
-            src={user.user_metadata?.avatar_url}
+            src={avatarUrl}
             alt={userName}
             fallbackText={userInitial}
             size="md"
@@ -86,7 +88,7 @@ export function UserMenu() {
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium leading-none">
-              {user.user_metadata?.full_name || user.email}
+              {user.email}
             </p>
             <p className="text-xs leading-none text-muted-foreground">
               {user.email}

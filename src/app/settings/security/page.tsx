@@ -266,11 +266,8 @@ export default function SecurityPage() {
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-medium">邮箱验证状态</div>
                   <div className="text-sm">
-                    {user.email_confirmed_at ? (
-                      <span className="text-green-600">已验证</span>
-                    ) : (
-                      <span className="text-orange-600">未验证</span>
-                    )}
+                    {/* TODO: 暂时禁用 Supabase user 属性 */}
+                    <span className="text-orange-600">未验证</span>
                   </div>
                 </div>
               </div>
@@ -279,7 +276,8 @@ export default function SecurityPage() {
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-medium">注册时间</div>
                   <div className="text-sm">
-                    {user.created_at ? new Date(user.created_at).toLocaleString() : '未知'}
+                    {/* TODO: 暂时禁用 Supabase user 属性 */}
+                    未知
                   </div>
                 </div>
               </div>
@@ -288,7 +286,8 @@ export default function SecurityPage() {
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-medium">最后登录时间</div>
                   <div className="text-sm">
-                    {user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '未知'}
+                    {/* TODO: 暂时禁用 Supabase user 属性 */}
+                    未知
                   </div>
                 </div>
               </div>

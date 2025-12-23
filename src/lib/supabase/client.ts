@@ -1,3 +1,5 @@
+// TODO: 暂时注释 Supabase 客户端功能
+/*
 import { createBrowserClient, type CookieOptions } from '@supabase/ssr'
 
 // 统一构造 cookie 字符串，避免重复拼接逻辑
@@ -124,3 +126,11 @@ export const createClient = () => {
 
 // 导出单例实例
 export const supabase = createClient()
+*/
+
+// 临时导出空对象，防止编译错误
+export const createClient = () => {
+  throw new Error('Supabase 功能已暂时禁用')
+}
+
+export const supabase = null as any

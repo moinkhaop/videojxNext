@@ -33,8 +33,11 @@ export default function ProfilePage() {
   useEffect(() => {
     if (user) {
       setEmail(user.email || '')
-      setFullName(user.user_metadata?.full_name || '')
-      setAvatarUrl(user.user_metadata?.avatar_url || '')
+      // TODO: 暂时注释 user_metadata，Supabase 功能已禁用
+      // setFullName(user.user_metadata?.full_name || '')
+      // setAvatarUrl(user.user_metadata?.avatar_url || '')
+      setFullName('')
+      setAvatarUrl('')
     }
   }, [user])
 

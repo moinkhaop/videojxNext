@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest, NextResponse as NextResponseType } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
+// TODO: 暂时注释 Supabase 功能
+// import { createServerClient } from '@supabase/ssr'
 
 // 受保护的路由列表
 const protectedRoutes = [
@@ -21,10 +22,14 @@ const authRoutes = [
   '/auth/register'
 ]
 
-// 临时开关：允许在不配置 Supabase 的情况下直接跳过鉴权
-const SUPABASE_AUTH_ENABLED = process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH === 'true'
+// 临时开关：禁用 Supabase 认证
+const SUPABASE_AUTH_ENABLED = false // process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH === 'true'
 
 export async function middleware(request: NextRequest) {
+  // TODO: 暂时完全禁用 Supabase 认证
+  return NextResponse.next()
+
+  /* 原有的 Supabase 认证逻辑
   if (!SUPABASE_AUTH_ENABLED) {
     return NextResponse.next()
   }
@@ -32,10 +37,10 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // 仅对需要认证的路由进行 Supabase 会话校验
-  const isProtectedRoute = protectedRoutes.some(route => 
+  const isProtectedRoute = protectedRoutes.some(route =>
     pathname.startsWith(route)
   )
-  const isAuthRoute = authRoutes.some(route => 
+  const isAuthRoute = authRoutes.some(route =>
     pathname.startsWith(route)
   )
 
@@ -120,6 +125,7 @@ export async function middleware(request: NextRequest) {
 
     return response
   }
+  */
 }
 
 export const config = {

@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { signIn } from '@/lib/supabase/auth-server'
 import { createServerCookieStore } from '@/lib/supabase/server-cookies'
+import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
 export async function POST(request: NextRequest) {
+  if (!SUPABASE_ENABLED) {
+    return NextResponse.json(
+      { error: 'Supabase 功能已暂时禁用' },
+      { status: 503 }
+    )
+  }
+
   const cookieStore = createServerCookieStore(request)
   const respond = (body: unknown, init?: ResponseInit) => {
     const response = NextResponse.json(body, init)
@@ -24,13 +32,15 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[API] 调用 Supabase 登录...')
-    const data = await signIn(email, password, request, cookieStore)
-    console.log('[API] 登录成功，用户ID:', data.user?.id)
+    // TODO: Supabase 功能已禁用，直接抛出错误
+    await signIn(email, password)
+    // const data = await signIn(email, password)
+    // console.log('[API] 登录成功，用户ID:', data.user?.id)
 
     return respond({
       success: true,
       message: '登录成功',
-      user: data.user
+      user: null  // TODO: Supabase 禁用期间返回 null
     })
 
   } catch (error) {

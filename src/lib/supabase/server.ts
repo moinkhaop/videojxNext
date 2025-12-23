@@ -1,3 +1,5 @@
+// TODO: 暂时注释 Supabase 服务端功能
+/*
 import { createServerClient } from '@supabase/ssr'
 import { createServerCookieStore, ServerCookieStore } from './server-cookies'
 
@@ -69,4 +71,10 @@ function safelyDecodeCookieValue(value: string) {
   } catch {
     return value
   }
+}
+*/
+
+// 临时导出空函数，防止编译错误
+export function createClient() {
+  throw new Error('Supabase 服务端功能已暂时禁用')
 }
