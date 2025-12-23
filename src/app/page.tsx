@@ -1,9 +1,28 @@
+'use client'
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Video, Settings, History, Plus, Sparkles, Zap, Shield, Layers } from 'lucide-react'
+import { useAuth } from '@/contexts/auth-context'
+import { Video, Settings, History, Plus, Sparkles, Zap, Shield, Layers, User, Mail } from 'lucide-react'
 
 export default function HomePage() {
+  const { user, loading } = useAuth()
+
+  // 如果正在加载认证状态，显示加载中
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+        <div className="text-center">
+          <div className="inline-block p-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-xl">
+            <Video className="w-16 h-16 text-white animate-pulse" />
+          </div>
+          <p className="mt-4 text-muted-foreground">正在加载中...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       <div className="container mx-auto px-4 py-8 max-w-7xl">
@@ -19,6 +38,11 @@ export default function HomePage() {
           </h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto leading-relaxed">
             现代化的视频分享链接转存工具，支持多种解析API和WebDAV服务器，轻松实现视频链接的批量处理和云端存储
+            {user && (
+              <span className="block mt-2 text-sm text-primary">
+                欢迎回来，{user.email}
+              </span>
+            )}
           </p>
         </div>
 
@@ -153,9 +177,9 @@ export default function HomePage() {
                 <div className="inline-block p-3 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-xl mb-4 shadow-md">
                   <Shield className="w-8 h-8 text-white" />
                 </div>
-                <h4 className="text-lg font-bold mb-2">数据持久化</h4>
+                <h4 className="text-lg font-bold mb-2">用户认证</h4>
                 <p className="text-sm text-muted-foreground">
-                  本地存储配置和历史记录，支持数据导出导入
+                  {user ? '已登录，数据云端同步' : '支持邮箱密码登录，数据隔离存储'}
                 </p>
               </CardContent>
             </Card>

@@ -708,8 +708,22 @@ export class ConversionService {
         throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
       }
       
-      const result = JSON.parse(responseText)
-      
+      if (!response.ok) {
+        const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
+        throw new Error(upstreamError
+          ? `解析接口调用失败 (${response.status}): ${upstreamError}`
+          : `解析接口调用失败 (HTTP ${response.status})`)
+      }
+
+      let result: VideoParseResponse
+      try {
+        result = JSON.parse(responseText)
+      } catch (parseError) {
+        console.error('[转存] 无法解析解析API响应JSON:', parseError)
+        const snippet = responseText.substring(0, 300)
+        throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
+      }
+
       if (!result.success) {
         throw new Error(result.error || '视频解析失败')
       }
@@ -815,5 +829,33 @@ export class ConversionService {
     }
     
     return null
+  }
+
+  private static extractErrorMessageFromResponse(body: string): string | null {
+    if (!body) {
+      return null
+    }
+
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed && typeof parsed === 'object') {
+        const fields = ['error', 'message', 'msg', 'detail', 'reason'] as const
+        for (const field of fields) {
+          const value = (parsed as Record<string, unknown>)[field]
+          if (typeof value === 'string' && value.trim()) {
+            return value.trim()
+          }
+        }
+      }
+    } catch (error) {
+      // body不是JSON，忽略解析错误
+    }
+
+    const sanitized = body.replace(/\s+/g, ' ').trim()
+    if (!sanitized) {
+      return null
+    }
+
+    return sanitized.length > 300 ? `${sanitized.substring(0, 300)}…` : sanitized
   }
 }

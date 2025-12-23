@@ -28,9 +28,8 @@ function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileNam
   if (webdavConfig.basePath) {
     const normalizedBasePath = webdavConfig.basePath.replace(/^\/+|\/+$/g, '')
     if (normalizedBasePath) {
-      // 对basePath进行URL编码
-      const encodedBasePath = encodeURIComponent(normalizedBasePath)
-      fullPath = `${fullPath}/${encodedBasePath}`
+      // 不对basePath进行整体编码，保持路径结构
+      fullPath = `${fullPath}/${normalizedBasePath}`
     }
   }
   
@@ -38,17 +37,53 @@ function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileNam
   if (folderPath) {
     const normalizedFolderPath = folderPath.replace(/^\/+|\/+$/g, '')
     if (normalizedFolderPath) {
-      // 对folderPath进行URL编码
-      const encodedFolderPath = encodeURIComponent(normalizedFolderPath)
-      fullPath = `${fullPath}/${encodedFolderPath}`
+      // 不对folderPath进行整体编码，保持路径结构
+      fullPath = `${fullPath}/${normalizedFolderPath}`
     }
   }
   
-  // 添加文件名并进行URL编码
-  const encodedFileName = encodeURIComponent(fileName)
+  // 只对文件名中的特殊字符进行编码，保留中文字符
+  // 使用更温和的编码方式，只编码必要的字符
+  const safeFileName = fileName.replace(/[<>:"/\\|?*]/g, '_')
+  
+  // 更精确的编码逻辑，只编码真正需要编码的字符
+  let encodedFileName = ''
+  for (let i = 0; i < safeFileName.length; i++) {
+    const char = safeFileName[i]
+    const code = char.charCodeAt(0)
+    
+    // 保留ASCII字母数字、基本标点和中文字符
+    if ((code >= 48 && code <= 57) || // 0-9
+        (code >= 65 && code <= 90) || // A-Z
+        (code >= 97 && code <= 122) || // a-z
+        code === 45 || code === 46 || code === 95 || // -._
+        (code >= 0x4e00 && code <= 0x9fa5)) { // 中文字符
+      encodedFileName += char
+    } else {
+      // 其他字符进行编码
+      try {
+        // 检查字符是否为有效的Unicode字符
+        if (code === 0xFFFD || // 替换字符
+            (code >= 0xD800 && code <= 0xDFFF) || // 代理区域
+            code < 0x20) { // 控制字符
+          // 对于无效字符，直接替换为下划线
+          encodedFileName += '_'
+          console.warn(`[WebDAV] 检测到无效字符，已替换: "${char}" (代码: ${code})`)
+        } else {
+          // 对于有效字符，尝试编码
+          encodedFileName += encodeURIComponent(char)
+        }
+      } catch (e: any) {
+        // 如果编码失败，替换为下划线
+        encodedFileName += '_'
+        console.warn(`[WebDAV] 字符编码失败，已替换: "${char}" (错误: ${e?.message || e})`)
+      }
+    }
+  }
+  
   const finalPath = `${fullPath}/${encodedFileName}`
   
-  console.log(`[WebDAV] 构建路径: 原始文件名="${fileName}", 编码后="${encodedFileName}"`)
+  console.log(`[WebDAV] 构建路径: 原始文件名="${fileName}", 安全处理后="${safeFileName}", 编码后="${encodedFileName}"`)
   console.log(`[WebDAV] 最终路径: ${finalPath}`)
   
   return finalPath
@@ -273,14 +308,16 @@ export async function POST(request: NextRequest) {
 
         // 构建WebDAV上传路径
         const uploadPath = buildWebDAVPath(webdavConfig, folderPath, fileName)
+        console.log(`[WebDAV] 完整上传路径: ${uploadPath}`)
 
         // 构建认证头
-        const auth = btoa(`${webdavConfig.username}:${webdavConfig.password}`)
+        const auth = Buffer.from(`${webdavConfig.username}:${webdavConfig.password}`).toString('base64')
         const uploadHeaders = {
           'Authorization': `Basic ${auth}`,
           'Content-Type': 'application/octet-stream',
           'Content-Length': videoBuffer.byteLength.toString()
         }
+        console.log(`[WebDAV] 认证信息: 用户名=${webdavConfig.username}, 密码长度=${webdavConfig.password.length}`)
 
         // 上传到WebDAV服务器
         const uploadResponse = await fetch(uploadPath, {

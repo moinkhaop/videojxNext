@@ -12,155 +12,155 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    console.log(`[API] 解析视频链接: ${videoUrl}`)
-    console.log(`[API] 使用解析器: ${parserConfig.name}`)
+    if (!parserConfig.apiUrl || typeof parserConfig.apiUrl !== 'string' || !parserConfig.apiUrl.trim()) {
+      return NextResponse.json({
+        success: false,
+        error: '解析API地址无效或未配置'
+      }, { status: 400 })
+    }
 
-    // 构建请求到第三方解析API
-    let finalApiUrl = parserConfig.apiUrl;
-    let method = 'POST'; // 默认使用POST
+    const cleanedVideoUrl = videoUrl.trim()
+    const parserName = parserConfig.name?.trim() || '自定义解析器'
+    const urlParamName = parserConfig.urlParamName?.trim() || 'url'
+
+    let upstreamUrl: URL
+    try {
+      upstreamUrl = new URL(parserConfig.apiUrl)
+    } catch (urlError) {
+      console.error('[API] 解析API地址格式错误:', urlError)
+      return NextResponse.json({
+        success: false,
+        error: '解析API地址必须是完整的 http:// 或 https:// URL'
+      }, { status: 400 })
+    }
+
+    console.log(`[API] 解析视频链接: ${cleanedVideoUrl}`)
+    console.log(`[API] 使用解析器: ${parserName}`)
+
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 
-    // 判断是否需要使用GET请求（根据配置或API URL格式）
-    const isGetRequest = 
-      parserConfig.requestMethod === 'GET' ||
-      parserConfig.useGetMethod === true ||
-      parserConfig.apiUrl.includes('?url=') || 
-      parserConfig.apiUrl.includes('jxcxin') ||
-      parserConfig.apiUrl.includes('apis.') ||
-      parserConfig.name.toLowerCase().includes('get');
-
-    // 根据API类型构建最终请求
-    if (isGetRequest) {
-      method = 'GET';
-      
-      // 确定URL参数名称
-      const urlParamName = parserConfig.urlParamName || 'url';
-      
-      // 处理特殊情况：jxcxin API
-      if (parserConfig.apiUrl.includes('jxcxin')) {
-        // 对于jxcxin API，确保格式为 https://apis.jxcxin.cn/api/douyin?url=视频地址
-        if (parserConfig.apiUrl.endsWith('?url=')) {
-          // URL已经包含参数名和等号
-          finalApiUrl = `${parserConfig.apiUrl}${encodeURIComponent(videoUrl)}`;
-        } else if (parserConfig.apiUrl.includes('?')) {
-          // URL包含其他参数
-          finalApiUrl = `${parserConfig.apiUrl}&url=${encodeURIComponent(videoUrl)}`;
-        } else {
-          // URL需要添加参数
-          finalApiUrl = `${parserConfig.apiUrl}?url=${encodeURIComponent(videoUrl)}`;
-        }
-      } 
-      // 通用GET请求处理
-      else {
-        // 检查API URL是否已经包含url参数
-        if (parserConfig.apiUrl.endsWith('=')) {
-          // URL已经包含参数名和等号
-          finalApiUrl = `${parserConfig.apiUrl}${encodeURIComponent(videoUrl)}`;
-        } else if (parserConfig.apiUrl.includes('?')) {
-          // URL包含其他参数
-          finalApiUrl = `${parserConfig.apiUrl}&${urlParamName}=${encodeURIComponent(videoUrl)}`;
-        } else {
-          // URL需要添加参数
-          finalApiUrl = `${parserConfig.apiUrl}?${urlParamName}=${encodeURIComponent(videoUrl)}`;
+    if (parserConfig.customHeaders) {
+      for (const [key, value] of Object.entries(parserConfig.customHeaders)) {
+        if (typeof key === 'string' && typeof value === 'string' && key.trim()) {
+          headers[key] = value
         }
       }
-      
-      console.log(`[API] 使用GET请求: ${finalApiUrl}`);
-    } else {
-      // POST请求
-      headers['Content-Type'] = 'application/json';
-      console.log(`[API] 使用POST请求: ${finalApiUrl}`);
     }
 
-    // 如果有API密钥，添加到headers
+    const headerKeys = Object.keys(headers)
+    const hasContentTypeHeader = headerKeys.some(key => key.toLowerCase() === 'content-type')
+    const hasAuthorizationHeader = headerKeys.some(key => key.toLowerCase() === 'authorization')
+    const hasApiKeyHeader = headerKeys.some(key => key.toLowerCase() === 'x-api-key')
+
     if (parserConfig.apiKey) {
-      headers['Authorization'] = `Bearer ${parserConfig.apiKey}`
-      // 或者根据具体API的要求设置
-      headers['X-API-Key'] = parserConfig.apiKey
+      if (!hasAuthorizationHeader) {
+        headers['Authorization'] = `Bearer ${parserConfig.apiKey}`
+      }
+      if (!hasApiKeyHeader) {
+        headers['X-API-Key'] = parserConfig.apiKey
+      }
     }
 
-    // 构建请求选项
+    const configuredMethod = parserConfig.requestMethod?.toUpperCase()
+    const shouldUseGet = configuredMethod === 'GET'
+      || (!configuredMethod && (
+        parserConfig.useGetMethod === true ||
+        upstreamUrl.searchParams.has(urlParamName) ||
+        parserConfig.apiUrl.includes('?url=') ||
+        parserName.toLowerCase().includes('get')
+      ))
+
+    const method: 'GET' | 'POST' = shouldUseGet ? 'GET' : 'POST'
+
+    if (method === 'GET') {
+      const queryParams = new URLSearchParams()
+      if (parserConfig.customQueryParams) {
+        Object.entries(parserConfig.customQueryParams).forEach(([key, value]) => {
+          if (typeof key === 'string' && value !== undefined && value !== null) {
+            queryParams.set(key, String(value))
+          }
+        })
+      }
+      queryParams.set(urlParamName, cleanedVideoUrl)
+
+      queryParams.forEach((value, key) => {
+        upstreamUrl.searchParams.set(key, value)
+      })
+
+      console.log(`[API] 使用GET请求: ${upstreamUrl.toString()}`)
+    }
+
+    let requestBody: string | undefined
+    if (method === 'POST') {
+      if (!hasContentTypeHeader) {
+        headers['Content-Type'] = 'application/json'
+      }
+
+      const bodyPayload = {
+        ...(parserConfig.customBodyParams || {}),
+        [urlParamName]: cleanedVideoUrl
+      }
+
+      requestBody = JSON.stringify(bodyPayload)
+      console.log(`[API] 使用POST请求: ${upstreamUrl.toString()}`)
+    }
+
+    const finalApiUrl = upstreamUrl.toString()
+
     const requestOptions: RequestInit = {
       method,
       headers,
-      // 只有POST请求才需要请求体
-      ...(method === 'POST' && {
-        body: JSON.stringify({
-          url: videoUrl,
-          // 可以根据不同的API添加不同的参数
-        })
-      })
-    };
+      ...(method === 'POST' && requestBody ? { body: requestBody } : {})
+    }
 
-    console.log(`[API] 最终请求URL: ${finalApiUrl.substring(0, 100)}${finalApiUrl.length > 100 ? '...' : ''}`);
-    console.log(`[API] 请求方法: ${method}`);
-
+    console.log(`[API] 最终请求URL: ${finalApiUrl.substring(0, 100)}${finalApiUrl.length > 100 ? '...' : ''}`)
+    console.log(`[API] 请求方法: ${method}`)
     // 添加超时控制
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
-    
-    let response;
+
+    let response: Response
     try {
       response = await fetch(finalApiUrl, {
         ...requestOptions,
         signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        console.error(`[API] 解析API返回错误: ${response.status} ${response.statusText}`)
-        return NextResponse.json({
-          success: false,
-          error: `解析API返回错误: ${response.status}`
-        }, { status: response.status })
-      }
+      })
     } catch (fetchError) {
-      clearTimeout(timeoutId);
-      console.error('[API] 请求失败:', fetchError instanceof Error ? fetchError.message : String(fetchError));
+      clearTimeout(timeoutId)
+      console.error('[API] 请求失败:', fetchError instanceof Error ? fetchError.message : String(fetchError))
       return NextResponse.json({
         success: false,
         error: `请求解析API失败: ${fetchError instanceof Error ? fetchError.message : '网络错误'}`
       }, { status: 500 })
     }
 
-    let data;
-    try {
-      data = await response.json();
-      console.log('[API] 成功获取响应:', JSON.stringify(data).substring(0, 500));
-    } catch (jsonError) {
-      console.error('[API] 解析JSON响应失败:', jsonError instanceof Error ? jsonError.message : String(jsonError));
-      
-      // 尝试获取文本响应
-      try {
-        const textResponse = await response.text();
-        console.log('[API] 文本响应:', textResponse.substring(0, 500));
-        
-        // 尝试从文本中提取可能的JSON
-        if (textResponse.includes('{') && textResponse.includes('}')) {
-          try {
-            const jsonStart = textResponse.indexOf('{');
-            const jsonEnd = textResponse.lastIndexOf('}') + 1;
-            const jsonPart = textResponse.substring(jsonStart, jsonEnd);
-            data = JSON.parse(jsonPart);
-            console.log('[API] 从文本中提取JSON成功');
-          } catch (e) {
-            console.error('[API] 从文本中提取JSON失败');
-            data = { text: textResponse };
-          }
-        } else {
-          data = { text: textResponse };
-        }
-      } catch (textError) {
-        return NextResponse.json({
-          success: false,
-          error: '无法解析API响应'
-        }, { status: 500 })
-      }
+    clearTimeout(timeoutId)
+
+    const rawBody = await response.text()
+    console.log(`[API] 上游响应状态: ${response.status}, 内容长度: ${rawBody.length}`)
+
+    if (!response.ok) {
+      const upstreamMessage = extractUpstreamErrorMessage(rawBody)
+      console.error(`[API] 解析API返回错误: ${response.status} ${upstreamMessage}`)
+      return NextResponse.json({
+        success: false,
+        error: `${parserName} 返回错误 (${response.status}): ${upstreamMessage || '请求失败'}`
+      }, { status: response.status })
     }
-    console.log(`[API] 解析结果:`, data)
+
+    const data = safeParseJsonBody(rawBody)
+
+    if (!data) {
+      console.error('[API] 无法将上游响应解析为JSON')
+      return NextResponse.json({
+        success: false,
+        error: '解析API返回了非JSON响应'
+      }, { status: 502 })
+    }
+
+    console.log('[API] 成功获取响应片段:', previewPayloadForLog(data))
 
     // 根据不同的API返回格式，标准化数据结构
     let parsedInfo: ParsedVideoInfo
@@ -465,6 +465,72 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(mockResult)
 }
 
+function safeParseJsonBody(body: string): any | null {
+  if (!body || !body.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(body)
+  } catch (error) {
+    const start = body.indexOf('{')
+    const end = body.lastIndexOf('}')
+    if (start !== -1 && end !== -1 && end > start) {
+      try {
+        return JSON.parse(body.substring(start, end + 1))
+      } catch (innerError) {
+        console.error('[API] 无法从响应文本中提取JSON:', innerError)
+      }
+    }
+  }
+
+  return null
+}
+
+function extractUpstreamErrorMessage(body: string): string {
+  const parsed = safeParseJsonBody(body)
+  if (parsed && typeof parsed === 'object') {
+    const possibleKeys = ['error', 'message', 'msg', 'detail', 'reason']
+    for (const key of possibleKeys) {
+      const value = (parsed as Record<string, unknown>)[key]
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim()
+      }
+    }
+  }
+
+  return sanitizeTextSnippet(body)
+}
+
+function sanitizeTextSnippet(text: string, maxLength = 200): string {
+  if (!text) return ''
+  const condensed = text.replace(/\s+/g, ' ').trim()
+  if (!condensed) {
+    return ''
+  }
+  return condensed.length > maxLength
+    ? `${condensed.substring(0, maxLength)}…`
+    : condensed
+}
+
+function previewPayloadForLog(payload: unknown): string {
+  if (payload == null) {
+    return ''
+  }
+
+  if (typeof payload === 'string') {
+    return sanitizeTextSnippet(payload)
+  }
+
+  try {
+    const serialized = JSON.stringify(payload)
+    return serialized.length > 500 ? `${serialized.substring(0, 500)}…` : serialized
+  } catch (error) {
+    console.error('[API] 无法序列化上游响应用于日志:', error)
+    return '[unserializable payload]'
+  }
+}
+
 // {{ AURA: Add - 智能媒体类型检测函数 }}
 function detectMediaTypeAndExtractData(dataSource: any): {
   mediaType: MediaType,
@@ -578,3 +644,4 @@ function extractDescription(dataSource: any, fallbackTitle?: string): string | u
   // 如果没有找到描述，使用标题作为备用
   return fallbackTitle
 }
+

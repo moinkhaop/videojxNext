@@ -141,6 +141,9 @@ temp/
 # Logs
 *.log
 
+# Documentation artifacts
+*.md
+
 # Package manager lock files (optional - keep one)
 # package-lock.json
 # yarn.lock
