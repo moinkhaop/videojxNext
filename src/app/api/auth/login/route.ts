@@ -32,15 +32,13 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[API] 调用 Supabase 登录...')
-    // TODO: Supabase 功能已禁用，直接抛出错误
-    await signIn(email, password)
-    // const data = await signIn(email, password)
-    // console.log('[API] 登录成功，用户ID:', data.user?.id)
+    const data = await signIn(email, password, request, cookieStore)
+    console.log('[API] 登录成功，用户ID:', data.user?.id)
 
     return respond({
       success: true,
       message: '登录成功',
-      user: null  // TODO: Supabase 禁用期间返回 null
+      user: data.user
     })
 
   } catch (error) {

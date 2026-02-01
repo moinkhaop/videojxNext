@@ -1,6 +1,5 @@
-// TODO: 暂时注释 Supabase 客户端功能
-/*
 import { createBrowserClient, type CookieOptions } from '@supabase/ssr'
+import { assertSupabaseEnabled } from './enabled'
 
 // 统一构造 cookie 字符串，避免重复拼接逻辑
 const buildCookieString = (name: string, value: string, options: CookieOptions = {}): string => {
@@ -67,10 +66,25 @@ const normalizeBrowserCookieOptions = (options: CookieOptions = {}): CookieOptio
 }
 
 // 创建客户端 Supabase 实例（用于浏览器环境）
+let cachedClient: ReturnType<typeof createBrowserClient> | null = null
+
 export const createClient = () => {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  assertSupabaseEnabled()
+
+  if (cachedClient) {
+    return cachedClient
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('缺少 Supabase 环境变量：NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY')
+  }
+
+  cachedClient = createBrowserClient(
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         // {{ AURA: Modify - 仅在浏览器读取 cookie 值 }}
@@ -124,13 +138,9 @@ export const createClient = () => {
   )
 }
 
-// 导出单例实例
-export const supabase = createClient()
-*/
-
-// 临时导出空对象，防止编译错误
-export const createClient = () => {
-  throw new Error('Supabase 功能已暂时禁用')
-}
-
-export const supabase = null as any
+// 导出一个懒加载的代理，避免模块加载时就强制初始化。
+export const supabase = new Proxy({} as any, {
+  get(_target, prop) {
+    return (createClient() as any)[prop]
+  },
+})

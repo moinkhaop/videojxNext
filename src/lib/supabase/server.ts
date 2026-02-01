@@ -1,25 +1,35 @@
-// TODO: 暂时注释 Supabase 服务端功能
-/*
+import 'server-only'
+
 import { createServerClient } from '@supabase/ssr'
 import { createServerCookieStore, ServerCookieStore } from './server-cookies'
+import { assertSupabaseEnabled } from './enabled'
 
 // {{ AURA: Modify - 支持完整的 Supabase Cookie 生命周期处理 }}
 export function createClient(request?: Request, cookieStore?: ServerCookieStore) {
+  assertSupabaseEnabled()
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('缺少 Supabase 环境变量：NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY')
+  }
+
   const store = cookieStore ?? (request ? createServerCookieStore(request) : undefined)
   const fallbackState = parseCookieHeader(request?.headers.get('cookie') ?? null)
 
   const cookies = {
-    async get(name: string) {
+    get(name: string) {
       return store ? store.get(name) : fallbackState.get(name)
     },
-    async set(name: string, value: string, options?: Parameters<ServerCookieStore['set']>[2]) {
+    set(name: string, value: string, options?: Parameters<ServerCookieStore['set']>[2]) {
       if (store) {
         store.set(name, value, options)
         return
       }
       fallbackState.set(name, value)
     },
-    async remove(name: string, options?: Parameters<ServerCookieStore['remove']>[1]) {
+    remove(name: string, options?: Parameters<ServerCookieStore['remove']>[1]) {
       if (store) {
         store.remove(name, options)
         return
@@ -28,13 +38,7 @@ export function createClient(request?: Request, cookieStore?: ServerCookieStore)
     },
   }
 
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies,
-    }
-  )
+  return createServerClient(supabaseUrl, supabaseAnonKey, { cookies })
 }
 
 function parseCookieHeader(header: string | null) {
@@ -71,10 +75,4 @@ function safelyDecodeCookieValue(value: string) {
   } catch {
     return value
   }
-}
-*/
-
-// 临时导出空函数，防止编译错误
-export function createClient() {
-  throw new Error('Supabase 服务端功能已暂时禁用')
 }

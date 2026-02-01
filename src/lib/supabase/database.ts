@@ -1,59 +1,343 @@
-// TODO: 暂时注释 Supabase 数据库功能。
-// 说明：这些函数保留导出以避免编译错误；当前会直接报"功能禁用"。
+import { createClient } from './client'
+import { assertSupabaseEnabled } from './enabled'
 
-const disabled = (): never => {
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+async function requireUserId() {
+  assertSupabaseEnabled()
+
+  const supabase = createClient()
+  const { data, error } = await supabase.auth.getUser()
+  if (error || !data.user) {
+    throw new Error('用户未登录')
+  }
+  return data.user.id
 }
 
 // 用户配置相关
 export async function getUserConfig(): Promise<any> {
-  return disabled()
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data, error } = await supabase
+    .from('user_configs')
+    .select('id, config_data, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    throw error
+  }
+
+  if (data?.config_data) {
+    return data.config_data
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from('user_configs')
+    .insert({ user_id: userId, config_data: {} })
+    .select('config_data')
+    .single()
+
+  if (insertError) {
+    throw insertError
+  }
+
+  return inserted.config_data ?? {}
 }
 
-export async function updateUserConfig(_configData: any): Promise<any> {
-  return disabled()
+export async function updateUserConfig(configData: any): Promise<any> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data: existing, error: existingError } = await supabase
+    .from('user_configs')
+    .select('id')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) {
+    throw existingError
+  }
+
+  if (existing?.id) {
+    const { data, error } = await supabase
+      .from('user_configs')
+      .update({ config_data: configData })
+      .eq('id', existing.id)
+      .select('config_data')
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    return data.config_data
+  }
+
+  const { data, error } = await supabase
+    .from('user_configs')
+    .insert({ user_id: userId, config_data: configData })
+    .select('config_data')
+    .single()
+
+  if (error) {
+    throw error
+  }
+
+  return data.config_data
 }
 
 // 历史记录相关
-export async function getHistoryRecords(_limit = 100, _offset = 0): Promise<any[]> {
-  return disabled()
+export async function getHistoryRecords(limit = 100, offset = 0): Promise<any[]> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const rangeFrom = Math.max(0, offset)
+  const rangeTo = Math.max(rangeFrom, rangeFrom + Math.max(0, limit) - 1)
+
+  const { data, error } = await supabase
+    .from('history_records')
+    .select('id, record_data, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .range(rangeFrom, rangeTo)
+
+  if (error) {
+    throw error
+  }
+
+  return (data ?? []).map((row: any) => {
+    const record = row.record_data ?? {}
+    return {
+      ...record,
+      id: record.id ?? row.id,
+      createdAt: record.createdAt ?? row.created_at,
+      updatedAt: row.updated_at,
+    }
+  })
 }
 
-export async function addHistoryRecord(_recordData: any): Promise<void> {
-  return disabled()
+export async function addHistoryRecord(recordData: any): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { error } = await supabase
+    .from('history_records')
+    .insert({ user_id: userId, record_data: recordData })
+
+  if (error) {
+    throw error
+  }
 }
 
-export async function updateHistoryRecord(_id: string, _updates: any): Promise<void> {
-  return disabled()
+export async function updateHistoryRecord(id: string, updates: any): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data: existing, error: existingError } = await supabase
+    .from('history_records')
+    .select('record_data')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .single()
+
+  if (existingError) {
+    throw existingError
+  }
+
+  const merged = { ...(existing?.record_data ?? {}), ...(updates ?? {}) }
+
+  const { error } = await supabase
+    .from('history_records')
+    .update({ record_data: merged })
+    .eq('id', id)
+    .eq('user_id', userId)
+
+  if (error) {
+    throw error
+  }
 }
 
-export async function deleteHistoryRecord(_id: string): Promise<void> {
-  return disabled()
+export async function deleteHistoryRecord(id: string): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { error } = await supabase
+    .from('history_records')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+
+  if (error) {
+    throw error
+  }
 }
 
 // 标签相关
 export async function getTags(): Promise<any[]> {
-  return disabled()
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data, error } = await supabase
+    .from('tags')
+    .select('id, tag_data, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    throw error
+  }
+
+  return (data ?? []).map((row: any) => {
+    const tag = row.tag_data ?? {}
+    return {
+      ...tag,
+      id: tag.id ?? row.id,
+      createdAt: tag.createdAt ?? row.created_at,
+      updatedAt: row.updated_at,
+    }
+  })
 }
 
-export async function addTag(_tagData: any): Promise<any> {
-  return disabled()
+export async function addTag(tagData: any): Promise<any> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data, error } = await supabase
+    .from('tags')
+    .insert({ user_id: userId, tag_data: tagData })
+    .select('id, tag_data, created_at, updated_at')
+    .single()
+
+  if (error) {
+    throw error
+  }
+
+  return {
+    ...data,
+    tag_data: {
+      ...(data.tag_data ?? {}),
+      id: data.id,
+      createdAt: (data.tag_data ?? {})?.createdAt ?? data.created_at,
+    },
+  }
 }
 
-export async function updateTag(_id: string, _updates: any): Promise<void> {
-  return disabled()
+export async function updateTag(id: string, updates: any): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data: existing, error: existingError } = await supabase
+    .from('tags')
+    .select('tag_data')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .single()
+
+  if (existingError) {
+    throw existingError
+  }
+
+  const merged = { ...(existing?.tag_data ?? {}), ...(updates ?? {}) }
+
+  const { error } = await supabase
+    .from('tags')
+    .update({ tag_data: merged })
+    .eq('id', id)
+    .eq('user_id', userId)
+
+  if (error) {
+    throw error
+  }
 }
 
-export async function deleteTag(_id: string): Promise<void> {
-  return disabled()
+export async function deleteTag(id: string): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { error } = await supabase
+    .from('tags')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+
+  if (error) {
+    throw error
+  }
 }
 
 // 清理配置相关
 export async function getCleanupConfig(): Promise<any> {
-  return disabled()
+  const userId = await requireUserId()
+  const supabase = createClient()
+
+  const { data, error } = await supabase
+    .from('cleanup_configs')
+    .select('id, config_data, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    throw error
+  }
+
+  if (data?.config_data) {
+    return data.config_data
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from('cleanup_configs')
+    .insert({ user_id: userId, config_data: {} })
+    .select('config_data')
+    .single()
+
+  if (insertError) {
+    throw insertError
+  }
+
+  return inserted.config_data ?? {}
 }
 
-export async function updateCleanupConfig(_configData: any): Promise<void> {
-  return disabled()
-}
+export async function updateCleanupConfig(configData: any): Promise<void> {
+  const userId = await requireUserId()
+  const supabase = createClient()
 
+  const { data: existing, error: existingError } = await supabase
+    .from('cleanup_configs')
+    .select('id')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) {
+    throw existingError
+  }
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('cleanup_configs')
+      .update({ config_data: configData })
+      .eq('id', existing.id)
+      .eq('user_id', userId)
+
+    if (error) {
+      throw error
+    }
+
+    return
+  }
+
+  const { error } = await supabase
+    .from('cleanup_configs')
+    .insert({ user_id: userId, config_data: configData })
+
+  if (error) {
+    throw error
+  }
+}

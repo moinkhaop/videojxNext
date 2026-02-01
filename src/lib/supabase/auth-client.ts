@@ -1,37 +1,45 @@
-// TODO: 暂时注释 Supabase 认证功能
-// import type { User } from '@supabase/supabase-js'
-// import { createClient } from './client'
+import type { Session, User } from '@supabase/supabase-js'
+import { createClient } from './client'
+import { SUPABASE_ENABLED } from './enabled'
 
 // {{ AURA: Add - 客户端专用认证工具，仅在浏览器环境使用 }}
 
 // 获取当前用户
-export async function getCurrentUser(): Promise<null> {
-  // TODO: Supabase 功能已禁用
-  return null
-  /*
+export async function getCurrentUser(): Promise<User | null> {
+  if (!SUPABASE_ENABLED) {
+    return null
+  }
+
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  return user
-  */
+  const { data, error } = await supabase.auth.getUser()
+  if (error) {
+    return null
+  }
+  return data.user
 }
 
 // 获取用户会话
-export async function getCurrentSession() {
-  // TODO: Supabase 功能已禁用
-  return null
-  /*
+export async function getCurrentSession(): Promise<Session | null> {
+  if (!SUPABASE_ENABLED) {
+    return null
+  }
+
   const supabase = createClient()
-  const { data: { session } } = await supabase.auth.getSession()
-  return session
-  */
+  const { data, error } = await supabase.auth.getSession()
+  if (error) {
+    return null
+  }
+  return data.session
 }
 
 // 监听认证状态变化
-export function onAuthStateChange(callback: (event: string, session: any) => void) {
-  // TODO: Supabase 功能已禁用
-  return { data: { subscription: { unsubscribe: () => {} } } }
-  /*
+export function onAuthStateChange(callback: (event: string, session: Session | null) => void) {
+  if (!SUPABASE_ENABLED) {
+    return { data: { subscription: { unsubscribe: () => {} } } }
+  }
+
   const supabase = createClient()
-  return supabase.auth.onAuthStateChange(callback)
-  */
+  return supabase.auth.onAuthStateChange((_event, session) => {
+    callback(_event, session)
+  })
 }

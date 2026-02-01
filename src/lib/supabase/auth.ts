@@ -1,46 +1,52 @@
-// TODO: 暂时注释 Supabase 认证功能（客户端/通用）。
+import { createClient } from './client'
+import { assertSupabaseEnabled } from './enabled'
+import { getCurrentSession, getCurrentUser, onAuthStateChange } from './auth-client'
 
-type User = {
-  id: string
-  email?: string
-} | null
-
-export async function getCurrentUser(): Promise<User> {
-  return null
-}
-
-export async function getCurrentSession() {
-  return null
-}
+export { getCurrentSession, getCurrentUser, onAuthStateChange }
 
 export async function signUp(email: string, password: string) {
-  void email
-  void password
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  assertSupabaseEnabled()
+  const supabase = createClient()
+  const { data, error } = await supabase.auth.signUp({ email, password })
+  if (error) {
+    throw error
+  }
+  return data
 }
 
 export async function signIn(email: string, password: string) {
-  void email
-  void password
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  assertSupabaseEnabled()
+  const supabase = createClient()
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) {
+    throw error
+  }
+  return data
 }
 
 export async function signOut() {
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  assertSupabaseEnabled()
+  const supabase = createClient()
+  const { error } = await supabase.auth.signOut()
+  if (error) {
+    throw error
+  }
 }
 
-export async function resetPassword(email: string) {
-  void email
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+export async function resetPassword(email: string, redirectTo?: string) {
+  assertSupabaseEnabled()
+  const supabase = createClient()
+  const { error } = await supabase.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
+  if (error) {
+    throw error
+  }
 }
 
 export async function updatePassword(newPassword: string) {
-  void newPassword
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  assertSupabaseEnabled()
+  const supabase = createClient()
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) {
+    throw error
+  }
 }
-
-export function onAuthStateChange(callback: (event: string, session: any) => void) {
-  void callback
-  return { data: { subscription: { unsubscribe: () => {} } } }
-}
-

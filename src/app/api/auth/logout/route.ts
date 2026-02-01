@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await signOut()
+    await signOut(request, cookieStore)
 
     return respond({
       success: true,

@@ -1,59 +1,80 @@
 import 'server-only'
 
-// TODO: 暂时注释 Supabase 服务端认证功能（API/Server Components）。
-// 保留导出以避免编译错误；当前不会实际调用 Supabase。
-
-type User = {
-  id: string
-  email?: string
-} | null
+import type { Session, User } from '@supabase/supabase-js'
+import type { ServerCookieStore } from './server-cookies'
+import { createClient } from './server'
 
 type AuthResponse = {
-  user: User
-  session?: any
+  user: User | null
+  session?: Session | null
 }
 
-export async function getCurrentUser(_request?: Request, _cookieStore?: unknown): Promise<User> {
-  return null
+export async function getCurrentUser(request?: Request, cookieStore?: ServerCookieStore): Promise<User | null> {
+  const supabase = createClient(request, cookieStore)
+  const { data, error } = await supabase.auth.getUser()
+  if (error) {
+    return null
+  }
+  return data.user
 }
 
-export async function getCurrentSession(_request?: Request, _cookieStore?: unknown) {
-  return null
+export async function getCurrentSession(request?: Request, cookieStore?: ServerCookieStore) {
+  const supabase = createClient(request, cookieStore)
+  const { data, error } = await supabase.auth.getSession()
+  if (error) {
+    return null
+  }
+  return data.session
 }
 
 export async function signUp(
   email: string,
   password: string,
-  _request?: Request,
-  _cookieStore?: unknown
+  request?: Request,
+  cookieStore?: ServerCookieStore
 ): Promise<AuthResponse> {
-  void email
-  void password
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  const supabase = createClient(request, cookieStore)
+  const { data, error } = await supabase.auth.signUp({ email, password })
+  if (error) {
+    throw error
+  }
+  return { user: data.user, session: data.session }
 }
 
 export async function signIn(
   email: string,
   password: string,
-  _request?: Request,
-  _cookieStore?: unknown
+  request?: Request,
+  cookieStore?: ServerCookieStore
 ): Promise<AuthResponse> {
-  void email
-  void password
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+  const supabase = createClient(request, cookieStore)
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) {
+    throw error
+  }
+  return { user: data.user, session: data.session }
 }
 
-export async function signOut(_request?: Request, _cookieStore?: unknown) {
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+export async function signOut(request?: Request, cookieStore?: ServerCookieStore) {
+  const supabase = createClient(request, cookieStore)
+  const { error } = await supabase.auth.signOut()
+  if (error) {
+    throw error
+  }
 }
 
-export async function resetPassword(email: string) {
-  void email
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+export async function resetPassword(email: string, redirectTo?: string) {
+  const supabase = createClient()
+  const { error } = await supabase.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
+  if (error) {
+    throw error
+  }
 }
 
-export async function updatePassword(newPassword: string) {
-  void newPassword
-  throw new Error('Supabase 功能已暂时禁用，请稍后再试')
+export async function updatePassword(newPassword: string, request?: Request, cookieStore?: ServerCookieStore) {
+  const supabase = createClient(request, cookieStore)
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) {
+    throw error
+  }
 }
-

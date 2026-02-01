@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   try {
     console.log('[API] 收到头像上传请求')
     
-    const user = await getCurrentUser()
+    const user = await getCurrentUser(request, cookieStore)
     if (!user) {
       return respond(
         { error: '用户未登录' },

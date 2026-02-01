@@ -35,14 +35,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // TODO: Supabase 功能已禁用
-    await signUp(email, password)
-    // const data = await signUp(email, password)
+    const data = await signUp(email, password, request, cookieStore)
 
     return respond({
       success: true,
       message: '注册成功，请检查邮箱进行验证',
-      user: null  // TODO: Supabase 禁用期间返回 null
+      user: data.user
     })
 
   } catch (error) {

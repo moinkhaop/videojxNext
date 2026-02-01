@@ -1,19 +1,13 @@
 'use client'
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-// TODO: 暂时注释 Supabase 功能
-// import { User } from '@supabase/supabase-js'
-// import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supabase/auth'
-
-// 临时 User 类型定义
-type User = {
-  id: string
-  email?: string
-} | null
+import type { Session, User } from '@supabase/supabase-js'
+import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supabase/auth'
+import { assertSupabaseEnabled, SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
 interface AuthContextType {
   user: User | null
-  session: any
+  session: Session | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string) => Promise<void>
@@ -25,12 +19,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
-  const [session, setSession] = useState<any>(null)
+  const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // TODO: 暂时禁用 Supabase 认证初始化
-    /*
+    if (!SUPABASE_ENABLED) {
+      setLoading(false)
+      return
+    }
+
     // 获取初始认证状态
     const initializeAuth = async () => {
       try {
@@ -67,16 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       subscription?.unsubscribe()
     }
-    */
-    // 暂时设置为未登录状态
-    setLoading(false)
   }, [])
 
   const handleSignIn = async (email: string, password: string) => {
-    // TODO: 暂时禁用登录功能
-    console.log('登录功能已暂时禁用')
-    throw new Error('Supabase 功能已暂时禁用，请稍后再试')
-    /*
+    assertSupabaseEnabled()
     setLoading(true)
     try {
       console.log('开始登录:', email)
@@ -125,14 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
-    */
   }
 
   const handleSignUp = async (email: string, password: string) => {
-    // TODO: 暂时禁用注册功能
-    console.log('注册功能已暂时禁用')
-    throw new Error('Supabase 功能已暂时禁用，请稍后再试')
-    /*
+    assertSupabaseEnabled()
     setLoading(true)
     try {
       const response = await fetch('/api/auth/register', {
@@ -160,14 +147,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
-    */
   }
 
   const handleSignOut = async () => {
-    // TODO: 暂时禁用登出功能
-    console.log('登出功能已暂时禁用')
-    throw new Error('Supabase 功能已暂时禁用，请稍后再试')
-    /*
+    assertSupabaseEnabled()
     setLoading(true)
     try {
       const response = await fetch('/api/auth/logout', {
@@ -189,20 +172,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
-    */
   }
 
   const refreshUser = async () => {
-    // TODO: 暂时禁用刷新用户功能
-    console.log('刷新用户功能已暂时禁用')
-    /*
+    if (!SUPABASE_ENABLED) {
+      return
+    }
+
     try {
       const currentUser = await getCurrentUser()
       setUser(currentUser)
     } catch (error) {
       console.error('刷新用户信息失败:', error)
     }
-    */
   }
 
   const value: AuthContextType = {

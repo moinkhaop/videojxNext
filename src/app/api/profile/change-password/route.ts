@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   try {
     console.log('[API] 收到修改密码请求')
     
-    const user = await getCurrentUser()
+    const user = await getCurrentUser(request, cookieStore)
     if (!user) {
       return respond(
         { error: '用户未登录' },
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     console.log('[API] 更新密码...')
 
-    const data = await updateUserPassword(newPassword, request, cookieStore)
+    await updateUserPassword(newPassword, request, cookieStore)
 
     console.log('[API] 密码修改成功')
 
