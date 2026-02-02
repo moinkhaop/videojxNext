@@ -136,6 +136,8 @@ export const createClient = () => {
       }
     }
   )
+
+  return cachedClient
 }
 
 // 导出一个懒加载的代理，避免模块加载时就强制初始化。

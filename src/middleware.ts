@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest, NextResponse as NextResponseType } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
 
 // 受保护的路由列表
 const protectedRoutes = [
@@ -22,7 +21,21 @@ const authRoutes = [
 ]
 
 // 临时开关：禁用 Supabase 认证
-const SUPABASE_AUTH_ENABLED = process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH === 'true'
+const SUPABASE_AUTH_ENABLED =
+  process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH === 'true' ||
+  process.env.ENABLE_SUPABASE_AUTH === 'true'
+
+function hasSupabaseAuthCookie(request: NextRequest) {
+  const cookieNames = request.cookies.getAll().map(cookie => cookie.name)
+
+  return cookieNames.some(name => {
+    if (name === 'supabase-auth-token') return true
+    if (name.startsWith('sb-') && name.includes('auth-token')) return true
+    if (name.startsWith('sb-') && name.includes('access-token')) return true
+    if (name.startsWith('sb-') && name.includes('refresh-token')) return true
+    return false
+  })
+}
 
 export async function middleware(request: NextRequest) {
   if (!SUPABASE_AUTH_ENABLED) {
@@ -43,83 +56,17 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  const response = NextResponse.next()
+  const hasSession = hasSupabaseAuthCookie(request)
 
-  // {{ AURA: Add - 归一化中间件的 Cookie 选项，避免本地 secure cookie 丢失 }}
-  const normalizeCookieOptions = (options: any = {}) => {
-    const normalized = { ...options }
-
-    if (!normalized.path) {
-      normalized.path = '/'
-    }
-
-    if (!normalized.sameSite) {
-      normalized.sameSite = 'lax'
-    }
-
-    if (process.env.NODE_ENV !== 'production') {
-      normalized.secure = false
-    }
-
-    return normalized
+  if (isProtectedRoute && !hasSession) {
+    return NextResponse.redirect(new URL('/auth/login', request.url))
   }
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return request.cookies.get(name)?.value
-        },
-        set(name: string, value: string, options: any) {
-          const normalized = normalizeCookieOptions(options)
-          response.cookies.set({ name, value, ...normalized })
-        },
-        remove(name: string, options: any) {
-          const normalized = normalizeCookieOptions(options)
-          response.cookies.set({ name, value: '', ...normalized, expires: new Date(0) })
-        },
-      },
-    }
-  )
-
-  const copyCookies = (targetResponse: NextResponseType) => {
-    response.cookies.getAll().forEach(cookie => {
-      targetResponse.cookies.set(cookie)
-    })
+  if (isAuthRoute && hasSession) {
+    return NextResponse.redirect(new URL('/', request.url))
   }
 
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-
-    if (isProtectedRoute && !session) {
-      const loginUrl = new URL('/auth/login', request.url)
-      const redirectResponse = NextResponse.redirect(loginUrl)
-      copyCookies(redirectResponse)
-      return redirectResponse
-    }
-
-    if (isAuthRoute && session) {
-      const homeUrl = new URL('/', request.url)
-      const redirectResponse = NextResponse.redirect(homeUrl)
-      copyCookies(redirectResponse)
-      return redirectResponse
-    }
-
-    return response
-  } catch (error) {
-    console.error('中间件认证检查失败:', error)
-
-    if (isProtectedRoute) {
-      const loginUrl = new URL('/auth/login', request.url)
-      const redirectResponse = NextResponse.redirect(loginUrl)
-      copyCookies(redirectResponse)
-      return redirectResponse
-    }
-
-    return response
-  }
+  return NextResponse.next()
 }
 
 export const config = {
