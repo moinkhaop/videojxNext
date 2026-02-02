@@ -22,6 +22,12 @@ export const createClient = (): BrowserClient => {
   }
 
   cachedClient = createSupabaseClient<Database>(supabaseUrl, supabaseAnonKey, {
+    global: {
+      // Some Kong setups expect a different API key header name; keep `apikey` (default) and add a fallback.
+      headers: {
+        'x-api-key': supabaseAnonKey,
+      },
+    },
     auth: {
       persistSession: true,
       autoRefreshToken: true,
