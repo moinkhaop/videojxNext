@@ -1,4 +1,94 @@
 import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry, HistoryStats, TaskStatus, Tag, ParserCapability, SupportedPlatform } from '@/types'
+import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
+
+let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+const scheduleConfigSyncToSupabase = () => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+    return
+  }
+
+  if (pendingConfigSyncTimer) {
+    clearTimeout(pendingConfigSyncTimer)
+  }
+
+  pendingConfigSyncTimer = setTimeout(() => {
+    pendingConfigSyncTimer = null
+
+    void (async () => {
+      try {
+        const { updateUserConfig } = await import('@/lib/supabase/database')
+        const current = ConfigManager.getAppConfig()
+        const payload = {
+          ...current,
+          parsers: ConfigManager.getParsers(),
+          webdavServers: ConfigManager.getWebDAVServers(),
+        }
+        await updateUserConfig(payload)
+      } catch (error) {
+        console.warn('[SupabaseSync] 配置同步失败:', error)
+      }
+    })()
+  }, 500)
+}
+
+const scheduleHistoryUpsertToSupabase = (record: HistoryRecord | null) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || !record) {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { updateHistoryRecord, addHistoryRecord } = await import('@/lib/supabase/database')
+      try {
+        await updateHistoryRecord(record.id, record)
+      } catch {
+        await addHistoryRecord(record)
+      }
+    } catch (error) {
+      console.warn('[SupabaseSync] 历史记录同步失败:', error)
+    }
+  })()
+}
+
+const scheduleHistoryDeleteToSupabase = (id: string) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { deleteHistoryRecord } = await import('@/lib/supabase/database')
+      await deleteHistoryRecord(id)
+    } catch (error) {
+      console.warn('[SupabaseSync] 删除历史记录同步失败:', error)
+    }
+  })()
+}
+
+const scheduleTagsSyncToSupabase = (action: 'upsert' | 'delete', payload: any) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { addTag, updateTag, deleteTag } = await import('@/lib/supabase/database')
+      if (action === 'delete') {
+        await deleteTag(payload.id)
+        return
+      }
+
+      try {
+        await updateTag(payload.id, payload)
+      } catch {
+        await addTag(payload)
+      }
+    } catch (error) {
+      console.warn('[SupabaseSync] 标签同步失败:', error)
+    }
+  })()
+}
 
 
 // 加密相关工具
@@ -52,6 +142,8 @@ export class ConfigManager {
     } catch (error) {
       console.error('保存应用配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
   // 获取解析器配置（合并内置默认配置和用户自定义配置，过滤禁用项）
@@ -154,6 +246,8 @@ export class ConfigManager {
     } catch (error) {
       console.error('保存解析器配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
   // 获取WebDAV配置（合并内置默认配置和用户自定义配置，过滤禁用项）
@@ -224,6 +318,8 @@ export class ConfigManager {
     } catch (error) {
       console.error('保存WebDAV配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
   // 添加解析器
@@ -578,12 +674,14 @@ export class HistoryManager {
       records.splice(maxRecords)
     }
     this.saveHistory(records)
+    scheduleHistoryUpsertToSupabase(record)
   }
 
   // 删除历史记录
   static deleteRecord(id: string): void {
     const records = this.getHistory().filter(r => r.id !== id)
     this.saveHistory(records)
+    scheduleHistoryDeleteToSupabase(id)
   }
 
   // 清空历史记录
@@ -617,6 +715,7 @@ export class HistoryManager {
     if (index !== -1) {
       records[index].isFavorite = !records[index].isFavorite
       this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
     }
   }
 
@@ -627,6 +726,7 @@ export class HistoryManager {
     if (index !== -1) {
       records[index] = { ...records[index], ...updates }
       this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
     }
   }
 
@@ -760,6 +860,7 @@ export class HistoryManager {
       if (!records[index].tags!.includes(tagId)) {
         records[index].tags!.push(tagId)
         this.saveHistory(records)
+        scheduleHistoryUpsertToSupabase(records[index])
       }
     }
   }
@@ -771,6 +872,7 @@ export class HistoryManager {
     if (index !== -1 && records[index].tags) {
       records[index].tags = records[index].tags!.filter(t => t !== tagId)
       this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
     }
   }
 
@@ -787,6 +889,7 @@ export class HistoryManager {
     if (index !== -1) {
       records[index].lastViewedAt = new Date()
       this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
     }
   }
 }
@@ -855,12 +958,13 @@ export class TagManager {
   static addTag(tag: Omit<Tag, 'id' | 'createdAt'>): Tag {
     const tags = this.getTags()
     const newTag: Tag = {
-      id: `tag_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: crypto.randomUUID(),
       ...tag,
       createdAt: new Date()
     }
     tags.push(newTag)
     this.saveTags(tags)
+    scheduleTagsSyncToSupabase('upsert', newTag)
     return newTag
   }
 
@@ -871,6 +975,7 @@ export class TagManager {
     if (index !== -1) {
       tags[index] = { ...tags[index], ...updates }
       this.saveTags(tags)
+      scheduleTagsSyncToSupabase('upsert', tags[index])
     }
   }
 
@@ -887,6 +992,8 @@ export class TagManager {
       }
     })
     HistoryManager.saveHistory(records)
+
+    scheduleTagsSyncToSupabase('delete', { id })
   }
 
   // 获取单个标签

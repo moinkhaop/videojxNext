@@ -129,9 +129,11 @@ export async function addHistoryRecord(recordData: any): Promise<void> {
   const userId = await requireUserId()
   const supabase = getSupabase()
 
+  const recordId = recordData?.id
+
   const { error } = await supabase
     .from('history_records')
-    .insert({ user_id: userId, record_data: recordData })
+    .insert({ id: recordId, user_id: userId, record_data: recordData })
 
   if (error) {
     throw error
@@ -213,7 +215,7 @@ export async function addTag(tagData: any): Promise<any> {
 
   const { data, error } = await supabase
     .from('tags')
-    .insert({ user_id: userId, tag_data: tagData })
+    .insert({ id: tagData?.id, user_id: userId, tag_data: tagData })
     .select('id, tag_data, created_at, updated_at')
     .single()
 
