@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState, ReactNode } from
 import type { Session, User } from '@supabase/supabase-js'
 import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supabase/auth'
 import { assertSupabaseEnabled, SUPABASE_ENABLED } from '@/lib/supabase/enabled'
+import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
 interface AuthContextType {
   user: User | null
@@ -70,48 +71,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     assertSupabaseEnabled()
     setLoading(true)
     try {
-      console.log('开始登录:', email)
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      })
+      const supabase = createSupabaseClient()
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
-      console.log('登录响应状态:', response.status, response.statusText)
-
-      let data
-      try {
-        data = await response.json()
-        console.log('登录响应数据:', data)
-      } catch (parseError) {
-        console.error('解析响应失败:', parseError)
-        throw new Error(`服务器返回了无效的响应 (状态码: ${response.status})`)
+      if (error) {
+        throw new Error(error.message || '登录失败')
       }
 
-      if (!response.ok) {
-        throw new Error(data.error || `登录失败 (状态码: ${response.status})`)
-      }
-
-      // 登录成功后，认证状态会通过 onAuthStateChange 自动更新
-      console.log('登录成功，刷新当前用户状态...')
-
-      const [currentUser, currentSession] = await Promise.all([
-        getCurrentUser(),
-        getCurrentSession()
-      ])
-
-      setUser(currentUser)
-      setSession(currentSession)
+      setUser(data.user)
+      setSession(data.session)
     } catch (error) {
       console.error('登录失败:', error)
-
-      // fetch 在网络错误时会抛出 TypeError: Failed to fetch
-      if (error instanceof TypeError || (error as any)?.name === 'TypeError') {
-        throw new Error('网络错误：无法连接到服务器。请确认开发服务器已启动 (npm run dev)，或检查网络/代理设置。')
-      }
-
       throw error
     } finally {
       setLoading(false)
@@ -122,25 +92,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     assertSupabaseEnabled()
     setLoading(true)
     try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        if (response.status === 409) {
-          throw new Error('该邮箱已注册，请直接登录或尝试找回密码')
-        }
-
-        throw new Error(data?.error || '注册失败')
+      const supabase = createSupabaseClient()
+      const { error } = await supabase.auth.signUp({ email, password })
+      if (error) {
+        throw new Error(error.message || '注册失败')
       }
-
-      // 注册成功后，认证状态会通过 onAuthStateChange 自动更新
     } catch (error) {
       console.error('注册失败:', error)
       throw error
@@ -153,19 +109,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     assertSupabaseEnabled()
     setLoading(true)
     try {
-      const response = await fetch('/api/auth/logout', {
-        method: 'POST',
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || '登出失败')
-      }
-
-      // 登出成功后，认证状态会通过 onAuthStateChange 自动更新
       setUser(null)
       setSession(null)
+
+      const supabase = createSupabaseClient()
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        throw new Error(error.message || '登出失败')
+      }
     } catch (error) {
       console.error('登出失败:', error)
       throw error
