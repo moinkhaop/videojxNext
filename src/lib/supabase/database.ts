@@ -9,11 +9,12 @@ async function requireUserId() {
   assertSupabaseEnabled()
 
   const supabase = getSupabase()
-  const { data, error } = await supabase.auth.getUser()
-  if (error || !data.user) {
+  const { data, error } = await supabase.auth.getSession()
+  const userId = data?.session?.user?.id
+  if (error || !userId) {
     throw new Error('用户未登录')
   }
-  return data.user.id
+  return userId
 }
 
 // 用户配置相关

@@ -21,6 +21,8 @@ export const createClient = (): BrowserClient => {
     throw new Error('缺少 Supabase 环境变量：NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY')
   }
 
+  const browserStorage = typeof window !== 'undefined' ? window.localStorage : undefined
+
   cachedClient = createSupabaseClient<Database>(supabaseUrl, supabaseAnonKey, {
     global: {
       // Some Kong setups expect a different API key header name; keep `apikey` (default) and add a fallback.
@@ -32,6 +34,8 @@ export const createClient = (): BrowserClient => {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storage: browserStorage,
+      userStorage: browserStorage,
     },
   })
 

@@ -11,11 +11,13 @@ export async function getCurrentUser(): Promise<User | null> {
   }
 
   const supabase = createClient()
-  const { data, error } = await supabase.auth.getUser()
+  // Avoid network fetch to `/auth/v1/user` (some networks/proxies may close the connection).
+  // Session already contains the user payload.
+  const { data, error } = await supabase.auth.getSession()
   if (error) {
     return null
   }
-  return data.user
+  return data.session?.user ?? null
 }
 
 // 获取用户会话
