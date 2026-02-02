@@ -6,6 +6,27 @@ import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supa
 import { assertSupabaseEnabled, SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
+const clearLegacySupabaseCookies = () => {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  const names = document.cookie
+    .split('; ')
+    .map(item => item.split('=')[0])
+    .filter(Boolean)
+
+  const legacy = names.filter(name => {
+    if (name === 'supabase-auth-token') return true
+    if (name.startsWith('sb-')) return true
+    return false
+  })
+
+  for (const name of legacy) {
+    document.cookie = `${name}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT`
+  }
+}
+
 interface AuthContextType {
   user: User | null
   session: Session | null
@@ -28,6 +49,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
       return
     }
+
+    // We no longer rely on large auth cookies; clear old sb-* cookies to avoid oversized headers (HTTP/2 errors).
+    clearLegacySupabaseCookies()
 
     // 获取初始认证状态
     const initializeAuth = async () => {
@@ -80,18 +104,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(data.user)
       setSession(data.session)
-
-      if (process.env.NODE_ENV !== 'production') {
-        const cookieNames = typeof document === 'undefined'
-          ? []
-          : document.cookie
-              .split('; ')
-              .map(item => item.split('=')[0])
-              .filter(Boolean)
-              .slice(0, 50)
-
-        console.log('[Auth] 登录后 cookie 名称(截断):', cookieNames)
-      }
     } catch (error) {
       console.error('登录失败:', error)
       throw error
@@ -129,6 +141,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) {
         throw new Error(error.message || '登出失败')
       }
+
+      clearLegacySupabaseCookies()
     } catch (error) {
       console.error('登出失败:', error)
       throw error

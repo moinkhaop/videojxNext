@@ -21,21 +21,7 @@ const authRoutes = [
 ]
 
 // 临时开关：禁用 Supabase 认证
-const SUPABASE_AUTH_ENABLED =
-  ['true', '1', 'yes', 'on'].includes((process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH ?? '').trim().toLowerCase()) ||
-  ['true', '1', 'yes', 'on'].includes((process.env.ENABLE_SUPABASE_AUTH ?? '').trim().toLowerCase())
-
-function hasSupabaseAuthCookie(request: NextRequest) {
-  const cookieNames = request.cookies.getAll().map(cookie => cookie.name)
-
-  return cookieNames.some(name => {
-    if (name === 'supabase-auth-token') return true
-    if (name.startsWith('sb-') && name.includes('auth-token')) return true
-    if (name.startsWith('sb-') && name.includes('access-token')) return true
-    if (name.startsWith('sb-') && name.includes('refresh-token')) return true
-    return false
-  })
-}
+const SUPABASE_AUTH_ENABLED = false
 
 export async function middleware(request: NextRequest) {
   if (!SUPABASE_AUTH_ENABLED) {
@@ -54,16 +40,6 @@ export async function middleware(request: NextRequest) {
 
   if (!isProtectedRoute && !isAuthRoute) {
     return NextResponse.next()
-  }
-
-  const hasSession = hasSupabaseAuthCookie(request)
-
-  if (isProtectedRoute && !hasSession) {
-    return NextResponse.redirect(new URL('/auth/login', request.url))
-  }
-
-  if (isAuthRoute && hasSession) {
-    return NextResponse.redirect(new URL('/', request.url))
   }
 
   return NextResponse.next()

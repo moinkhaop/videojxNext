@@ -5,6 +5,7 @@ import type { Metadata, Viewport } from 'next'
 import { Navigation } from '@/components/navigation'
 import { AuthProvider } from '@/contexts/auth-context'
 import { StorageInitializer } from '@/components/storage-initializer'
+import { RouteGuard } from '@/components/route-guard'
 
 // TODO: 暂时注释 Google Fonts
 // const inter = Inter({ subsets: ['latin'] })
@@ -31,6 +32,7 @@ export default function RootLayout({
       <body className="font-sans"> {/* 使用系统字体替代 Inter */}
         <AuthProvider>
           <StorageInitializer>
+            <RouteGuard />
             <div className="min-h-screen bg-background">
               <Navigation />
               <main className="pb-16 md:pb-0">
