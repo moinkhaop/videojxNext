@@ -80,6 +80,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(data.user)
       setSession(data.session)
+
+      if (process.env.NODE_ENV !== 'production') {
+        const cookieNames = typeof document === 'undefined'
+          ? []
+          : document.cookie
+              .split('; ')
+              .map(item => item.split('=')[0])
+              .filter(Boolean)
+              .slice(0, 50)
+
+        console.log('[Auth] 登录后 cookie 名称(截断):', cookieNames)
+      }
     } catch (error) {
       console.error('登录失败:', error)
       throw error

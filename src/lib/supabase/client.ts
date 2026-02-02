@@ -59,8 +59,17 @@ const normalizeBrowserCookieOptions = (options: CookieOptions = {}): CookieOptio
     normalized.sameSite = 'lax'
   }
 
+  if (normalized.sameSite === 'none') {
+    // Modern browsers require `Secure` for `SameSite=None` cookies.
+    normalized.secure = true
+  }
+
   if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
+    // Local dev on http cannot use Secure cookies.
     normalized.secure = false
+    if (normalized.sameSite === 'none') {
+      normalized.sameSite = 'lax'
+    }
   }
 
   return normalized
