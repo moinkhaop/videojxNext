@@ -3,9 +3,13 @@ import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
 export const runtime = 'nodejs'
 
-export async function GET() {
+export async function GET(request: Request) {
   if (process.env.NODE_ENV === 'production') {
-    return new NextResponse(null, { status: 404 })
+    const token = new URL(request.url).searchParams.get('token')
+    const expectedToken = process.env.DEBUG_SUPABASE_TOKEN
+    if (!expectedToken || token !== expectedToken) {
+      return new NextResponse(null, { status: 404 })
+    }
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL

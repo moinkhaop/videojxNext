@@ -22,8 +22,8 @@ const authRoutes = [
 
 // 临时开关：禁用 Supabase 认证
 const SUPABASE_AUTH_ENABLED =
-  process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH === 'true' ||
-  process.env.ENABLE_SUPABASE_AUTH === 'true'
+  ['true', '1', 'yes', 'on'].includes((process.env.NEXT_PUBLIC_ENABLE_SUPABASE_AUTH ?? '').trim().toLowerCase()) ||
+  ['true', '1', 'yes', 'on'].includes((process.env.ENABLE_SUPABASE_AUTH ?? '').trim().toLowerCase())
 
 function hasSupabaseAuthCookie(request: NextRequest) {
   const cookieNames = request.cookies.getAll().map(cookie => cookie.name)
