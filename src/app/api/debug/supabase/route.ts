@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
+export const runtime = 'nodejs'
+
 export async function GET() {
   if (process.env.NODE_ENV === 'production') {
     return new NextResponse(null, { status: 404 })
@@ -27,4 +29,3 @@ export async function GET() {
     anonKeyLength: anonKey?.length ?? 0,
   })
 }
-

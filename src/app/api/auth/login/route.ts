@@ -3,6 +3,8 @@ import { signIn } from '@/lib/supabase/auth-server'
 import { createServerCookieStore } from '@/lib/supabase/server-cookies'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
+export const runtime = 'nodejs'
+
 export async function POST(request: NextRequest) {
   if (!SUPABASE_ENABLED) {
     return NextResponse.json(

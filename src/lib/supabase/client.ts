@@ -1,5 +1,6 @@
 import { createBrowserClient, type CookieOptions } from '@supabase/ssr'
 import { assertSupabaseEnabled } from './enabled'
+import type { Database } from './database.types'
 
 // 统一构造 cookie 字符串，避免重复拼接逻辑
 const buildCookieString = (name: string, value: string, options: CookieOptions = {}): string => {
@@ -66,9 +67,11 @@ const normalizeBrowserCookieOptions = (options: CookieOptions = {}): CookieOptio
 }
 
 // 创建客户端 Supabase 实例（用于浏览器环境）
-let cachedClient: ReturnType<typeof createBrowserClient> | null = null
+type BrowserClient = ReturnType<typeof createBrowserClient<Database>>
 
-export const createClient = () => {
+let cachedClient: BrowserClient | null = null
+
+export const createClient = (): BrowserClient => {
   assertSupabaseEnabled()
 
   if (cachedClient) {
@@ -82,7 +85,7 @@ export const createClient = () => {
     throw new Error('缺少 Supabase 环境变量：NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY')
   }
 
-  cachedClient = createBrowserClient(
+  cachedClient = createBrowserClient<Database>(
     supabaseUrl,
     supabaseAnonKey,
     {

@@ -1,10 +1,14 @@
 import { createClient } from './client'
 import { assertSupabaseEnabled } from './enabled'
 
+function getSupabase() {
+  return createClient() as any
+}
+
 async function requireUserId() {
   assertSupabaseEnabled()
 
-  const supabase = createClient()
+  const supabase = getSupabase()
   const { data, error } = await supabase.auth.getUser()
   if (error || !data.user) {
     throw new Error('用户未登录')
@@ -15,7 +19,7 @@ async function requireUserId() {
 // 用户配置相关
 export async function getUserConfig(): Promise<any> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data, error } = await supabase
     .from('user_configs')
@@ -48,7 +52,7 @@ export async function getUserConfig(): Promise<any> {
 
 export async function updateUserConfig(configData: any): Promise<any> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data: existing, error: existingError } = await supabase
     .from('user_configs')
@@ -93,7 +97,7 @@ export async function updateUserConfig(configData: any): Promise<any> {
 // 历史记录相关
 export async function getHistoryRecords(limit = 100, offset = 0): Promise<any[]> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const rangeFrom = Math.max(0, offset)
   const rangeTo = Math.max(rangeFrom, rangeFrom + Math.max(0, limit) - 1)
@@ -122,7 +126,7 @@ export async function getHistoryRecords(limit = 100, offset = 0): Promise<any[]>
 
 export async function addHistoryRecord(recordData: any): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { error } = await supabase
     .from('history_records')
@@ -135,7 +139,7 @@ export async function addHistoryRecord(recordData: any): Promise<void> {
 
 export async function updateHistoryRecord(id: string, updates: any): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data: existing, error: existingError } = await supabase
     .from('history_records')
@@ -163,7 +167,7 @@ export async function updateHistoryRecord(id: string, updates: any): Promise<voi
 
 export async function deleteHistoryRecord(id: string): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { error } = await supabase
     .from('history_records')
@@ -179,7 +183,7 @@ export async function deleteHistoryRecord(id: string): Promise<void> {
 // 标签相关
 export async function getTags(): Promise<any[]> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data, error } = await supabase
     .from('tags')
@@ -204,7 +208,7 @@ export async function getTags(): Promise<any[]> {
 
 export async function addTag(tagData: any): Promise<any> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data, error } = await supabase
     .from('tags')
@@ -228,7 +232,7 @@ export async function addTag(tagData: any): Promise<any> {
 
 export async function updateTag(id: string, updates: any): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data: existing, error: existingError } = await supabase
     .from('tags')
@@ -256,7 +260,7 @@ export async function updateTag(id: string, updates: any): Promise<void> {
 
 export async function deleteTag(id: string): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { error } = await supabase
     .from('tags')
@@ -272,7 +276,7 @@ export async function deleteTag(id: string): Promise<void> {
 // 清理配置相关
 export async function getCleanupConfig(): Promise<any> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data, error } = await supabase
     .from('cleanup_configs')
@@ -305,7 +309,7 @@ export async function getCleanupConfig(): Promise<any> {
 
 export async function updateCleanupConfig(configData: any): Promise<void> {
   const userId = await requireUserId()
-  const supabase = createClient()
+  const supabase = getSupabase()
 
   const { data: existing, error: existingError } = await supabase
     .from('cleanup_configs')

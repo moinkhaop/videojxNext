@@ -4,6 +4,8 @@ import { createServerCookieStore } from '@/lib/supabase/server-cookies'
 import { Buffer } from 'node:buffer'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
+export const runtime = 'nodejs'
+
 async function fileToDataUrl(file: File) {
   const arrayBuffer = await file.arrayBuffer()
   const base64 = Buffer.from(arrayBuffer).toString('base64')

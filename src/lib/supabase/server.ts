@@ -3,9 +3,12 @@ import 'server-only'
 import { createServerClient } from '@supabase/ssr'
 import { createServerCookieStore, ServerCookieStore } from './server-cookies'
 import { assertSupabaseEnabled } from './enabled'
+import type { Database } from './database.types'
+
+type ServerClient = ReturnType<typeof createServerClient<Database>>
 
 // {{ AURA: Modify - 支持完整的 Supabase Cookie 生命周期处理 }}
-export function createClient(request?: Request, cookieStore?: ServerCookieStore) {
+export function createClient(request?: Request, cookieStore?: ServerCookieStore): ServerClient {
   assertSupabaseEnabled()
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -38,7 +41,7 @@ export function createClient(request?: Request, cookieStore?: ServerCookieStore)
     },
   }
 
-  return createServerClient(supabaseUrl, supabaseAnonKey, { cookies })
+  return createServerClient<Database>(supabaseUrl, supabaseAnonKey, { cookies })
 }
 
 function parseCookieHeader(header: string | null) {
