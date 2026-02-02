@@ -113,8 +113,12 @@ export const createClient = (): BrowserClient => {
             return null
           }
 
-          const [, value] = rawCookie.split('=')
-          return decodeURIComponent(value ?? '')
+          const value = rawCookie.slice(key.length + 1)
+          try {
+            return decodeURIComponent(value)
+          } catch {
+            return value
+          }
         },
 
         // {{ AURA: Modify - 遵循 CookieMethods 的签名写入 cookie }}
@@ -123,9 +127,8 @@ export const createClient = (): BrowserClient => {
             return
           }
 
-          const encodedValue = encodeURIComponent(value)
           const finalOptions = normalizeBrowserCookieOptions(options)
-          document.cookie = buildCookieString(key, encodedValue, finalOptions)
+          document.cookie = buildCookieString(key, value, finalOptions)
         },
 
         // {{ AURA: Modify - 通过设置过期时间清除 cookie }}
