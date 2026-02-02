@@ -3,6 +3,22 @@ import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 
 let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
+
+const createUuid = (): string => {
+  const uuid = (globalThis as any)?.crypto?.randomUUID
+  if (typeof uuid === 'function') {
+    return uuid.call((globalThis as any).crypto)
+  }
+
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 const scheduleConfigSyncToSupabase = () => {
   if (!SUPABASE_ENABLED || typeof window === 'undefined') {
     return
@@ -638,8 +654,9 @@ export class HistoryManager {
       const stored = localStorage.getItem(this.HISTORY_KEY)
       if (stored) {
         const records = JSON.parse(stored)
+        let changed = false
         // 转换日期字符串为Date对象
-        return records.map((record: any) => ({
+        const parsed = records.map((record: any) => ({
           ...record,
           createdAt: new Date(record.createdAt),
           task: {
@@ -648,6 +665,18 @@ export class HistoryManager {
             completedAt: record.task.completedAt ? new Date(record.task.completedAt) : undefined
           }
         }))
+
+        const normalized = parsed.map((record: any) => {
+          if (isUuid(record.id)) return record
+          changed = true
+          return { ...record, id: createUuid() }
+        })
+
+        if (changed) {
+          this.saveHistory(normalized)
+        }
+
+        return normalized
       }
     } catch (error) {
       console.error('获取历史记录失败:', error)
@@ -903,41 +932,81 @@ export class TagManager {
     try {
       const stored = localStorage.getItem(this.TAGS_KEY)
       if (stored) {
-        const tags = JSON.parse(stored)
-        return tags.map((tag: any) => ({
-          ...tag,
-          createdAt: new Date(tag.createdAt)
-        }))
+        const raw = JSON.parse(stored)
+        const idMap = new Map<string, string>()
+        let changed = false
+        const tags = raw.map((tag: any) => {
+          const originalId = tag?.id
+          const normalizedId = isUuid(originalId)
+            ? originalId
+            : (idMap.get(String(originalId)) ?? (() => {
+                const next = createUuid()
+                idMap.set(String(originalId), next)
+                return next
+              })())
+
+          if (normalizedId !== originalId) {
+            changed = true
+          }
+
+          return {
+            ...tag,
+            id: normalizedId,
+            createdAt: new Date(tag.createdAt)
+          }
+        })
+
+        if (changed) {
+          this.saveTags(tags)
+
+          const records = HistoryManager.getHistory()
+          let historyChanged = false
+          const updatedRecords = records.map(record => {
+            if (!record.tags || record.tags.length === 0) return record
+            const nextTags = record.tags.map(tagId => idMap.get(tagId) ?? tagId)
+            const different = nextTags.some((value, index) => value !== record.tags![index])
+            if (!different) return record
+            historyChanged = true
+            return { ...record, tags: nextTags }
+          })
+          if (historyChanged) {
+            HistoryManager.saveHistory(updatedRecords)
+          }
+        }
+
+        return tags
       }
     } catch (error) {
       console.error('获取标签失败:', error)
     }
-    return this.getDefaultTags()
+    const defaults = this.getDefaultTags()
+    this.saveTags(defaults)
+    return defaults
   }
 
   // 获取默认标签
   static getDefaultTags(): Tag[] {
     return [
       {
-        id: 'default_work',
+        id: createUuid(),
         name: '工作',
         color: 'blue',
         createdAt: new Date()
       },
       {
-        id: 'default_personal',
+        id: createUuid(),
         name: '个人',
         color: 'green',
         createdAt: new Date()
       },
       {
-        id: 'default_important',
+        id: createUuid(),
         name: '重要',
         color: 'red',
         createdAt: new Date()
       },
       {
-        id: 'default_archive',
+        id: createUuid(),
         name: '归档',
         color: 'gray',
         createdAt: new Date()
@@ -958,7 +1027,7 @@ export class TagManager {
   static addTag(tag: Omit<Tag, 'id' | 'createdAt'>): Tag {
     const tags = this.getTags()
     const newTag: Tag = {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       ...tag,
       createdAt: new Date()
     }

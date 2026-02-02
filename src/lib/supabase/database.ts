@@ -1,6 +1,9 @@
 import { createClient } from './client'
 import { assertSupabaseEnabled } from './enabled'
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
+
 function getSupabase() {
   return createClient() as any
 }
@@ -129,11 +132,12 @@ export async function addHistoryRecord(recordData: any): Promise<void> {
   const userId = await requireUserId()
   const supabase = getSupabase()
 
-  const recordId = recordData?.id
+  const payload: any = { user_id: userId, record_data: recordData }
+  if (isUuid(recordData?.id)) {
+    payload.id = recordData.id
+  }
 
-  const { error } = await supabase
-    .from('history_records')
-    .insert({ id: recordId, user_id: userId, record_data: recordData })
+  const { error } = await supabase.from('history_records').insert(payload)
 
   if (error) {
     throw error
@@ -213,9 +217,14 @@ export async function addTag(tagData: any): Promise<any> {
   const userId = await requireUserId()
   const supabase = getSupabase()
 
+  const payload: any = { user_id: userId, tag_data: tagData }
+  if (isUuid(tagData?.id)) {
+    payload.id = tagData.id
+  }
+
   const { data, error } = await supabase
     .from('tags')
-    .insert({ id: tagData?.id, user_id: userId, tag_data: tagData })
+    .insert(payload)
     .select('id, tag_data, created_at, updated_at')
     .single()
 

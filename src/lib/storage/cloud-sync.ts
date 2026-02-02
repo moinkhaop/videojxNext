@@ -52,6 +52,22 @@ export async function hydrateFromSupabase() {
     if (Array.isArray(webdavServers)) {
       ConfigManager.saveWebDAVServers(webdavServers)
     }
+
+    // Seed remote config when the remote is empty but local has data (first-time sync on a new Supabase project).
+    const hasAnyRemote =
+      typeof (remoteConfig as any).theme !== 'undefined' ||
+      Array.isArray((remoteConfig as any).parsers) ||
+      Array.isArray((remoteConfig as any).webdavServers)
+
+    if (!hasAnyRemote) {
+      const current = ConfigManager.getAppConfig()
+      const payload = {
+        ...current,
+        parsers: ConfigManager.getParsers(),
+        webdavServers: ConfigManager.getWebDAVServers(),
+      }
+      await safeCall(() => remote.updateUserConfig(payload))
+    }
   }
 
   if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {
@@ -89,16 +105,69 @@ export async function hydrateFromSupabase() {
     HistoryManager.saveHistory(merged)
   }
 
+  // Seed remote history when it is empty but local already has records.
+  if (Array.isArray(remoteHistory) && remoteHistory.length === 0) {
+    const local = HistoryManager.getHistory()
+    if (local.length > 0) {
+      for (const record of local.slice(0, 1000)) {
+        await safeCall(() => remote.addHistoryRecord(record))
+      }
+    }
+  }
+
   if (Array.isArray(remoteTags) && remoteTags.length > 0) {
     const local = TagManager.getTags()
+
     const byId = new Map<string, any>()
+    const remoteByFingerprint = new Map<string, any>()
+
+    for (const tag of remoteTags as any[]) {
+      const normalized = { ...tag, createdAt: toDate(tag.createdAt) ?? new Date() }
+      byId.set(tag.id, normalized)
+      const fp = `${String(tag.name ?? '')}__${String(tag.color ?? '')}`
+      remoteByFingerprint.set(fp, normalized)
+    }
+
+    const idRemap = new Map<string, string>()
+
     for (const tag of local) {
+      if (byId.has(tag.id)) continue
+      const fp = `${String((tag as any).name ?? '')}__${String((tag as any).color ?? '')}`
+      const remoteMatch = remoteByFingerprint.get(fp)
+      if (remoteMatch?.id && remoteMatch.id !== tag.id) {
+        idRemap.set(tag.id, remoteMatch.id)
+        continue
+      }
       byId.set(tag.id, tag)
     }
-    for (const tag of remoteTags as any[]) {
-      byId.set(tag.id, { ...tag, createdAt: toDate(tag.createdAt) ?? new Date() })
+
+    if (idRemap.size > 0) {
+      const records = HistoryManager.getHistory()
+      let historyChanged = false
+      const updatedRecords = records.map(record => {
+        if (!record.tags || record.tags.length === 0) return record
+        const nextTags = record.tags.map(tagId => idRemap.get(tagId) ?? tagId)
+        const different = nextTags.some((value, index) => value !== record.tags![index])
+        if (!different) return record
+        historyChanged = true
+        return { ...record, tags: nextTags }
+      })
+      if (historyChanged) {
+        HistoryManager.saveHistory(updatedRecords)
+      }
     }
+
     TagManager.saveTags(Array.from(byId.values()))
+  }
+
+  // Seed remote tags when it is empty but local already has tags (including defaults).
+  if (Array.isArray(remoteTags) && remoteTags.length === 0) {
+    const local = TagManager.getTags()
+    if (local.length > 0) {
+      for (const tag of local) {
+        await safeCall(() => remote.addTag(tag))
+      }
+    }
   }
 
   if (remoteCleanup && typeof remoteCleanup === 'object') {
@@ -106,4 +175,3 @@ export async function hydrateFromSupabase() {
     CleanupConfigManager.saveCleanupConfig({ ...current, ...(remoteCleanup as any) })
   }
 }
-
