@@ -147,7 +147,7 @@ export default function SupabaseSettingsPage() {
         try {
           const { count, error } = await supabase
             .from('history_records')
-            .select('*', { count: 'exact', head: true })
+            .select('id', { count: 'exact' })
             .eq('user_id', currentUserId)
 
           nextResults.push({
@@ -162,30 +162,38 @@ export default function SupabaseSettingsPage() {
 
       // 5) 触发一次“本地 -> 云端”推送（如果你本地已有历史/标签/配置）
       {
-        const { updateUserConfig, addHistoryRecord, addTag } = await import('@/lib/supabase/database')
+        try {
+          const { updateUserConfig, addHistoryRecord, addTag } = await import('@/lib/supabase/database')
 
-        const payload = {
-          ...ConfigManager.getAppConfig(),
-          parsers: ConfigManager.getParsers(),
-          webdavServers: ConfigManager.getWebDAVServers(),
+          const payload = {
+            ...ConfigManager.getAppConfig(),
+            parsers: ConfigManager.getParsers(),
+            webdavServers: ConfigManager.getWebDAVServers(),
+          }
+          await updateUserConfig(payload)
+
+          const localHistory = HistoryManager.getHistory().slice(0, 50)
+          for (const r of localHistory) {
+            await addHistoryRecord(r)
+          }
+
+          const localTags = TagManager.getTags()
+          for (const t of localTags) {
+            await addTag(t)
+          }
+
+          nextResults.push({
+            ok: true,
+            title: '触发本地数据推送',
+            details: `history=${localHistory.length}, tags=${localTags.length}`,
+          })
+        } catch (error) {
+          nextResults.push({
+            ok: false,
+            title: '触发本地数据推送',
+            details: formatError(error),
+          })
         }
-        await updateUserConfig(payload)
-
-        const localHistory = HistoryManager.getHistory().slice(0, 50)
-        for (const r of localHistory) {
-          await addHistoryRecord(r)
-        }
-
-        const localTags = TagManager.getTags()
-        for (const t of localTags) {
-          await addTag(t)
-        }
-
-        nextResults.push({
-          ok: true,
-          title: '触发本地数据推送',
-          details: `history=${localHistory.length}, tags=${localTags.length}`,
-        })
       }
 
       setResults(nextResults)
