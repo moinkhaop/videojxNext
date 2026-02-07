@@ -27,7 +27,7 @@ async function restJson<T>(
   init?: RequestInit & { expectNoJson?: boolean }
 ): Promise<T> {
   const headers = new Headers(init?.headers)
-  headers.set('authorization', `Bearer ${accessToken}`)
+  headers.set('x-supabase-access-token', accessToken)
   headers.set('accept', 'application/json')
   if (init?.body != null && !headers.has('content-type')) {
     headers.set('content-type', 'application/json')

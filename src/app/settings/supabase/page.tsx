@@ -140,7 +140,7 @@ export default function SupabaseSettingsPage() {
           try {
             const res = await fetch(
               `/api/supabase/rest/user_configs?select=id,updated_at&user_id=eq.${encodeURIComponent(currentUserId)}&order=updated_at.desc&limit=1`,
-              { headers: { authorization: `Bearer ${token}` } }
+              { headers: { 'x-supabase-access-token': token } }
             )
             const text = await res.text().catch(() => '')
             nextResults.push({
@@ -207,7 +207,7 @@ export default function SupabaseSettingsPage() {
           try {
             const res = await fetch(
               `/api/supabase/rest/history_records?select=id&user_id=eq.${encodeURIComponent(currentUserId)}&order=created_at.desc&limit=5`,
-              { headers: { authorization: `Bearer ${token}` } }
+              { headers: { 'x-supabase-access-token': token } }
             )
             const text = await res.text().catch(() => '')
             nextResults.push({

@@ -16,10 +16,17 @@ const passthroughRequestHeaders = (request: Request, supabaseAnonKey: string) =>
   headers.set('apikey', supabaseAnonKey)
   headers.set('x-api-key', supabaseAnonKey)
 
-  // Forward auth token so PostgREST can enforce RLS
-  const authorization = request.headers.get('authorization')
-  if (authorization) {
-    headers.set('authorization', authorization)
+  // Forward auth token so PostgREST can enforce RLS.
+  // Some CDNs/WAFs block the standard `Authorization` header on same-origin requests,
+  // so the browser sends `x-supabase-access-token` and we translate it upstream.
+  const accessToken = request.headers.get('x-supabase-access-token')
+  if (accessToken) {
+    headers.set('authorization', `Bearer ${accessToken}`)
+  } else {
+    const authorization = request.headers.get('authorization')
+    if (authorization) {
+      headers.set('authorization', authorization)
+    }
   }
 
   // Forward common PostgREST headers when present
@@ -101,4 +108,3 @@ export async function DELETE(request: Request, context: { params: Promise<{ path
   const { path } = await context.params
   return proxy(request, path ?? [])
 }
-
