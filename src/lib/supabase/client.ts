@@ -23,12 +23,46 @@ export const createClient = (): BrowserClient => {
 
   const browserStorage = typeof window !== 'undefined' ? window.localStorage : undefined
 
+  const fetchWithRetry: typeof fetch = async (input, init) => {
+    const maxAttempts = 3
+    let lastError: unknown = null
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      const timeout = typeof window !== 'undefined' ? window.setTimeout(() => controller?.abort(), 15000) : null
+
+      try {
+        const response = await fetch(input as any, { ...(init as any), signal: controller?.signal })
+        if (timeout != null) window.clearTimeout(timeout)
+        return response
+      } catch (error) {
+        if (timeout != null) window.clearTimeout(timeout)
+        lastError = error
+
+        const msg = (error as any)?.message ?? ''
+        const isTransient =
+          error instanceof TypeError ||
+          String(msg).includes('Failed to fetch') ||
+          String(msg).includes('NetworkError')
+
+        if (!isTransient || attempt === maxAttempts) {
+          throw error
+        }
+
+        await new Promise(r => setTimeout(r, 250 * attempt))
+      }
+    }
+
+    throw lastError
+  }
+
   cachedClient = createSupabaseClient<Database>(supabaseUrl, supabaseAnonKey, {
     global: {
       // Some Kong setups expect a different API key header name; keep `apikey` (default) and add a fallback.
       headers: {
         'x-api-key': supabaseAnonKey,
       },
+      fetch: fetchWithRetry,
     },
     auth: {
       persistSession: true,

@@ -59,21 +59,43 @@ export default function SupabaseSettingsPage() {
 
       const nextResults: TestResult[] = []
 
+      // 0) 网络连通性 / CORS（最基础）
+      {
+        try {
+          const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+          const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+          const res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/health`, {
+            headers: { apikey: key, 'x-api-key': key },
+          })
+          nextResults.push({
+            ok: res.ok,
+            title: 'auth/v1/health',
+            details: `status=${res.status}`,
+          })
+        } catch (error) {
+          nextResults.push({ ok: false, title: 'auth/v1/health', details: formatError(error) })
+        }
+      }
+
       // 1) 基本查询（用于判断表是否存在 / RLS 是否允许 SELECT）
       {
-        const { data, error } = await supabase
-          .from('user_configs')
-          .select('id, updated_at')
-          .eq('user_id', currentUserId)
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+        try {
+          const { data, error } = await supabase
+            .from('user_configs')
+            .select('id, updated_at')
+            .eq('user_id', currentUserId)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
 
-        nextResults.push({
-          ok: !error,
-          title: 'user_configs SELECT',
-          details: error ? formatError(error) : (data ? 'ok' : 'no rows (will insert on sync)'),
-        })
+          nextResults.push({
+            ok: !error,
+            title: 'user_configs SELECT',
+            details: error ? formatError(error) : (data ? 'ok' : 'no rows (will insert on sync)'),
+          })
+        } catch (error) {
+          nextResults.push({ ok: false, title: 'user_configs SELECT', details: formatError(error) })
+        }
       }
 
       // 2) 写入配置（用于判断 INSERT/UPDATE policy 是否生效）
@@ -122,16 +144,20 @@ export default function SupabaseSettingsPage() {
 
       // 4) 读取 history_records 数量（确认写入落库）
       {
-        const { count, error } = await supabase
-          .from('history_records')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', currentUserId)
+        try {
+          const { count, error } = await supabase
+            .from('history_records')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', currentUserId)
 
-        nextResults.push({
-          ok: !error,
-          title: 'history_records COUNT',
-          details: error ? formatError(error) : `count=${count ?? 0}`,
-        })
+          nextResults.push({
+            ok: !error,
+            title: 'history_records COUNT',
+            details: error ? formatError(error) : `count=${count ?? 0}`,
+          })
+        } catch (error) {
+          nextResults.push({ ok: false, title: 'history_records COUNT', details: formatError(error) })
+        }
       }
 
       // 5) 触发一次“本地 -> 云端”推送（如果你本地已有历史/标签/配置）
