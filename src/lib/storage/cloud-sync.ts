@@ -24,6 +24,8 @@ export async function hydrateFromSupabase() {
     return
   }
 
+  const { markSyncOk } = await import('@/lib/supabase/sync-status')
+
   const remote = await safeCall(() => import('@/lib/supabase/database'))
   if (!remote) {
     return
@@ -174,4 +176,6 @@ export async function hydrateFromSupabase() {
     const current = CleanupConfigManager.getCleanupConfig()
     CleanupConfigManager.saveCleanupConfig({ ...current, ...(remoteCleanup as any) })
   }
+
+  markSyncOk('hydrate')
 }

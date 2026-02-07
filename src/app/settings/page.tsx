@@ -11,6 +11,7 @@ import {
   Server,
   Puzzle,
   Database,
+  Cloud,
   Download,
   Upload,
   Trash2,
@@ -187,6 +188,45 @@ export default function SettingsPage() {
 
         {/* 主要配置区域 */}
         <div className="space-y-6 mb-6">
+          <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-xl shadow-md">
+                    <Cloud className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-xl font-bold flex items-center gap-2">
+                      Supabase 同步
+                      <Badge variant="outline" className="font-normal text-xs">
+                        诊断
+                      </Badge>
+                    </CardTitle>
+                    <CardDescription className="text-xs mt-0.5">
+                      排查配置/历史记录为什么没有写入数据库
+                    </CardDescription>
+                  </div>
+                </div>
+                <Link href="/settings/supabase">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 h-9"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    打开
+                  </Button>
+                </Link>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  如果测试出现 “relation does not exist / RLS denied / 401/403”，说明 Supabase 端未执行迁移 SQL 或策略未配置。
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
           {/* WebDAV服务器配置 */}
           <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
             <CardHeader className="pb-4">

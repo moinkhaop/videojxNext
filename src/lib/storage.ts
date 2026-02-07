@@ -1,5 +1,6 @@
 import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry, HistoryStats, TaskStatus, Tag, ParserCapability, SupportedPlatform } from '@/types'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
+import { markSyncError, markSyncOk } from '@/lib/supabase/sync-status'
 
 let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -41,8 +42,10 @@ const scheduleConfigSyncToSupabase = () => {
           webdavServers: ConfigManager.getWebDAVServers(),
         }
         await updateUserConfig(payload)
+        markSyncOk('config')
       } catch (error) {
         console.warn('[SupabaseSync] 配置同步失败:', error)
+        markSyncError('config', error)
       }
     })()
   }, 500)
@@ -61,8 +64,10 @@ const scheduleHistoryUpsertToSupabase = (record: HistoryRecord | null) => {
       } catch {
         await addHistoryRecord(record)
       }
+      markSyncOk('history')
     } catch (error) {
       console.warn('[SupabaseSync] 历史记录同步失败:', error)
+      markSyncError('history', error)
     }
   })()
 }
@@ -76,8 +81,10 @@ const scheduleHistoryDeleteToSupabase = (id: string) => {
     try {
       const { deleteHistoryRecord } = await import('@/lib/supabase/database')
       await deleteHistoryRecord(id)
+      markSyncOk('history')
     } catch (error) {
       console.warn('[SupabaseSync] 删除历史记录同步失败:', error)
+      markSyncError('history', error)
     }
   })()
 }
@@ -92,6 +99,7 @@ const scheduleTagsSyncToSupabase = (action: 'upsert' | 'delete', payload: any) =
       const { addTag, updateTag, deleteTag } = await import('@/lib/supabase/database')
       if (action === 'delete') {
         await deleteTag(payload.id)
+        markSyncOk('tags')
         return
       }
 
@@ -100,8 +108,10 @@ const scheduleTagsSyncToSupabase = (action: 'upsert' | 'delete', payload: any) =
       } catch {
         await addTag(payload)
       }
+      markSyncOk('tags')
     } catch (error) {
       console.warn('[SupabaseSync] 标签同步失败:', error)
+      markSyncError('tags', error)
     }
   })()
 }
