@@ -133,22 +133,24 @@ export default function SupabaseSettingsPage() {
 
       // 1) 基本查询（用于判断表是否存在 / RLS 是否允许 SELECT）
       {
-        try {
-          const { data, error } = await supabase
-            .from('user_configs')
-            .select('id, updated_at')
-            .eq('user_id', currentUserId)
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-
-          nextResults.push({
-            ok: !error,
-            title: 'user_configs SELECT',
-            details: error ? formatError(error) : (data ? 'ok' : 'no rows (will insert on sync)'),
-          })
-        } catch (error) {
-          nextResults.push({ ok: false, title: 'user_configs SELECT', details: formatError(error) })
+        const token = session?.access_token
+        if (!token) {
+          nextResults.push({ ok: false, title: 'api proxy user_configs SELECT', details: 'missing session.access_token' })
+        } else {
+          try {
+            const res = await fetch(
+              `/api/supabase/rest/user_configs?select=id,updated_at&user_id=eq.${encodeURIComponent(currentUserId)}&order=updated_at.desc&limit=1`,
+              { headers: { authorization: `Bearer ${token}` } }
+            )
+            const text = await res.text().catch(() => '')
+            nextResults.push({
+              ok: res.ok,
+              title: 'api proxy user_configs SELECT',
+              details: `status=${res.status}${text ? ` | body=${text.slice(0, 180)}` : ''}`,
+            })
+          } catch (error) {
+            nextResults.push({ ok: false, title: 'api proxy user_configs SELECT', details: formatError(error) })
+          }
         }
       }
 
@@ -198,19 +200,24 @@ export default function SupabaseSettingsPage() {
 
       // 4) 读取 history_records 数量（确认写入落库）
       {
-        try {
-          const { count, error } = await supabase
-            .from('history_records')
-            .select('id', { count: 'exact' })
-            .eq('user_id', currentUserId)
-
-          nextResults.push({
-            ok: !error,
-            title: 'history_records COUNT',
-            details: error ? formatError(error) : `count=${count ?? 0}`,
-          })
-        } catch (error) {
-          nextResults.push({ ok: false, title: 'history_records COUNT', details: formatError(error) })
+        const token = session?.access_token
+        if (!token) {
+          nextResults.push({ ok: false, title: 'api proxy history_records SELECT', details: 'missing session.access_token' })
+        } else {
+          try {
+            const res = await fetch(
+              `/api/supabase/rest/history_records?select=id&user_id=eq.${encodeURIComponent(currentUserId)}&order=created_at.desc&limit=5`,
+              { headers: { authorization: `Bearer ${token}` } }
+            )
+            const text = await res.text().catch(() => '')
+            nextResults.push({
+              ok: res.ok,
+              title: 'api proxy history_records SELECT',
+              details: `status=${res.status}${text ? ` | body=${text.slice(0, 180)}` : ''}`,
+            })
+          } catch (error) {
+            nextResults.push({ ok: false, title: 'api proxy history_records SELECT', details: formatError(error) })
+          }
         }
       }
 
