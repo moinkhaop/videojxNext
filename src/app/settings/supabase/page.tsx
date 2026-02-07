@@ -77,6 +77,60 @@ export default function SupabaseSettingsPage() {
         }
       }
 
+      // 0.1) REST 匿名连通性（不带 Authorization，主要用于判断 /rest/v1 是否有 CORS / 路由）
+      {
+        try {
+          const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+          const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+          const rest = `${url.replace(/\/$/, '')}/rest/v1/user_configs?select=id&limit=1`
+          const res = await fetch(rest, {
+            headers: { apikey: key, 'x-api-key': key, accept: 'application/json' },
+          })
+          const text = await res.text().catch(() => '')
+          nextResults.push({
+            ok: res.ok || res.status === 401 || res.status === 403,
+            title: 'rest/v1 (anon) user_configs',
+            details: `status=${res.status}${text ? ` | body=${text.slice(0, 180)}` : ''}`,
+          })
+        } catch (error) {
+          nextResults.push({ ok: false, title: 'rest/v1 (anon) user_configs', details: formatError(error) })
+        }
+      }
+
+      // 0.2) REST 登录态连通性（带 Authorization；如果这一项失败但 anon 成功，基本就是网关没放行 authorization 头）
+      {
+        const token = session?.access_token
+        if (!token) {
+          nextResults.push({
+            ok: false,
+            title: 'rest/v1 (auth) user_configs',
+            details: 'missing session.access_token',
+          })
+        } else {
+          try {
+            const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+            const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+            const rest = `${url.replace(/\/$/, '')}/rest/v1/user_configs?select=id,updated_at&user_id=eq.${currentUserId}&limit=1`
+            const res = await fetch(rest, {
+              headers: {
+                apikey: key,
+                'x-api-key': key,
+                authorization: `Bearer ${token}`,
+                accept: 'application/json',
+              },
+            })
+            const text = await res.text().catch(() => '')
+            nextResults.push({
+              ok: res.ok,
+              title: 'rest/v1 (auth) user_configs',
+              details: `status=${res.status}${text ? ` | body=${text.slice(0, 180)}` : ''}`,
+            })
+          } catch (error) {
+            nextResults.push({ ok: false, title: 'rest/v1 (auth) user_configs', details: formatError(error) })
+          }
+        }
+      }
+
       // 1) 基本查询（用于判断表是否存在 / RLS 是否允许 SELECT）
       {
         try {
