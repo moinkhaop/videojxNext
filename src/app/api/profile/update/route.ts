@@ -35,6 +35,16 @@ export async function POST(request: NextRequest) {
     const { full_name, avatar_url } = await request.json()
     console.log('[API] 更新数据:', { full_name, avatar_url })
 
+    if (typeof avatar_url === 'string') {
+      // 防止把 data URL / 超长内容写进 user_metadata（会导致 access token 超大，进而所有数据同步失败）。
+      if (avatar_url.startsWith('data:') || avatar_url.length > 2048) {
+        return respond(
+          { error: 'avatar_url 无效：请先上传头像到 Storage（不要直接提交 base64 data URL）' },
+          { status: 400 }
+        )
+      }
+    }
+
     await updateUserMetadata({
       full_name,
       avatar_url

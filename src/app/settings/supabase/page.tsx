@@ -33,6 +33,15 @@ export default function SupabaseSettingsPage() {
   const [results, setResults] = useState<TestResult[]>([])
   const [syncStatus, setSyncStatus] = useState(() => readSyncStatus())
 
+  const tokenInfo = useMemo(() => {
+    const token = session?.access_token
+    if (!token) return { len: 0, jwtParts: 0 }
+    return {
+      len: token.length,
+      jwtParts: token.split('.').length,
+    }
+  }, [session?.access_token])
+
   const envInfo = useMemo(() => {
     return {
       enabled: SUPABASE_ENABLED,
@@ -335,7 +344,16 @@ export default function SupabaseSettingsPage() {
               <div>NEXT_PUBLIC_SUPABASE_ANON_KEY: {envInfo.anonKey}</div>
               <div>Auth loading: {String(loading)}</div>
               <div>User: {user?.id ? user.id : 'null'}</div>
+              <div>Access token: {tokenInfo.len ? `len=${tokenInfo.len}, parts=${tokenInfo.jwtParts}` : '-'}</div>
             </div>
+
+            {tokenInfo.len > 8000 && (
+              <Alert>
+                <AlertDescription>
+                  检测到 access token 过大（通常是把 base64 头像/大对象写进了 user_metadata）。请在 Supabase 后台清理用户元数据里的超长字段（如 avatar_url），然后退出登录再登录。
+                </AlertDescription>
+              </Alert>
+            )}
 
             <div className="text-xs text-muted-foreground">
               <div>Last sync (config): {syncStatus.config.okAt ?? syncStatus.config.errorAt ?? '-'}</div>

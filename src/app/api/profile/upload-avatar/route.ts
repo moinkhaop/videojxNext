@@ -1,16 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/supabase/auth-server'
 import { createServerCookieStore } from '@/lib/supabase/server-cookies'
-import { Buffer } from 'node:buffer'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
+import { Buffer } from 'node:buffer'
 
 export const runtime = 'nodejs'
-
-async function fileToDataUrl(file: File) {
-  const arrayBuffer = await file.arrayBuffer()
-  const base64 = Buffer.from(arrayBuffer).toString('base64')
-  return `data:${file.type};base64,${base64}`
-}
 
 export async function POST(request: NextRequest) {
   if (!SUPABASE_ENABLED) {
@@ -68,12 +62,37 @@ export async function POST(request: NextRequest) {
 
     console.log('[API] 上传文件:', file.name, file.type, file.size)
 
-  // 将文件转换为 data URL，兼容服务端环境
-  const avatarUrl = await fileToDataUrl(file)
+    // 不要把 base64 data URL 写进 user_metadata（会导致 JWT 超大，进而无法访问 /rest/v1）。
+    // 改为上传到 Storage，再把短链接写入 metadata。
+    const { createAdminClient } = await import('@/lib/supabase/admin')
+    const admin = createAdminClient()
 
-    console.log('[API] 头像上传成功:', avatarUrl)
+    const bytes = Buffer.from(await file.arrayBuffer())
+    const ext = (file.name.split('.').pop() || '').toLowerCase()
+    const safeExt = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? ext : 'png'
+    const objectPath = `avatars/${user.id}/avatar.${safeExt}`
 
-    // 更新用户元数据中的头像URL
+    const { error: uploadError } = await admin.storage
+      .from('avatars')
+      .upload(objectPath, bytes, { upsert: true, contentType: file.type })
+
+    if (uploadError) {
+      return respond(
+        { error: `Storage 上传失败: ${uploadError.message}` },
+        { status: 400 }
+      )
+    }
+
+    const { data: publicData } = admin.storage.from('avatars').getPublicUrl(objectPath)
+    const avatarUrl = publicData?.publicUrl
+
+    if (!avatarUrl) {
+      return respond(
+        { error: '无法获取头像公开链接（请确认 avatars bucket 为 public 或改用 signed url）' },
+        { status: 400 }
+      )
+    }
+
     const { updateUserMetadata } = await import('@/lib/supabase/profile')
     await updateUserMetadata({ avatar_url: avatarUrl }, request, cookieStore)
 

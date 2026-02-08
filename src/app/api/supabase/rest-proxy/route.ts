@@ -103,10 +103,32 @@ export async function POST(request: Request) {
     })
 
     const responseHeaders = pickResponseHeaders(upstream)
+    responseHeaders.set('x-dyjx-upstream-status', String(upstream.status))
+    responseHeaders.set('x-dyjx-auth-len', String(accessToken ? accessToken.length : 0))
+
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => '')
+      return Response.json(
+        {
+          error: 'UpstreamError',
+          upstreamStatus: upstream.status,
+          upstreamBody: text.slice(0, 800),
+        },
+        { status: upstream.status, headers: responseHeaders }
+      )
+    }
+
     const buffer = await upstream.arrayBuffer()
     return new Response(buffer, { status: upstream.status, headers: responseHeaders })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return Response.json({ error: 'Upstream fetch failed', message }, { status: 502, headers: { 'x-dyjx-rest-proxy': '1' } })
   }
+}
+
+export async function GET() {
+  return Response.json(
+    { ok: true, name: 'dyjx-supabase-rest-proxy' },
+    { headers: { 'x-dyjx-rest-proxy': '1' } }
+  )
 }
