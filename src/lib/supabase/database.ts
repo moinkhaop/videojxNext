@@ -224,7 +224,7 @@ export async function addTag(tagData: any): Promise<any> {
 
   const { data, error } = await supabase
     .from('tags')
-    .insert(payload)
+    .upsert(payload, { onConflict: 'id' })
     .select('id, tag_data, created_at, updated_at')
     .single()
 

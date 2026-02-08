@@ -163,7 +163,7 @@ export default function SupabaseSettingsPage() {
       // 5) 触发一次“本地 -> 云端”推送（如果你本地已有历史/标签/配置）
       {
         try {
-          const { updateUserConfig, addHistoryRecord, addTag } = await import('@/lib/supabase/database')
+          const { updateUserConfig, addHistoryRecord, addTag, updateTag } = await import('@/lib/supabase/database')
 
           const payload = {
             ...ConfigManager.getAppConfig(),
@@ -179,7 +179,11 @@ export default function SupabaseSettingsPage() {
 
           const localTags = TagManager.getTags()
           for (const t of localTags) {
-            await addTag(t)
+            try {
+              await updateTag(t.id, t)
+            } catch {
+              await addTag(t)
+            }
           }
 
           nextResults.push({
