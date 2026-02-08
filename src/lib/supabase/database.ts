@@ -133,11 +133,18 @@ export async function addHistoryRecord(recordData: any): Promise<void> {
   const supabase = getSupabase()
 
   const payload: any = { user_id: userId, record_data: recordData }
-  if (isUuid(recordData?.id)) {
+  const hasStableId = isUuid(recordData?.id)
+  if (hasStableId) {
     payload.id = recordData.id
   }
 
-  const { error } = await supabase.from('history_records').insert(payload)
+  const { error } = hasStableId
+    ? await supabase
+        .from('history_records')
+        .upsert(payload, { onConflict: 'id' })
+    : await supabase
+        .from('history_records')
+        .insert(payload)
 
   if (error) {
     throw error
