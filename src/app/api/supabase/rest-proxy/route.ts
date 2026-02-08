@@ -5,6 +5,7 @@ type ProxyRequest = {
   query?: string
   method?: string
   accessToken?: string
+  accessTokenB64Url?: string
   body?: any
   prefer?: string
   range?: string
@@ -26,29 +27,44 @@ const pickResponseHeaders = (upstream: Response) => {
     const value = upstream.headers.get(key)
     if (value) headers.set(key, value)
   }
+  headers.set('x-dyjx-rest-proxy', '1')
   return headers
+}
+
+const decodeBase64Url = (value: string) => {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=')
+  // eslint-disable-next-line no-undef
+  return atob(padded)
 }
 
 export async function POST(request: Request) {
   const env = getEnv()
   if (!env) {
-    return Response.json({ error: 'Missing Supabase envs' }, { status: 500 })
+    return Response.json({ error: 'Missing Supabase envs' }, { status: 500, headers: { 'x-dyjx-rest-proxy': '1' } })
   }
 
   let payload: ProxyRequest | null = null
   try {
     payload = (await request.json()) as ProxyRequest
   } catch {
-    return Response.json({ error: 'Invalid JSON body' }, { status: 400 })
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400, headers: { 'x-dyjx-rest-proxy': '1' } })
   }
 
   const path = payload?.path?.replace(/^\/+/, '') ?? ''
   if (!path) {
-    return Response.json({ error: 'Missing path' }, { status: 400 })
+    return Response.json({ error: 'Missing path' }, { status: 400, headers: { 'x-dyjx-rest-proxy': '1' } })
   }
 
   const method = String(payload.method ?? 'GET').toUpperCase()
-  const accessToken = payload.accessToken
+  let accessToken = payload.accessToken
+  if (!accessToken && payload.accessTokenB64Url) {
+    try {
+      accessToken = decodeBase64Url(payload.accessTokenB64Url)
+    } catch {
+      return Response.json({ error: 'Invalid accessTokenB64Url' }, { status: 400, headers: { 'x-dyjx-rest-proxy': '1' } })
+    }
+  }
 
   const base = env.supabaseUrl.replace(/\/$/, '')
   const upstreamUrl = new URL(`${base}/rest/v1/${path}`)
@@ -91,6 +107,6 @@ export async function POST(request: Request) {
     return new Response(buffer, { status: upstream.status, headers: responseHeaders })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return Response.json({ error: 'Upstream fetch failed', message }, { status: 502 })
+    return Response.json({ error: 'Upstream fetch failed', message }, { status: 502, headers: { 'x-dyjx-rest-proxy': '1' } })
   }
 }

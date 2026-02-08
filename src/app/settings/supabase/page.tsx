@@ -138,6 +138,15 @@ export default function SupabaseSettingsPage() {
           nextResults.push({ ok: false, title: 'api proxy user_configs SELECT', details: 'missing session.access_token' })
         } else {
           try {
+            const tokenB64Url = (() => {
+              try {
+                const b64 = window.btoa(token)
+                return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+              } catch {
+                return null
+              }
+            })()
+
             const res = await fetch('/api/supabase/rest-proxy', {
               method: 'POST',
               headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -145,7 +154,8 @@ export default function SupabaseSettingsPage() {
                 path: 'user_configs',
                 query: `select=id,updated_at&user_id=eq.${encodeURIComponent(currentUserId)}&order=updated_at.desc&limit=1`,
                 method: 'GET',
-                accessToken: token,
+                accessTokenB64Url: tokenB64Url ?? undefined,
+                accessToken: tokenB64Url ? undefined : token,
               }),
             })
             const text = await res.text().catch(() => '')
@@ -211,6 +221,15 @@ export default function SupabaseSettingsPage() {
           nextResults.push({ ok: false, title: 'api proxy history_records SELECT', details: 'missing session.access_token' })
         } else {
           try {
+            const tokenB64Url = (() => {
+              try {
+                const b64 = window.btoa(token)
+                return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+              } catch {
+                return null
+              }
+            })()
+
             const res = await fetch('/api/supabase/rest-proxy', {
               method: 'POST',
               headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -218,7 +237,8 @@ export default function SupabaseSettingsPage() {
                 path: 'history_records',
                 query: `select=id&user_id=eq.${encodeURIComponent(currentUserId)}&order=created_at.desc&limit=5`,
                 method: 'GET',
-                accessToken: token,
+                accessTokenB64Url: tokenB64Url ?? undefined,
+                accessToken: tokenB64Url ? undefined : token,
               }),
             })
             const text = await res.text().catch(() => '')

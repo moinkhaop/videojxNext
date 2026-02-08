@@ -33,6 +33,16 @@ async function restJson<T>(
   const range = initHeaders.get('range') ?? undefined
   const bodyValue = init?.body ? (typeof init.body === 'string' ? init.body : String(init.body as any)) : undefined
 
+  const tokenB64Url = (() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const b64 = window.btoa(accessToken)
+      return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+    } catch {
+      return null
+    }
+  })()
+
   const res = await fetch('/api/supabase/rest-proxy', {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -41,7 +51,8 @@ async function restJson<T>(
       path,
       query,
       method: initMethod,
-      accessToken,
+      accessTokenB64Url: tokenB64Url ?? undefined,
+      accessToken: tokenB64Url ? undefined : accessToken,
       body: bodyValue,
       prefer,
       range,
