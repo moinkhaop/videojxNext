@@ -26,17 +26,26 @@ async function restJson<T>(
   pathWithQuery: string,
   init?: RequestInit & { expectNoJson?: boolean }
 ): Promise<T> {
-  const headers = new Headers(init?.headers)
-  headers.set('x-supabase-access-token', accessToken)
-  headers.set('accept', 'application/json')
-  if (init?.body != null && !headers.has('content-type')) {
-    headers.set('content-type', 'application/json')
-  }
+  const initMethod = String(init?.method ?? 'GET').toUpperCase()
+  const [path, query = ''] = pathWithQuery.split('?')
+  const initHeaders = new Headers(init?.headers)
+  const prefer = initHeaders.get('prefer') ?? undefined
+  const range = initHeaders.get('range') ?? undefined
+  const bodyValue = init?.body ? (typeof init.body === 'string' ? init.body : String(init.body as any)) : undefined
 
-  const res = await fetch(`/api/supabase/rest/${pathWithQuery}`, {
-    ...init,
-    headers,
+  const res = await fetch('/api/supabase/rest-proxy', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
     cache: 'no-store',
+    body: JSON.stringify({
+      path,
+      query,
+      method: initMethod,
+      accessToken,
+      body: bodyValue,
+      prefer,
+      range,
+    }),
   })
 
   if (!res.ok) {

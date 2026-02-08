@@ -138,10 +138,16 @@ export default function SupabaseSettingsPage() {
           nextResults.push({ ok: false, title: 'api proxy user_configs SELECT', details: 'missing session.access_token' })
         } else {
           try {
-            const res = await fetch(
-              `/api/supabase/rest/user_configs?select=id,updated_at&user_id=eq.${encodeURIComponent(currentUserId)}&order=updated_at.desc&limit=1`,
-              { headers: { 'x-supabase-access-token': token } }
-            )
+            const res = await fetch('/api/supabase/rest-proxy', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({
+                path: 'user_configs',
+                query: `select=id,updated_at&user_id=eq.${encodeURIComponent(currentUserId)}&order=updated_at.desc&limit=1`,
+                method: 'GET',
+                accessToken: token,
+              }),
+            })
             const text = await res.text().catch(() => '')
             nextResults.push({
               ok: res.ok,
@@ -205,10 +211,16 @@ export default function SupabaseSettingsPage() {
           nextResults.push({ ok: false, title: 'api proxy history_records SELECT', details: 'missing session.access_token' })
         } else {
           try {
-            const res = await fetch(
-              `/api/supabase/rest/history_records?select=id&user_id=eq.${encodeURIComponent(currentUserId)}&order=created_at.desc&limit=5`,
-              { headers: { 'x-supabase-access-token': token } }
-            )
+            const res = await fetch('/api/supabase/rest-proxy', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({
+                path: 'history_records',
+                query: `select=id&user_id=eq.${encodeURIComponent(currentUserId)}&order=created_at.desc&limit=5`,
+                method: 'GET',
+                accessToken: token,
+              }),
+            })
             const text = await res.text().catch(() => '')
             nextResults.push({
               ok: res.ok,
