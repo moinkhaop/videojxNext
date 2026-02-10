@@ -107,11 +107,15 @@ export class ConversionService {
   private static setParseCache(key: string, data: ParsedVideoInfo) {
     if (this.parseCache.size >= this.PARSE_CACHE_MAX_ENTRIES) {
       const now = Date.now()
-      for (const [entryKey, entry] of this.parseCache.entries()) {
+      const expiredKeys: string[] = []
+      this.parseCache.forEach((entry, entryKey) => {
         if (entry.expiresAt <= now) {
-          this.parseCache.delete(entryKey)
+          expiredKeys.push(entryKey)
         }
-      }
+      })
+      expiredKeys.forEach(entryKey => {
+        this.parseCache.delete(entryKey)
+      })
       if (this.parseCache.size >= this.PARSE_CACHE_MAX_ENTRIES) {
         const oldestKey = this.parseCache.keys().next().value
         if (oldestKey) {
