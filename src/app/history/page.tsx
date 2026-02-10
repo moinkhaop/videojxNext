@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useDeferredValue, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,28 +15,20 @@ import {
   XCircle,
   Clock,
   Video,
-  Calendar,
   RefreshCw,
   Copy,
   Star,
   StarOff,
   Download,
-  Filter,
   BarChart3,
   X,
   Grid3x3,
   List,
-  SortAsc,
   Tag as TagIcon,
-  Plus,
-  Edit2,
-  Image as ImageIcon,
-  Play,
-  ExternalLink,
   RotateCcw,
   Maximize2
 } from 'lucide-react'
-import { HistoryRecord, TaskStatus, ConversionTask, BatchTask, ExtendedBatchTask, BatchInputMode, HistoryStats, Tag, HistoryViewMode, HistorySortOption, MediaType } from '@/types'
+import { HistoryRecord, TaskStatus, ConversionTask, HistoryStats, Tag, HistoryViewMode, HistorySortOption, MediaType } from '@/types'
 import { HistoryManager, TagManager } from '@/lib/storage'
 import { useRouter } from 'next/navigation'
 import { VideoPreview } from '@/components/preview/VideoPreview'
@@ -54,6 +46,10 @@ const TAG_COLORS = {
   orange: 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300'
 }
 
+const ITEMS_PER_PAGE = 20
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 export default function HistoryPage() {
   const router = useRouter()
 
@@ -68,6 +64,7 @@ export default function HistoryPage() {
 
   // 筛选和搜索状态
   const [searchTerm, setSearchTerm] = useState('')
+  const deferredSearchTerm = useDeferredValue(searchTerm)
   const [filterType, setFilterType] = useState<'all' | 'single' | 'batch'>('all')
   const [filterStatus, setFilterStatus] = useState<'all' | TaskStatus>('all')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -80,24 +77,41 @@ export default function HistoryPage() {
   const [showDetailDialog, setShowDetailDialog] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('blue')
+  const [batchSelectMode, setBatchSelectMode] = useState(false)
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([])
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
-  const itemsPerPage = 20
 
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  const loadData = () => {
+  const loadData = useCallback((selectedId?: string | null) => {
     const history = HistoryManager.getHistory()
     const allTags = TagManager.getTags()
-    const statistics = HistoryManager.getStatistics()
+    const statistics = HistoryManager.getStatistics(history)
 
     setRecords(history)
     setTags(allTags)
     setStats(statistics)
-  }
+
+    if (typeof selectedId !== 'undefined') {
+      if (!selectedId) {
+        setSelectedRecord(null)
+      } else {
+        const updatedRecord = history.find(record => record.id === selectedId)
+        setSelectedRecord(updatedRecord ?? null)
+      }
+      return
+    }
+
+    setSelectedRecord(prev => {
+      if (!prev) return prev
+      const updatedRecord = history.find(record => record.id === prev.id)
+      return updatedRecord ?? null
+    })
+  }, [])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
   // 筛选和排序逻辑
   const filteredAndSortedRecords = useMemo(() => {
@@ -126,15 +140,10 @@ export default function HistoryPage() {
     }
 
     // 搜索筛选
-    if (searchTerm.trim()) {
-      const lowerKeyword = searchTerm.toLowerCase()
+    if (deferredSearchTerm.trim()) {
+      const lowerKeyword = deferredSearchTerm.toLowerCase()
       filtered = filtered.filter(record => {
-        const task = record.task as any
-        return (
-          task.videoTitle?.toLowerCase().includes(lowerKeyword) ||
-          task.videoUrl?.toLowerCase().includes(lowerKeyword) ||
-          task.name?.toLowerCase().includes(lowerKeyword)
-        )
+        return HistoryManager.matchesKeyword(record, lowerKeyword)
       })
     }
 
@@ -167,35 +176,52 @@ export default function HistoryPage() {
     }
 
     return sorted
-  }, [records, searchTerm, filterType, filterStatus, selectedTags, showFavoritesOnly, sortOption])
+  }, [records, deferredSearchTerm, filterType, filterStatus, selectedTags, showFavoritesOnly, sortOption])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [deferredSearchTerm, filterType, filterStatus, selectedTags, showFavoritesOnly, sortOption, viewMode])
 
   // 分页数据
   const paginatedRecords = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage
-    const endIndex = startIndex + itemsPerPage
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
+    const endIndex = startIndex + ITEMS_PER_PAGE
     return filteredAndSortedRecords.slice(startIndex, endIndex)
-  }, [filteredAndSortedRecords, currentPage, itemsPerPage])
+  }, [filteredAndSortedRecords, currentPage])
 
-  const totalPages = Math.ceil(filteredAndSortedRecords.length / itemsPerPage)
+  const selectedRecordIdSet = useMemo(() => new Set(selectedRecordIds), [selectedRecordIds])
+
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedRecords.length / ITEMS_PER_PAGE))
+
+  useEffect(() => {
+    setCurrentPage(prev => Math.min(prev, totalPages))
+  }, [totalPages])
+
+  useEffect(() => {
+    setSelectedRecordIds(prev => {
+      const existingIds = new Set(records.map(record => record.id))
+      return prev.filter(id => existingIds.has(id))
+    })
+  }, [records])
+
+  useEffect(() => {
+    if (!batchSelectMode) {
+      setSelectedRecordIds([])
+    }
+  }, [batchSelectMode])
 
   // 操作处理函数
   const handleDeleteRecord = (id: string) => {
     if (confirm('确定要删除这条历史记录吗？')) {
       HistoryManager.deleteRecord(id)
-      if (selectedRecord?.id === id) {
-        setSelectedRecord(null)
-      }
-      loadData()
+      const nextSelectedId = selectedRecord?.id === id ? null : selectedRecord?.id
+      loadData(nextSelectedId)
     }
   }
 
   const handleToggleFavorite = (id: string) => {
     HistoryManager.toggleFavorite(id)
-    loadData()
-    if (selectedRecord?.id === id) {
-      const updated = HistoryManager.getHistory().find(r => r.id === id)
-      if (updated) setSelectedRecord(updated)
-    }
+    loadData(selectedRecord?.id ?? undefined)
   }
 
   const handleCopyUrl = async (url: string) => {
@@ -218,7 +244,7 @@ export default function HistoryPage() {
 
   const handleRecordClick = (record: HistoryRecord) => {
     setSelectedRecord(record)
-    HistoryManager.updateLastViewedAt(record.id)
+    HistoryManager.updateLastViewedAt(record.id, 30000)
   }
 
   const handleAddTag = () => {
@@ -238,7 +264,7 @@ export default function HistoryPage() {
   const handleDeleteTag = (tagId: string) => {
     if (confirm('确定要删除这个标签吗？所有记录中的此标签也会被移除。')) {
       TagManager.deleteTag(tagId)
-      loadData()
+      loadData(selectedRecord?.id ?? undefined)
     }
   }
 
@@ -249,11 +275,7 @@ export default function HistoryPage() {
     } else {
       HistoryManager.addTagToRecord(recordId, tagId)
     }
-    loadData()
-    if (selectedRecord?.id === recordId) {
-      const updated = HistoryManager.getHistory().find(r => r.id === recordId)
-      if (updated) setSelectedRecord(updated)
-    }
+    loadData(selectedRecord?.id ?? undefined)
   }
 
   const handleClearFilters = () => {
@@ -263,6 +285,77 @@ export default function HistoryPage() {
     setSelectedTags([])
     setShowFavoritesOnly(false)
     setCurrentPage(1)
+  }
+
+  const quickFilterChips = useMemo(() => {
+    if (!stats) return [] as Array<{ key: string; label: string; active: boolean; onClick: () => void; hidden?: boolean }>
+
+    return [
+      {
+        key: 'favorites',
+        label: `仅收藏 (${stats.favoriteCount})`,
+        active: showFavoritesOnly,
+        onClick: () => setShowFavoritesOnly(prev => !prev),
+        hidden: stats.favoriteCount === 0,
+      },
+      {
+        key: 'failed',
+        label: `仅失败 (${stats.totalFailed})`,
+        active: filterStatus === TaskStatus.FAILED,
+        onClick: () => setFilterStatus(prev => prev === TaskStatus.FAILED ? 'all' : TaskStatus.FAILED),
+        hidden: stats.totalFailed === 0,
+      },
+      {
+        key: 'single',
+        label: '单链接',
+        active: filterType === 'single',
+        onClick: () => setFilterType(prev => prev === 'single' ? 'all' : 'single'),
+      },
+      {
+        key: 'batch',
+        label: '批量任务',
+        active: filterType === 'batch',
+        onClick: () => setFilterType(prev => prev === 'batch' ? 'all' : 'batch'),
+      },
+    ]
+  }, [stats, showFavoritesOnly, filterStatus, filterType])
+
+  const handleToggleBatchSelect = () => {
+    setBatchSelectMode(prev => !prev)
+  }
+
+  const toggleRecordSelection = (recordId: string) => {
+    setSelectedRecordIds(prev => {
+      if (prev.includes(recordId)) {
+        return prev.filter(id => id !== recordId)
+      }
+      return [...prev, recordId]
+    })
+  }
+
+  const handleSelectCurrentPage = () => {
+    const currentPageIds = paginatedRecords.map(record => record.id)
+    setSelectedRecordIds(prev => {
+      const merged = new Set([...prev, ...currentPageIds])
+      return Array.from(merged)
+    })
+  }
+
+  const handleClearSelection = () => {
+    setSelectedRecordIds([])
+  }
+
+  const handleBatchDelete = () => {
+    if (selectedRecordIds.length === 0) return
+    if (!confirm(`确定要删除选中的 ${selectedRecordIds.length} 条记录吗？此操作不可恢复。`)) {
+      return
+    }
+
+    HistoryManager.deleteRecords(selectedRecordIds)
+    const selectedId = selectedRecord?.id
+    const nextSelectedId = selectedId && selectedRecordIdSet.has(selectedId) ? null : selectedId
+    setSelectedRecordIds([])
+    loadData(nextSelectedId)
   }
 
   const handleExportCSV = () => {
@@ -294,8 +387,7 @@ export default function HistoryPage() {
   const handleClearHistory = () => {
     if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
       HistoryManager.clearHistory()
-      loadData()
-      setSelectedRecord(null)
+      loadData(null)
     }
   }
 
@@ -348,22 +440,66 @@ export default function HistoryPage() {
     return null
   }
 
+  const highlightText = (text: string | undefined, className?: string): ReactNode => {
+    const source = String(text ?? '')
+    const keyword = deferredSearchTerm.trim()
+
+    if (!keyword || !source) {
+      return <span className={className}>{source}</span>
+    }
+
+    const matcher = new RegExp(`(${escapeRegExp(keyword)})`, 'ig')
+    const parts = source.split(matcher)
+
+    return (
+      <span className={className}>
+        {parts.map((part, index) => {
+          if (part.toLowerCase() === keyword.toLowerCase()) {
+            return (
+              <mark key={`${part}-${index}`} className="bg-yellow-200 dark:bg-yellow-500/30 rounded px-0.5">
+                {part}
+              </mark>
+            )
+          }
+          return <span key={`${part}-${index}`}>{part}</span>
+        })}
+      </span>
+    )
+  }
+
   // 渲染列表项
   const renderListItem = (record: HistoryRecord) => {
     const task = record.task as any
     const isSelected = selectedRecord?.id === record.id
+    const isChecked = selectedRecordIdSet.has(record.id)
     const thumbnail = getRecordThumbnail(record)
     const recordTags = tags.filter(t => record.tags?.includes(t.id))
 
     return (
       <div
         key={record.id}
-        onClick={() => handleRecordClick(record)}
+        onClick={() => {
+          if (batchSelectMode) {
+            toggleRecordSelection(record.id)
+          } else {
+            handleRecordClick(record)
+          }
+        }}
         className={`p-4 border-b cursor-pointer hover:bg-accent/50 transition-colors ${
           isSelected ? 'bg-accent' : ''
         }`}
       >
         <div className="flex items-start gap-3">
+          {batchSelectMode && (
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4"
+              checked={isChecked}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => toggleRecordSelection(record.id)}
+            />
+          )}
+
           {/* 缩略图 */}
           {thumbnail ? (
             <div className="w-24 h-16 flex-shrink-0 rounded overflow-hidden bg-muted">
@@ -384,7 +520,7 @@ export default function HistoryPage() {
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-medium truncate">{getRecordTitle(record)}</h3>
+                  <h3 className="font-medium truncate">{highlightText(getRecordTitle(record))}</h3>
                   {record.isFavorite && (
                     <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 flex-shrink-0" />
                   )}
@@ -392,13 +528,13 @@ export default function HistoryPage() {
 
                 {record.type === 'single' && (
                   <p className="text-xs text-muted-foreground truncate">
-                    {task.videoUrl}
+                    {highlightText(task.videoUrl)}
                   </p>
                 )}
 
                 {task.parsedVideoInfo?.author && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    作者: {task.parsedVideoInfo.author}
+                    作者: {highlightText(task.parsedVideoInfo.author)}
                   </p>
                 )}
               </div>
@@ -433,18 +569,37 @@ export default function HistoryPage() {
   // 渲染网格项
   const renderGridItem = (record: HistoryRecord) => {
     const task = record.task as any
+    const isChecked = selectedRecordIdSet.has(record.id)
     const thumbnail = getRecordThumbnail(record)
     const recordTags = tags.filter(t => record.tags?.includes(t.id))
 
     return (
       <Card
         key={record.id}
-        onClick={() => handleRecordClick(record)}
+        onClick={() => {
+          if (batchSelectMode) {
+            toggleRecordSelection(record.id)
+          } else {
+            handleRecordClick(record)
+          }
+        }}
         className="cursor-pointer hover:shadow-lg transition-all hover:-translate-y-1"
       >
         <CardContent className="p-0">
           {/* 缩略图 */}
           <div className="relative w-full h-40 bg-muted">
+            {batchSelectMode && (
+              <div className="absolute top-2 left-2 z-10 bg-background/90 rounded px-1.5 py-1">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={isChecked}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleRecordSelection(record.id)}
+                />
+              </div>
+            )}
+
             {thumbnail ? (
               <img src={thumbnail} alt="thumbnail" className="w-full h-full object-cover" />
             ) : (
@@ -465,7 +620,7 @@ export default function HistoryPage() {
             </div>
 
             {/* 收藏图标 */}
-            {record.isFavorite && (
+            {record.isFavorite && !batchSelectMode && (
               <div className="absolute top-2 left-2">
                 <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
               </div>
@@ -474,11 +629,11 @@ export default function HistoryPage() {
 
           {/* 信息 */}
           <div className="p-4">
-            <h3 className="font-medium truncate mb-2">{getRecordTitle(record)}</h3>
+            <h3 className="font-medium truncate mb-2">{highlightText(getRecordTitle(record))}</h3>
 
             {task.parsedVideoInfo?.author && (
               <p className="text-xs text-muted-foreground mb-2">
-                作者: {task.parsedVideoInfo.author}
+                作者: {highlightText(task.parsedVideoInfo.author)}
               </p>
             )}
 
@@ -897,6 +1052,7 @@ export default function HistoryPage() {
                 <option value={HistorySortOption.DATE_ASC}>时间 (最旧)</option>
                 <option value={HistorySortOption.TITLE_ASC}>标题 (A-Z)</option>
                 <option value={HistorySortOption.TITLE_DESC}>标题 (Z-A)</option>
+                <option value={HistorySortOption.STATUS}>状态</option>
               </select>
 
               <Button
@@ -931,6 +1087,23 @@ export default function HistoryPage() {
               ))}
             </div>
 
+            {/* 快捷筛选 */}
+            {quickFilterChips.some(chip => !chip.hidden) && (
+              <div className="flex flex-wrap gap-2 mb-4">
+                {quickFilterChips.filter(chip => !chip.hidden).map(chip => (
+                  <Button
+                    key={chip.key}
+                    variant={chip.active ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={chip.onClick}
+                    className="h-8"
+                  >
+                    {chip.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+
             {/* 操作按钮 */}
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -946,6 +1119,28 @@ export default function HistoryPage() {
               </div>
 
               <div className="flex items-center gap-2">
+                <Button variant={batchSelectMode ? 'default' : 'outline'} size="sm" onClick={handleToggleBatchSelect}>
+                  {batchSelectMode ? '退出多选' : '批量选择'}
+                </Button>
+                {batchSelectMode && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={handleSelectCurrentPage}>
+                      全选本页 ({paginatedRecords.length})
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleClearSelection}>
+                      清空选择
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleBatchDelete}
+                      disabled={selectedRecordIds.length === 0}
+                    >
+                      删除所选 ({selectedRecordIds.length})
+                    </Button>
+                  </>
+                )}
+
                 <Dialog open={showTagDialog} onOpenChange={setShowTagDialog}>
                   <DialogTrigger asChild>
                     <Button variant="outline" size="sm">
@@ -995,6 +1190,7 @@ export default function HistoryPage() {
                         <div className="flex gap-2">
                           {Object.keys(TAG_COLORS).map(color => (
                             <button
+                              type="button"
                               key={color}
                               onClick={() => setNewTagColor(color)}
                               className={`w-8 h-8 rounded border-2 ${
@@ -1022,7 +1218,7 @@ export default function HistoryPage() {
                   <Download className="w-4 h-4 mr-1" />
                   JSON
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => loadData()}>
+                <Button variant="outline" size="sm" onClick={() => loadData(selectedRecord?.id ?? undefined)}>
                   <RefreshCw className="w-4 h-4 mr-1" />
                   刷新
                 </Button>
@@ -1130,6 +1326,22 @@ export default function HistoryPage() {
             )}
           </div>
         )}
+
+        <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
+          <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>记录详情</DialogTitle>
+              <DialogDescription>
+                查看完整历史记录数据（JSON）
+              </DialogDescription>
+            </DialogHeader>
+            <div className="overflow-auto rounded-md border bg-muted/20 p-4">
+              <pre className="text-xs leading-5 whitespace-pre-wrap break-all">
+                {selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '暂无记录'}
+              </pre>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

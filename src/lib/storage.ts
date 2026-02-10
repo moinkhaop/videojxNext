@@ -657,6 +657,34 @@ export class CleanupLogManager {
 // 历史记录管理
 export class HistoryManager {
   private static readonly HISTORY_KEY = 'dyjx_history_records'
+  private static readonly lastViewedSyncMap = new Map<string, number>()
+
+  private static normalizeDate(value: unknown, fallback: Date): Date {
+    const parsed = value instanceof Date ? value : new Date(value as any)
+    return Number.isNaN(parsed.getTime()) ? fallback : parsed
+  }
+
+  private static normalizeRecord(record: any): HistoryRecord {
+    const createdAt = this.normalizeDate(record?.createdAt, new Date())
+    const rawTask = record?.task && typeof record.task === 'object' ? record.task : {}
+    const taskCreatedAt = this.normalizeDate(rawTask.createdAt, createdAt)
+
+    return {
+      ...record,
+      id: isUuid(record?.id) ? record.id : createUuid(),
+      createdAt,
+      task: {
+        ...rawTask,
+        createdAt: taskCreatedAt,
+        completedAt: rawTask.completedAt
+          ? this.normalizeDate(rawTask.completedAt, taskCreatedAt)
+          : undefined
+      },
+      lastViewedAt: record?.lastViewedAt
+        ? this.normalizeDate(record.lastViewedAt, createdAt)
+        : undefined
+    } as HistoryRecord
+  }
 
   // 获取历史记录
   static getHistory(): HistoryRecord[] {
@@ -664,22 +692,15 @@ export class HistoryManager {
       const stored = localStorage.getItem(this.HISTORY_KEY)
       if (stored) {
         const records = JSON.parse(stored)
+        if (!Array.isArray(records)) {
+          return []
+        }
         let changed = false
-        // 转换日期字符串为Date对象
-        const parsed = records.map((record: any) => ({
-          ...record,
-          createdAt: new Date(record.createdAt),
-          task: {
-            ...record.task,
-            createdAt: new Date(record.task.createdAt),
-            completedAt: record.task.completedAt ? new Date(record.task.completedAt) : undefined
+        const normalized = records.map((record: any) => {
+          if (!isUuid(record?.id)) {
+            changed = true
           }
-        }))
-
-        const normalized = parsed.map((record: any) => {
-          if (isUuid(record.id)) return record
-          changed = true
-          return { ...record, id: createUuid() }
+          return this.normalizeRecord(record)
         })
 
         if (changed) {
@@ -719,14 +740,20 @@ export class HistoryManager {
   // 删除历史记录
   static deleteRecord(id: string): void {
     const records = this.getHistory().filter(r => r.id !== id)
+    this.lastViewedSyncMap.delete(id)
     this.saveHistory(records)
     scheduleHistoryDeleteToSupabase(id)
   }
 
   // 清空历史记录
   static clearHistory(): void {
+    const records = this.getHistory()
     try {
       localStorage.removeItem(this.HISTORY_KEY)
+      this.lastViewedSyncMap.clear()
+      records.forEach(record => {
+        scheduleHistoryDeleteToSupabase(record.id)
+      })
     } catch (error) {
       console.error('清空历史记录失败:', error)
     }
@@ -735,16 +762,32 @@ export class HistoryManager {
   // 搜索历史记录
   static searchHistory(keyword: string): HistoryRecord[] {
     const records = this.getHistory()
-    const lowerKeyword = keyword.toLowerCase()
+    const lowerKeyword = keyword.trim().toLowerCase()
 
-    return records.filter(record => {
-      const task = record.task as any
-      return (
-        task.videoTitle?.toLowerCase().includes(lowerKeyword) ||
-        task.videoUrl?.toLowerCase().includes(lowerKeyword) ||
-        task.name?.toLowerCase().includes(lowerKeyword)
-      )
-    })
+    if (!lowerKeyword) {
+      return records
+    }
+
+    return records.filter(record => this.matchesKeyword(record, lowerKeyword))
+  }
+
+  static matchesKeyword(record: HistoryRecord, keyword: string): boolean {
+    const lowerKeyword = keyword.trim().toLowerCase()
+    if (!lowerKeyword) {
+      return true
+    }
+
+    const task = record.task as any
+    const targets = [
+      task.videoTitle,
+      task.videoUrl,
+      task.name,
+      task.parsedVideoInfo?.author,
+      task.sourceUrl,
+      task.uploadResult?.filePath,
+    ]
+
+    return targets.some(value => String(value ?? '').toLowerCase().includes(lowerKeyword))
   }
 
   // {{ AURA: Add - 切换收藏状态 }}
@@ -775,13 +818,14 @@ export class HistoryManager {
     this.saveHistory(records)
 
     ids.forEach(id => {
+      this.lastViewedSyncMap.delete(id)
       scheduleHistoryDeleteToSupabase(id)
     })
   }
 
   // {{ AURA: Add - 获取历史记录统计数据 }}
-  static getStatistics(): HistoryStats {
-    const records = this.getHistory()
+  static getStatistics(sourceRecords?: HistoryRecord[]): HistoryStats {
+    const records = sourceRecords ?? this.getHistory()
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
@@ -926,11 +970,26 @@ export class HistoryManager {
   }
 
   // {{ AURA: Add - 更新记录的最后查看时间 }}
-  static updateLastViewedAt(recordId: string): void {
+  static updateLastViewedAt(recordId: string, minIntervalMs = 0): void {
+    const now = Date.now()
+    const previousSyncTs = this.lastViewedSyncMap.get(recordId)
+    if (minIntervalMs > 0 && typeof previousSyncTs === 'number' && now - previousSyncTs < minIntervalMs) {
+      return
+    }
+
     const records = this.getHistory()
     const index = records.findIndex(r => r.id === recordId)
     if (index !== -1) {
-      records[index].lastViewedAt = new Date()
+      const previousViewedAt = records[index].lastViewedAt
+        ? new Date(records[index].lastViewedAt as any).getTime()
+        : 0
+      if (minIntervalMs > 0 && previousViewedAt > 0 && now - previousViewedAt < minIntervalMs) {
+        this.lastViewedSyncMap.set(recordId, previousViewedAt)
+        return
+      }
+
+      records[index].lastViewedAt = new Date(now)
+      this.lastViewedSyncMap.set(recordId, now)
       this.saveHistory(records)
       scheduleHistoryUpsertToSupabase(records[index])
     }
