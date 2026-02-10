@@ -16,6 +16,7 @@ export function runWithCloudSyncSuppressed<T>(fn: () => T): T {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
+const builtinEdgeOneParserUrl = process.env.NEXT_PUBLIC_EDGEONE_PARSER_API_URL?.trim() || ''
 
 const createUuid = (): string => {
   const uuid = (globalThis as any)?.crypto?.randomUUID
@@ -226,19 +227,35 @@ export class ConfigManager {
 
   // {{ AURA: Add - 获取默认解析器配置 }}
   static getDefaultParsers(): VideoParserConfig[] {
-    return [
-      {
-        id: 'builtin_parser_jxcxin',
-        name: '默认抖音解析器',
-        apiUrl: 'https://apis.jxcxin.cn/api/douyin',
+    const parsers: VideoParserConfig[] = []
+
+    if (builtinEdgeOneParserUrl) {
+      parsers.push({
+        id: 'builtin_parser_edgeone_douyin',
+        name: 'EdgeOne 抖音解析器',
+        apiUrl: builtinEdgeOneParserUrl,
         isDefault: true,
-        isBuiltin: true, // {{ AURA: Add - 标记为内置配置 }}
-        requestMethod: 'GET',
+        isBuiltin: true,
+        requestMethod: 'POST',
         urlParamName: 'url',
         capabilities: [ParserCapability.SINGLE_VIDEO],
         supportedPlatforms: [SupportedPlatform.DOUYIN]
-      }
-    ]
+      })
+    }
+
+    parsers.push({
+      id: 'builtin_parser_jxcxin',
+      name: '默认抖音解析器',
+      apiUrl: 'https://apis.jxcxin.cn/api/douyin',
+      isDefault: !builtinEdgeOneParserUrl,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    return parsers
   }
 
   // {{ AURA: Add - 获取默认WebDAV服务器配置 }}

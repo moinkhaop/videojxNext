@@ -31,6 +31,7 @@ export default function ParsersConfigPage() {
   const [editingConfig, setEditingConfig] = useState<VideoParserConfig | null>(null)
   const [isNewConfig, setIsNewConfig] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [healthCheckingId, setHealthCheckingId] = useState<string | null>(null)
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({})
   const [formData, setFormData] = useState({
     name: '',
@@ -269,6 +270,46 @@ export default function ParsersConfigPage() {
       alert(`解析器测试出错：${error}`)
     } finally {
       setTestingId(null)
+    }
+  }
+
+  const handleHealthCheckParser = async (config: VideoParserConfig) => {
+    setHealthCheckingId(config.id)
+
+    try {
+      const response = await fetch('/api/health/parser', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          parserConfig: config,
+          sampleUrl: 'https://www.douyin.com/video/0'
+        })
+      })
+
+      const result = await response.json()
+
+      if (!result?.success || !result?.data) {
+        alert(`连通性检测失败：${result?.error || '未知错误'}`)
+        return
+      }
+
+      const health = result.data
+      const summary = [
+        `检测结果：${health.healthy ? '健康' : '异常'}`,
+        `HTTP状态：${health.status}`,
+        `延迟：${health.latencyMs}ms`,
+        `连通性：${health.reachable ? '可达' : '不可达'}`,
+        `逻辑成功：${health.logicalSuccess ? '是' : '否'}`,
+        `说明：${health.message}`
+      ].join('\n')
+
+      alert(summary)
+    } catch (error) {
+      alert(`连通性检测出错：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setHealthCheckingId(null)
     }
   }
 
@@ -597,6 +638,20 @@ export default function ParsersConfigPage() {
                             <Settings className="w-4 h-4 animate-spin" />
                           ) : (
                             <TestTube className="w-4 h-4" />
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleHealthCheckParser(config)}
+                          disabled={healthCheckingId === config.id}
+                          className="h-8 w-8 p-0"
+                          title="连通性检测"
+                        >
+                          {healthCheckingId === config.id ? (
+                            <Settings className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="w-4 h-4" />
                           )}
                         </Button>
                         {!config.isDefault && (

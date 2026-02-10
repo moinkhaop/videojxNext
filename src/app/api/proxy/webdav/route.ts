@@ -38,6 +38,47 @@ function generateRandomFileName(extension: string = 'jpg'): string {
   return `${year}${month}${day}_${hours}${minutes}${seconds}_${milliseconds}${randomNum}.${extension}`
 }
 
+function getFileExtension(fileName: string, fallback = 'mp4'): string {
+  const match = /\.([a-zA-Z0-9]{1,10})$/.exec(fileName)
+  return (match?.[1] ?? fallback).toLowerCase()
+}
+
+function getNameWithoutExtension(fileName: string): string {
+  return fileName.replace(/\.[^.]*$/, '')
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function extractUpstreamErrorMessage(body: string): string | null {
+  if (!body) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(body)
+    if (parsed && typeof parsed === 'object') {
+      const fields = ['error', 'message', 'msg', 'detail', 'reason'] as const
+      for (const field of fields) {
+        const value = (parsed as Record<string, unknown>)[field]
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim()
+        }
+      }
+    }
+  } catch {
+    // 忽略非JSON返回体
+  }
+
+  const sanitized = body.replace(/\s+/g, ' ').trim()
+  if (!sanitized) {
+    return null
+  }
+
+  return sanitized.length > 300 ? `${sanitized.substring(0, 300)}…` : sanitized
+}
+
 // {{ AURA: Modify - 修复路径构建，添加URL编码和验证 }}
 // 构建WebDAV完整路径
 function buildWebDAVPath(webdavConfig: WebDAVConfig, folderPath: string, fileName: string): string {
@@ -356,13 +397,96 @@ export async function POST(request: NextRequest) {
         if (!uploadResponse.ok) {
           console.error(`[WebDAV] 上传失败: ${uploadResponse.status} ${uploadResponse.statusText}`)
           console.error(`[WebDAV] 上传路径: ${uploadPath}`)
-          
+
           // 尝试获取错误详情
           let errorMessage = `上传失败: ${uploadResponse.status}`
+          let upstreamErrorDetail = ''
           try {
             const errorText = await uploadResponse.text()
-            if (errorText) {
-              errorMessage += ` - ${errorText}`
+            const parsedError = extractUpstreamErrorMessage(errorText)
+            if (parsedError) {
+              upstreamErrorDetail = parsedError
+              errorMessage += ` - ${parsedError}`
+            }
+
+            const isScriptError =
+              uploadResponse.status === 545 ||
+              /error\s+return\s+from\s+script/i.test(parsedError ?? '')
+
+            const isLockedError =
+              uploadResponse.status === 423 ||
+              /locked/i.test(`${parsedError ?? ''} ${uploadResponse.statusText}`)
+
+            if (isLockedError) {
+              console.warn('[WebDAV] 检测到 423 Locked，尝试延迟并改名重试上传')
+
+              const extension = getFileExtension(fileName, 'mp4')
+              const baseName = getNameWithoutExtension(fileName) || 'video'
+              const retryDetails: string[] = []
+              const maxLockedRetries = 3
+
+              for (let retryIndex = 1; retryIndex <= maxLockedRetries; retryIndex++) {
+                await sleep(Math.min(500 * retryIndex, 2000))
+
+                const retryFileName = `${baseName}_retry${retryIndex}_${Date.now()}.${extension}`
+                const retryUploadPath = buildWebDAVPath(webdavConfig, folderPath, retryFileName)
+
+                const retryResponse = await fetch(retryUploadPath, {
+                  method: 'PUT',
+                  headers: uploadHeaders,
+                  body: videoBuffer
+                })
+
+                if (retryResponse.ok) {
+                  console.log(`[WebDAV] 423 回退上传成功: ${retryUploadPath}`)
+                  return NextResponse.json({
+                    success: true,
+                    filePath: retryUploadPath
+                  })
+                }
+
+                const retryBody = await retryResponse.text().catch(() => '')
+                const retryDetail = extractUpstreamErrorMessage(retryBody)
+                  || retryResponse.statusText
+                  || `HTTP ${retryResponse.status}`
+
+                retryDetails.push(`第${retryIndex}次(${retryResponse.status}): ${retryDetail}`)
+
+                if (retryResponse.status !== 423) {
+                  break
+                }
+              }
+
+              errorMessage = `上传服务错误 (423): 目标文件被锁定。已尝试自动改名重试但仍失败。${retryDetails.join('；')}。建议稍后重试，或检查 WebDAV 服务端锁机制（如 Nextcloud 文件锁/数据库锁）和目录权限。`
+            }
+
+            if (isScriptError) {
+              console.warn('[WebDAV] 检测到脚本类错误，尝试使用安全随机文件名回退上传')
+              const fallbackFileName = generateRandomFileName(getFileExtension(fileName, 'mp4'))
+              const fallbackUploadPath = buildWebDAVPath(webdavConfig, folderPath, fallbackFileName)
+
+              const fallbackResponse = await fetch(fallbackUploadPath, {
+                method: 'PUT',
+                headers: uploadHeaders,
+                body: videoBuffer
+              })
+
+              if (fallbackResponse.ok) {
+                console.log(`[WebDAV] 回退文件名上传成功: ${fallbackUploadPath}`)
+                return NextResponse.json({
+                  success: true,
+                  filePath: fallbackUploadPath
+                })
+              }
+
+              const fallbackBody = await fallbackResponse.text().catch(() => '')
+              const fallbackDetail = extractUpstreamErrorMessage(fallbackBody)
+              const detailMessage = [
+                `原始文件名上传失败: ${upstreamErrorDetail || uploadResponse.statusText}`,
+                `回退文件名上传失败: ${fallbackDetail || fallbackResponse.statusText}`,
+              ].join('；')
+
+              errorMessage = `上传服务错误 (545): 远端脚本执行失败。${detailMessage}。建议检查WebDAV服务端脚本、目录写权限，或改用纯英文路径。`
             }
           } catch (e) {
             // 忽略错误详情获取失败
