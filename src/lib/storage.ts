@@ -3,6 +3,16 @@ import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { markSyncError, markSyncOk } from '@/lib/supabase/sync-status'
 
 let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
+let suppressCloudSync = false
+
+export function runWithCloudSyncSuppressed<T>(fn: () => T): T {
+  suppressCloudSync = true
+  try {
+    return fn()
+  } finally {
+    suppressCloudSync = false
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
@@ -21,7 +31,7 @@ const createUuid = (): string => {
 }
 
 const scheduleConfigSyncToSupabase = () => {
-  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
     return
   }
 
@@ -52,7 +62,7 @@ const scheduleConfigSyncToSupabase = () => {
 }
 
 const scheduleHistoryUpsertToSupabase = (record: HistoryRecord | null) => {
-  if (!SUPABASE_ENABLED || typeof window === 'undefined' || !record) {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || !record || suppressCloudSync) {
     return
   }
 
@@ -73,7 +83,7 @@ const scheduleHistoryUpsertToSupabase = (record: HistoryRecord | null) => {
 }
 
 const scheduleHistoryDeleteToSupabase = (id: string) => {
-  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
     return
   }
 
@@ -90,7 +100,7 @@ const scheduleHistoryDeleteToSupabase = (id: string) => {
 }
 
 const scheduleTagsSyncToSupabase = (action: 'upsert' | 'delete', payload: any) => {
-  if (!SUPABASE_ENABLED || typeof window === 'undefined') {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
     return
   }
 
@@ -233,17 +243,7 @@ export class ConfigManager {
 
   // {{ AURA: Add - 获取默认WebDAV服务器配置 }}
   static getDefaultWebDAVServers(): WebDAVConfig[] {
-    return [
-      {
-        id: 'builtin_webdav_e3one',
-        name: 'E3one',
-        url: 'https://app.koofr.net/dav/E3one',
-        username: 'tuguo@proton.me',
-        password: 'evg8drocizzqb681',
-        basePath: '/public/dy',
-        isDefault: true
-      }
-    ]
+    return []
   }
 
   // 保存解析器配置（只保存用户自定义的配置和修改）
@@ -773,6 +773,10 @@ export class HistoryManager {
   static deleteRecords(ids: string[]): void {
     const records = this.getHistory().filter(r => !ids.includes(r.id))
     this.saveHistory(records)
+
+    ids.forEach(id => {
+      scheduleHistoryDeleteToSupabase(id)
+    })
   }
 
   // {{ AURA: Add - 获取历史记录统计数据 }}

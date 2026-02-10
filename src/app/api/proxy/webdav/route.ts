@@ -1,6 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVUploadResponse, ImageInfo, WebDAVConfig } from '@/types'
 
+const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
+const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 20000
+const DEFAULT_MAX_VIDEO_RETRIES = 3
+
+const IMAGE_UPLOAD_CONCURRENCY = (() => {
+  const fromEnv = Number(process.env.WEBDAV_IMAGE_UPLOAD_CONCURRENCY ?? String(DEFAULT_IMAGE_UPLOAD_CONCURRENCY))
+  if (!Number.isFinite(fromEnv)) return DEFAULT_IMAGE_UPLOAD_CONCURRENCY
+  return Math.max(1, Math.min(8, Math.floor(fromEnv)))
+})()
+
+const VIDEO_DOWNLOAD_TIMEOUT_MS = (() => {
+  const fromEnv = Number(process.env.WEBDAV_VIDEO_DOWNLOAD_TIMEOUT_MS ?? String(DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS))
+  if (!Number.isFinite(fromEnv)) return DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS
+  return Math.max(5000, Math.min(120000, Math.floor(fromEnv)))
+})()
+
+const MAX_VIDEO_RETRIES = (() => {
+  const fromEnv = Number(process.env.WEBDAV_VIDEO_MAX_RETRIES ?? String(DEFAULT_MAX_VIDEO_RETRIES))
+  if (!Number.isFinite(fromEnv)) return DEFAULT_MAX_VIDEO_RETRIES
+  return Math.max(1, Math.min(8, Math.floor(fromEnv)))
+})()
+
 // 生成随机日期命名的文件名
 function generateRandomFileName(extension: string = 'jpg'): string {
   const now = new Date()
@@ -198,22 +220,27 @@ export async function POST(request: NextRequest) {
       
       console.log(`[WebDAV] 图集文件夹创建成功: ${albumFolderPath}`)
       
-      // 2. 逐个上传图片文件
+      // 2. 并发上传图片文件（限流）
       let successCount = 0
-      for (let i = 0; i < images.length; i++) {
-        const image: ImageInfo = images[i]
-        const imageFileName = generateRandomFileName('jpg') // 使用随机日期命名
-        const imageUploadPath = `${albumFolderPath}/${imageFileName}`
-        
-        console.log(`[WebDAV] 上传图片 ${i+1}/${images.length}: ${imageUploadPath}`)
-        
-        const uploadSuccess = await uploadImageFile(image.url, imageUploadPath, auth)
-        if (uploadSuccess) {
-          successCount++
-        } else {
-          console.error(`[WebDAV] 图片上传失败: ${image.url}`)
-        }
-      }
+      const workers = Array.from({ length: Math.min(IMAGE_UPLOAD_CONCURRENCY, images.length) }, (_, workerIndex) => {
+        return (async () => {
+          for (let index = workerIndex; index < images.length; index += IMAGE_UPLOAD_CONCURRENCY) {
+            const image: ImageInfo = images[index]
+            const imageFileName = generateRandomFileName('jpg')
+            const imageUploadPath = `${albumFolderPath}/${imageFileName}`
+
+            console.log(`[WebDAV] 上传图片 ${index + 1}/${images.length}: ${imageUploadPath}`)
+
+            const uploadSuccess = await uploadImageFile(image.url, imageUploadPath, auth)
+            if (uploadSuccess) {
+              successCount++
+            } else {
+              console.error(`[WebDAV] 图片上传失败: ${image.url}`)
+            }
+          }
+        })()
+      })
+      await Promise.all(workers)
       
       console.log(`[WebDAV] 图集上传完成，成功上传 ${successCount}/${images.length} 张图片`)
       
@@ -228,7 +255,7 @@ export async function POST(request: NextRequest) {
     
     // 处理视频上传 (保持原有方式不变)
     // 首先下载视频文件
-    const maxRetries = 5; // 最大重试次数
+    const maxRetries = MAX_VIDEO_RETRIES; // 最大重试次数
     let lastError;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -243,7 +270,7 @@ export async function POST(request: NextRequest) {
         }
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+        const timeoutId = setTimeout(() => controller.abort(), VIDEO_DOWNLOAD_TIMEOUT_MS)
         
         // 构建更丰富的请求头
         const headers: Record<string, string> = {

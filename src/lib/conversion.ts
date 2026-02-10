@@ -20,7 +20,232 @@ import { FilenameSanitizer } from './filename-sanitizer'
 import { parserRouter } from './parser-router'
 import { apiCapabilityDetector } from './capability-detector'
 
+export type BatchPoolStage = 'normal_batch' | 'douyin_upload'
+
+export type BatchPoolEvent =
+  | 'init'
+  | 'task_started'
+  | 'task_settled'
+  | 'scale_up'
+  | 'scale_down'
+
+export interface BatchPoolState {
+  stage: BatchPoolStage
+  event: BatchPoolEvent
+  currentConcurrency: number
+  maxConcurrency: number
+  inFlight: number
+  processed: number
+  total: number
+}
+
+type BatchRuntimeCallbacks = {
+  onPoolState?: (state: BatchPoolState) => void
+}
+
 export class ConversionService {
+  private static readonly DEFAULT_BATCH_CONCURRENCY = 3
+  private static readonly DEFAULT_BATCH_TASK_DELAY_MS = 0
+  private static readonly DEFAULT_PARSE_CACHE_TTL_MS = 5 * 60 * 1000
+  private static readonly DEFAULT_PARSE_CACHE_MAX_ENTRIES = 300
+
+  private static readonly BATCH_CONCURRENCY = (() => {
+    const fromEnv = Number(process.env.NEXT_PUBLIC_BATCH_CONCURRENCY ?? String(this.DEFAULT_BATCH_CONCURRENCY))
+    if (!Number.isFinite(fromEnv)) return this.DEFAULT_BATCH_CONCURRENCY
+    return Math.max(1, Math.min(6, Math.floor(fromEnv)))
+  })()
+
+  private static readonly PARSE_CACHE_TTL_MS = (() => {
+    const fromEnv = Number(process.env.NEXT_PUBLIC_PARSE_CACHE_TTL_MS ?? String(this.DEFAULT_PARSE_CACHE_TTL_MS))
+    if (!Number.isFinite(fromEnv)) return this.DEFAULT_PARSE_CACHE_TTL_MS
+    return Math.max(30_000, Math.floor(fromEnv))
+  })()
+
+  private static readonly PARSE_CACHE_MAX_ENTRIES = (() => {
+    const fromEnv = Number(process.env.NEXT_PUBLIC_PARSE_CACHE_MAX_ENTRIES ?? String(this.DEFAULT_PARSE_CACHE_MAX_ENTRIES))
+    if (!Number.isFinite(fromEnv)) return this.DEFAULT_PARSE_CACHE_MAX_ENTRIES
+    return Math.max(50, Math.min(3000, Math.floor(fromEnv)))
+  })()
+
+  private static readonly parseCache = new Map<string, { expiresAt: number; data: ParsedVideoInfo }>()
+  private static readonly parseInFlight = new Map<string, Promise<ParsedVideoInfo>>()
+
+  private static readonly INTER_TASK_DELAY_MS = (() => {
+    const fromEnv = Number(process.env.NEXT_PUBLIC_BATCH_TASK_DELAY_MS ?? String(this.DEFAULT_BATCH_TASK_DELAY_MS))
+    if (!Number.isFinite(fromEnv)) return this.DEFAULT_BATCH_TASK_DELAY_MS
+    return Math.max(0, Math.floor(fromEnv))
+  })()
+
+  private static async maybeDelayBetweenTasks() {
+    if (this.INTER_TASK_DELAY_MS <= 0) {
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, this.INTER_TASK_DELAY_MS))
+  }
+
+  private static cloneParsedInfo(data: ParsedVideoInfo): ParsedVideoInfo {
+    return JSON.parse(JSON.stringify(data)) as ParsedVideoInfo
+  }
+
+  private static buildParseCacheKey(videoUrl: string, parserConfig: VideoParserConfig): string {
+    const parserId = parserConfig.id ?? parserConfig.name ?? parserConfig.apiUrl
+    return `${parserId}::${videoUrl}`
+  }
+
+  private static getParseCache(key: string): ParsedVideoInfo | null {
+    const entry = this.parseCache.get(key)
+    if (!entry) {
+      return null
+    }
+    if (entry.expiresAt <= Date.now()) {
+      this.parseCache.delete(key)
+      return null
+    }
+    return this.cloneParsedInfo(entry.data)
+  }
+
+  private static setParseCache(key: string, data: ParsedVideoInfo) {
+    if (this.parseCache.size >= this.PARSE_CACHE_MAX_ENTRIES) {
+      const now = Date.now()
+      for (const [entryKey, entry] of this.parseCache.entries()) {
+        if (entry.expiresAt <= now) {
+          this.parseCache.delete(entryKey)
+        }
+      }
+      if (this.parseCache.size >= this.PARSE_CACHE_MAX_ENTRIES) {
+        const oldestKey = this.parseCache.keys().next().value
+        if (oldestKey) {
+          this.parseCache.delete(oldestKey)
+        }
+      }
+    }
+
+    this.parseCache.set(key, {
+      data: this.cloneParsedInfo(data),
+      expiresAt: Date.now() + this.PARSE_CACHE_TTL_MS,
+    })
+  }
+
+  private static prewarmBatchParse(tasks: ConversionTask[], parserConfig: VideoParserConfig) {
+    const seen = new Set<string>()
+    const warmCount = Math.min(tasks.length, Math.max(2, this.BATCH_CONCURRENCY * 2))
+
+    for (let i = 0; i < warmCount; i++) {
+      const task = tasks[i]
+      if (!task?.videoUrl) continue
+      try {
+        const extracted = this.extractRealUrl(task.videoUrl)
+        const key = this.buildParseCacheKey(extracted, parserConfig)
+        if (seen.has(key)) continue
+        seen.add(key)
+        void this.parseVideo(task.videoUrl, parserConfig).catch(() => undefined)
+      } catch {
+        // ignore invalid urls during prewarm
+      }
+    }
+  }
+
+  private static async runAdaptivePool(
+    stage: BatchPoolStage,
+    totalTasks: number,
+    runTask: (index: number) => Promise<boolean>,
+    onTaskSettled?: (index: number, processed: number) => void,
+    onPoolState?: (state: BatchPoolState) => void
+  ) {
+    if (totalTasks <= 0) {
+      return
+    }
+
+    let nextIndex = 0
+    let inFlight = 0
+    let processed = 0
+
+    const initialConcurrency = Math.min(this.BATCH_CONCURRENCY, totalTasks)
+    let currentConcurrency = initialConcurrency
+
+    const emitPoolState = (event: BatchPoolEvent) => {
+      onPoolState?.({
+        stage,
+        event,
+        currentConcurrency,
+        maxConcurrency: initialConcurrency,
+        inFlight,
+        processed,
+        total: totalTasks,
+      })
+    }
+
+    emitPoolState('init')
+
+    let failureStreak = 0
+    let successStreak = 0
+
+    let launchChain = Promise.resolve()
+
+    const withLaunchDelay = async () => {
+      if (this.INTER_TASK_DELAY_MS <= 0) {
+        return
+      }
+      launchChain = launchChain.then(() => this.maybeDelayBetweenTasks())
+      await launchChain
+    }
+
+    await new Promise<void>(resolve => {
+      const pump = () => {
+        while (inFlight < currentConcurrency && nextIndex < totalTasks) {
+          const index = nextIndex++
+          inFlight++
+          emitPoolState('task_started')
+
+          void (async () => {
+            await withLaunchDelay()
+
+            let success = false
+            try {
+              success = await runTask(index)
+            } catch {
+              success = false
+            }
+
+            if (success) {
+              successStreak++
+              failureStreak = 0
+              if (currentConcurrency < initialConcurrency && successStreak >= 3) {
+                currentConcurrency++
+                successStreak = 0
+                console.log(`[批量转存] 连续成功，恢复并发到 ${currentConcurrency}`)
+                emitPoolState('scale_up')
+              }
+            } else {
+              failureStreak++
+              successStreak = 0
+              if (currentConcurrency > 1 && failureStreak >= 2) {
+                currentConcurrency--
+                failureStreak = 0
+                console.warn(`[批量转存] 连续失败，降并发到 ${currentConcurrency}`)
+                emitPoolState('scale_down')
+              }
+            }
+
+            inFlight--
+            processed++
+            emitPoolState('task_settled')
+            onTaskSettled?.(index, processed)
+
+            if (processed >= totalTasks) {
+              resolve()
+              return
+            }
+
+            pump()
+          })()
+        }
+      }
+
+      pump()
+    })
+  }
+
   // {{ AURA: Modify - 使用多API适配器系统的抖音用户主页解析方法 }}
   static async parseDouyinUser(
     userUrl: string, 
@@ -132,14 +357,15 @@ export class ConversionService {
   // {{ AURA: Add - 扩展的批量转存方法，支持抖音用户模式 }}
   static async convertExtendedBatch(
     batchTask: ExtendedBatchTask,
-    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
+    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
+    callbacks?: BatchRuntimeCallbacks
   ): Promise<ExtendedBatchTask> {
     
     if (batchTask.inputMode === BatchInputMode.DOUYIN_USER) {
-      return await this.convertDouyinUserBatch(batchTask, onProgress)
+      return await this.convertDouyinUserBatch(batchTask, onProgress, callbacks)
     } else {
       // 使用原有的批量转存方法
-      const originalBatch = await this.convertBatch(batchTask, onProgress)
+      const originalBatch = await this.convertBatch(batchTask, onProgress, callbacks)
       return {
         ...originalBatch,
         inputMode: BatchInputMode.NORMAL
@@ -150,7 +376,8 @@ export class ConversionService {
   // {{ AURA: Add - 抖音用户批量转存方法 }}
   private static async convertDouyinUserBatch(
     batchTask: ExtendedBatchTask,
-    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
+    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
+    callbacks?: BatchRuntimeCallbacks
   ): Promise<ExtendedBatchTask> {
     
     batchTask.status = TaskStatus.PARSING
@@ -189,52 +416,52 @@ export class ConversionService {
       // 第二阶段：批量上传
       const totalTasks = batchTask.tasks.length
       let completedTasks = 0
-      
-      for (let i = 0; i < batchTask.tasks.length; i++) {
-        const task = batchTask.tasks[i]
-        
-        try {
-          // 跳过解析阶段，直接上传（因为已经有解析信息）
-          task.status = TaskStatus.UPLOADING
-          onProgress?.(20 + (i / totalTasks) * 70, task)
-          
-          console.log(`[抖音用户批量转存] 上传视频 ${i + 1}/${totalTasks}: ${task.videoTitle}`)
-          
-          // 上传到WebDAV
-          const filePath = await this.uploadToWebDAV(
-            task.parsedVideoInfo!,
-            batchTask.webdavConfig
-          )
-          
-          // 更新任务状态
-          task.status = TaskStatus.SUCCESS
-          task.completedAt = new Date()
-          task.uploadResult = {
-            success: true,
-            filePath
-          }
-          
-          completedTasks++
-          console.log(`[抖音用户批量转存] 上传成功: ${task.videoTitle}`)
-          
-        } catch (error) {
-          console.error(`[抖音用户批量转存] 任务失败:`, error)
-          task.status = TaskStatus.FAILED
-          task.completedAt = new Date()
-          task.error = error instanceof Error ? error.message : '上传失败'
-          task.uploadResult = {
-            success: false,
-            error: task.error
-          }
-        }
-        
-        // 更新批量任务状态
-        batchTask.completedTasks = completedTasks
-        
-        // 添加延迟避免请求过于频繁
-        if (i < batchTask.tasks.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
+
+      if (totalTasks > 0) {
+        await this.runAdaptivePool(
+          'douyin_upload',
+          totalTasks,
+          async (index) => {
+            const task = batchTask.tasks[index]
+
+            try {
+              task.status = TaskStatus.UPLOADING
+              console.log(`[抖音用户批量转存] 上传视频 ${index + 1}/${totalTasks}: ${task.videoTitle}`)
+
+              const filePath = await this.uploadToWebDAV(
+                task.parsedVideoInfo!,
+                batchTask.webdavConfig
+              )
+
+              task.status = TaskStatus.SUCCESS
+              task.completedAt = new Date()
+              task.uploadResult = {
+                success: true,
+                filePath
+              }
+
+              completedTasks++
+              console.log(`[抖音用户批量转存] 上传成功: ${task.videoTitle}`)
+              return true
+            } catch (error) {
+              console.error(`[抖音用户批量转存] 任务失败:`, error)
+              task.status = TaskStatus.FAILED
+              task.completedAt = new Date()
+              task.error = error instanceof Error ? error.message : '上传失败'
+              task.uploadResult = {
+                success: false,
+                error: task.error
+              }
+              return false
+            }
+          },
+          (_index, processed) => {
+            batchTask.completedTasks = completedTasks
+            const progress = 20 + (processed / totalTasks) * 70
+            onProgress?.(progress, batchTask.tasks[_index])
+          },
+          callbacks?.onPoolState
+        )
       }
       
       // 更新最终状态
@@ -536,47 +763,71 @@ export class ConversionService {
   // 批量转存
   static async convertBatch(
     batchTask: BatchTask,
-    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void
+    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
+    callbacks?: BatchRuntimeCallbacks
   ): Promise<BatchTask> {
     batchTask.status = TaskStatus.PARSING
     
     const totalTasks = batchTask.tasks.length
     let completedTasks = 0
 
-    for (let i = 0; i < batchTask.tasks.length; i++) {
-      const task = batchTask.tasks[i]
-      
-      try {
-        // 处理单个任务
-        const updatedTask = await this.convertSingle(
-          task,
-          batchTask.parserConfig,
-          batchTask.webdavConfig,
-          (progress, status) => {
-            // 计算总体进度
-            const taskProgress = (completedTasks + progress / 100) / totalTasks * 100
-            onProgress?.(taskProgress, task)
+    if (totalTasks > 0) {
+      this.prewarmBatchParse(batchTask.tasks, batchTask.parserConfig)
+
+      const inFlightProgress = new Map<string, number>()
+
+      const emitOverallProgress = (currentTask?: ConversionTask) => {
+        const partial = Array.from(inFlightProgress.values()).reduce((sum, value) => sum + value, 0) / 100
+        const overall = ((completedTasks + partial) / totalTasks) * 100
+        onProgress?.(Math.min(99.9, overall), currentTask)
+      }
+
+      await this.runAdaptivePool(
+        'normal_batch',
+        totalTasks,
+        async (index) => {
+          const task = batchTask.tasks[index]
+
+          inFlightProgress.set(task.id, 0)
+          emitOverallProgress(task)
+
+          try {
+            const updatedTask = await this.convertSingle(
+              task,
+              batchTask.parserConfig,
+              batchTask.webdavConfig,
+              (progress, status) => {
+                task.status = status
+                inFlightProgress.set(task.id, Math.max(0, Math.min(99, progress)))
+                emitOverallProgress(task)
+              }
+            )
+
+            batchTask.tasks[index] = updatedTask
+
+            if (updatedTask.status === TaskStatus.SUCCESS) {
+              completedTasks++
+              return true
+            }
+
+            return false
+          } catch (error) {
+            console.error(`批量任务中的单个任务失败:`, error)
+            task.status = TaskStatus.FAILED
+            task.completedAt = new Date()
+            task.error = error instanceof Error ? error.message : '任务失败'
+            batchTask.tasks[index] = task
+            return false
+          } finally {
+            inFlightProgress.delete(task.id)
+            batchTask.completedTasks = completedTasks
           }
-        )
-
-        batchTask.tasks[i] = updatedTask
-        
-        if (updatedTask.status === TaskStatus.SUCCESS) {
-          completedTasks++
-        }
-
-      } catch (error) {
-        console.error(`批量任务中的单个任务失败:`, error)
-      }
-
-      batchTask.completedTasks = completedTasks
-      
-      const overallProgress = (i + 1) / totalTasks * 100
-      onProgress?.(overallProgress, task)
-
-      if (i < batchTask.tasks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-      }
+        },
+        (index, processed) => {
+          onProgress?.((processed / totalTasks) * 100, batchTask.tasks[index])
+        },
+        callbacks?.onPoolState
+      )
     }
 
     batchTask.completedAt = new Date()
@@ -695,77 +946,101 @@ export class ConversionService {
       throw new Error('解析API配置无效')
     }
     
-    try {
-      const extractedUrl = this.extractRealUrl(videoUrl)
-      console.log(`[转存] 提取到URL: ${extractedUrl}`)
-      console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
-      
-      const response = await fetch('/api/proxy/parser', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          videoUrl: extractedUrl,
-          parserConfig
-        })
-      })
+    const extractedUrl = this.extractRealUrl(videoUrl)
+    const cacheKey = this.buildParseCacheKey(extractedUrl, parserConfig)
 
-      const responseText = await response.text()
-      console.log(`[转存] 解析API响应状态: ${response.status}, 内容长度: ${responseText.length}`)
-      
-      if (!responseText.trim()) {
-        throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
-      }
-      
-      if (!response.ok) {
-        const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
-        throw new Error(upstreamError
-          ? `解析接口调用失败 (${response.status}): ${upstreamError}`
-          : `解析接口调用失败 (HTTP ${response.status})`)
-      }
+    const cached = this.getParseCache(cacheKey)
+    if (cached) {
+      console.log('[转存] 命中解析缓存')
+      return cached
+    }
 
-      let result: VideoParseResponse
+    const inFlight = this.parseInFlight.get(cacheKey)
+    if (inFlight) {
+      return await inFlight
+    }
+
+    const parsePromise = (async () => {
       try {
-        result = JSON.parse(responseText)
-      } catch (parseError) {
-        console.error('[转存] 无法解析解析API响应JSON:', parseError)
-        const snippet = responseText.substring(0, 300)
-        throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
-      }
+        console.log(`[转存] 提取到URL: ${extractedUrl}`)
+        console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
 
-      if (!result.success) {
-        throw new Error(result.error || '视频解析失败')
-      }
-      
-      if (!result.data) {
-        throw new Error('API返回的数据为空')
-      }
-      
-      if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
-        throw new Error('视频解析成功但未返回有效的视频URL')
-      }
-      
-      if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
+        const response = await fetch('/api/proxy/parser', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            videoUrl: extractedUrl,
+            parserConfig
+          })
+        })
+
+        const responseText = await response.text()
+        console.log(`[转存] 解析API响应状态: ${response.status}, 内容长度: ${responseText.length}`)
+
+        if (!responseText.trim()) {
+          throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
+        }
+
+        if (!response.ok) {
+          const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
+          throw new Error(upstreamError
+            ? `解析接口调用失败 (${response.status}): ${upstreamError}`
+            : `解析接口调用失败 (HTTP ${response.status})`)
+        }
+
+        let result: VideoParseResponse
         try {
-          new URL(result.data.url)
-        } catch {
-          throw new Error(`返回的URL无效: ${result.data.url}`)
+          result = JSON.parse(responseText)
+        } catch (parseError) {
+          console.error('[转存] 无法解析解析API响应JSON:', parseError)
+          const snippet = responseText.substring(0, 300)
+          throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
         }
-      }
-      
-      if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
-        if (!result.data.images || result.data.images.length === 0) {
-          throw new Error('图集解析成功但没有找到任何图片')
-        }
-        console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
-      }
 
-      console.log(`[转存] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
-      return result.data
-    } catch (error) {
-      console.error('[转存] 视频解析错误:', error)
-      throw error
+        if (!result.success) {
+          throw new Error(result.error || '视频解析失败')
+        }
+
+        if (!result.data) {
+          throw new Error('API返回的数据为空')
+        }
+
+        if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
+          throw new Error('视频解析成功但未返回有效的视频URL')
+        }
+
+        if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
+          try {
+            new URL(result.data.url)
+          } catch {
+            throw new Error(`返回的URL无效: ${result.data.url}`)
+          }
+        }
+
+        if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
+          if (!result.data.images || result.data.images.length === 0) {
+            throw new Error('图集解析成功但没有找到任何图片')
+          }
+          console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
+        }
+
+        this.setParseCache(cacheKey, result.data)
+        console.log(`[转存] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
+        return this.cloneParsedInfo(result.data)
+      } catch (error) {
+        console.error('[转存] 视频解析错误:', error)
+        throw error
+      }
+    })()
+
+    this.parseInFlight.set(cacheKey, parsePromise)
+
+    try {
+      return await parsePromise
+    } finally {
+      this.parseInFlight.delete(cacheKey)
     }
   }
 

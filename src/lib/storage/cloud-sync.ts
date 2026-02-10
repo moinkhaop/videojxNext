@@ -1,5 +1,5 @@
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
-import { ConfigManager, HistoryManager, TagManager, CleanupConfigManager } from '@/lib/storage'
+import { ConfigManager, HistoryManager, TagManager, CleanupConfigManager, runWithCloudSyncSuppressed } from '@/lib/storage'
 
 type RemoteHistoryRow = {
   id: string
@@ -39,21 +39,23 @@ export async function hydrateFromSupabase() {
   ])
 
   if (remoteConfig && typeof remoteConfig === 'object') {
-    const theme = (remoteConfig as any).theme
-    if (theme === 'light' || theme === 'dark' || theme === 'system') {
-      const current = ConfigManager.getAppConfig()
-      ConfigManager.saveAppConfig({ ...current, theme })
-    }
+    runWithCloudSyncSuppressed(() => {
+      const theme = (remoteConfig as any).theme
+      if (theme === 'light' || theme === 'dark' || theme === 'system') {
+        const current = ConfigManager.getAppConfig()
+        ConfigManager.saveAppConfig({ ...current, theme })
+      }
 
-    const parsers = (remoteConfig as any).parsers
-    if (Array.isArray(parsers)) {
-      ConfigManager.saveParsers(parsers)
-    }
+      const parsers = (remoteConfig as any).parsers
+      if (Array.isArray(parsers)) {
+        ConfigManager.saveParsers(parsers)
+      }
 
-    const webdavServers = (remoteConfig as any).webdavServers
-    if (Array.isArray(webdavServers)) {
-      ConfigManager.saveWebDAVServers(webdavServers)
-    }
+      const webdavServers = (remoteConfig as any).webdavServers
+      if (Array.isArray(webdavServers)) {
+        ConfigManager.saveWebDAVServers(webdavServers)
+      }
+    })
 
     // Seed remote config when the remote is empty but local has data (first-time sync on a new Supabase project).
     const hasAnyRemote =
@@ -104,7 +106,9 @@ export async function hydrateFromSupabase() {
       return bTime - aTime
     })
 
-    HistoryManager.saveHistory(merged)
+    runWithCloudSyncSuppressed(() => {
+      HistoryManager.saveHistory(merged)
+    })
   }
 
   // Seed remote history when it is empty but local already has records.
@@ -155,11 +159,15 @@ export async function hydrateFromSupabase() {
         return { ...record, tags: nextTags }
       })
       if (historyChanged) {
-        HistoryManager.saveHistory(updatedRecords)
+        runWithCloudSyncSuppressed(() => {
+          HistoryManager.saveHistory(updatedRecords)
+        })
       }
     }
 
-    TagManager.saveTags(Array.from(byId.values()))
+    runWithCloudSyncSuppressed(() => {
+      TagManager.saveTags(Array.from(byId.values()))
+    })
   }
 
   // Seed remote tags when it is empty but local already has tags (including defaults).
@@ -173,8 +181,10 @@ export async function hydrateFromSupabase() {
   }
 
   if (remoteCleanup && typeof remoteCleanup === 'object') {
-    const current = CleanupConfigManager.getCleanupConfig()
-    CleanupConfigManager.saveCleanupConfig({ ...current, ...(remoteCleanup as any) })
+    runWithCloudSyncSuppressed(() => {
+      const current = CleanupConfigManager.getCleanupConfig()
+      CleanupConfigManager.saveCleanupConfig({ ...current, ...(remoteCleanup as any) })
+    })
   }
 
   markSyncOk('hydrate')

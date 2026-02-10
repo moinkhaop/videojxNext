@@ -36,7 +36,7 @@ import {
   SupportedPlatform
 } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
-import { ConversionService } from '@/lib/conversion'
+import { BatchPoolState, ConversionService } from '@/lib/conversion'
 import { ClipboardDetector } from '@/lib/clipboard'
 import Link from 'next/link'
 
@@ -51,6 +51,8 @@ export default function BatchPage() {
   const [overallProgress, setOverallProgress] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
+  const [poolState, setPoolState] = useState<BatchPoolState | null>(null)
+  const [poolHint, setPoolHint] = useState('')
   // {{ AURA: Add - 新增抖音用户模式相关状态 }}
   const [inputMode, setInputMode] = useState<BatchInputMode>(BatchInputMode.NORMAL)
   const [videoLimit, setVideoLimit] = useState<number>(20)
@@ -244,6 +246,8 @@ export default function BatchPage() {
     setIsProcessing(true)
     setIsPaused(false)
     setOverallProgress(0)
+    setPoolState(null)
+    setPoolHint('')
 
     let batchTask: ExtendedBatchTask
 
@@ -317,6 +321,16 @@ export default function BatchPage() {
             // 更新整体进度
             setCurrentBatch(prev => prev ? { ...prev, status: TaskStatus.PARSING } : null)
           }
+        },
+        {
+          onPoolState: (state) => {
+            setPoolState(state)
+            if (state.event === 'scale_down') {
+              setPoolHint(`检测到失败，自动降并发到 ${state.currentConcurrency}`)
+            } else if (state.event === 'scale_up') {
+              setPoolHint(`任务稳定，自动恢复并发到 ${state.currentConcurrency}`)
+            }
+          }
         }
       )
 
@@ -353,6 +367,8 @@ export default function BatchPage() {
     setOverallProgress(0)
     setIsProcessing(false)
     setIsPaused(false)
+    setPoolState(null)
+    setPoolHint('')
   }
 
   const getStatusIcon = (status: TaskStatus) => {
@@ -705,6 +721,28 @@ https://www.douyin.com/user/MS4w...
                   </CardContent>
                 </Card>
               </div>
+
+              {poolState && (
+                <Card className="border-none shadow-md bg-gradient-to-r from-indigo-500/10 to-cyan-500/10">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <div className="font-semibold text-gray-900 dark:text-white">并发调度器</div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                          当前并发 {poolState.currentConcurrency} / {poolState.maxConcurrency}，
+                          运行中 {poolState.inFlight}，已处理 {poolState.processed}/{poolState.total}
+                        </div>
+                        {poolHint && (
+                          <div className="text-xs text-indigo-700 dark:text-indigo-300 mt-1">{poolHint}</div>
+                        )}
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {poolState.stage === 'douyin_upload' ? '抖音上传池' : '批量任务池'}
+                      </Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* 任务列表卡片 */}
               <Card className="border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
