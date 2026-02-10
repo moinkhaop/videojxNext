@@ -261,6 +261,10 @@ function ConvertPageContent() {
 
   // {{ AURA: Modify - 优化上传函数以改善感知性能 }}
   const handleConfirmUpload = () => {
+    if (isConverting) {
+      return
+    }
+
     if (!previewState.previewData || !selectedWebDAV) {
       alert('请选择WebDAV服务器')
       return
@@ -276,7 +280,12 @@ function ConvertPageContent() {
     // 立即更新UI状态，显示加载动画
     setIsConverting(true)
     setProgress(0)
-    setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
+    setCurrentTask(prev => prev ? {
+      ...prev,
+      status: TaskStatus.UPLOADING,
+      error: undefined,
+      uploadResult: undefined
+    } : null)
 
     // 使用setTimeout将网络请求延迟到下一个事件循环
     // 这可以确保UI渲染不会阻塞网络请求的发出
@@ -291,28 +300,38 @@ function ConvertPageContent() {
         )
 
         // 更新任务状态为成功
-        const finalTask = {
-          ...currentTask!,
-          status: TaskStatus.SUCCESS,
-          completedAt: new Date(),
-          uploadResult: {
-            success: true,
-            filePath
+        let finalTask: ConversionTask | null = null
+        setCurrentTask(prev => {
+          if (!prev) {
+            return prev
           }
-        }
 
-        setCurrentTask(finalTask)
+          finalTask = {
+            ...prev,
+            status: TaskStatus.SUCCESS,
+            error: undefined,
+            completedAt: new Date(),
+            uploadResult: {
+              success: true,
+              filePath
+            }
+          }
+
+          return finalTask
+        })
         setProgress(100)
 
         console.log('上传成功:', filePath)
 
         // 保存到历史记录
-        HistoryManager.addRecord({
-          id: ConversionService.generateTaskId(),
-          type: 'single',
-          task: finalTask,
-          createdAt: new Date()
-        })
+        if (finalTask) {
+          HistoryManager.addRecord({
+            id: ConversionService.generateTaskId(),
+            type: 'single',
+            task: finalTask,
+            createdAt: new Date()
+          })
+        }
 
         // 保持预览状态，让用户可以查看上传结果
         // setPreviewState 保持不变，继续显示预览
@@ -325,6 +344,7 @@ function ConvertPageContent() {
             ...prev,
             status: TaskStatus.FAILED,
             error: error instanceof Error ? error.message : '上传过程发生未知错误',
+            uploadResult: undefined,
             completedAt: new Date()
           }
         })
@@ -422,7 +442,12 @@ function ConvertPageContent() {
       console.log(`[直接上传] 解析成功: ${parsedInfo.title}`)
 
       // 第二阶段：上传
-      setCurrentTask(prev => prev ? { ...prev, status: TaskStatus.UPLOADING } : null)
+      setCurrentTask(prev => prev ? {
+        ...prev,
+        status: TaskStatus.UPLOADING,
+        error: undefined,
+        uploadResult: undefined
+      } : null)
       setProgress(60)
 
       const filePath = await ConversionService.uploadParsedMedia(
@@ -434,6 +459,7 @@ function ConvertPageContent() {
       const finalTask = {
         ...task,
         status: TaskStatus.SUCCESS,
+        error: undefined,
         parsedVideoInfo: parsedInfo,
         videoTitle: parsedInfo.title,
         completedAt: new Date(),
@@ -450,7 +476,7 @@ function ConvertPageContent() {
 
       // 保存到历史记录
       HistoryManager.addRecord({
-        id: ConversionService.generateTaskId(),
+        id: finalTask.id,
         type: 'single',
         task: finalTask,
         createdAt: new Date()
@@ -477,6 +503,7 @@ function ConvertPageContent() {
           ...prev,
           status: TaskStatus.FAILED,
           error: error instanceof Error ? error.message : '直接上传过程发生未知错误',
+          uploadResult: undefined,
           completedAt: new Date()
         }
       })
@@ -784,7 +811,7 @@ function ConvertPageContent() {
                     )}
 
                     {/* 错误信息 */}
-                    {currentTask.error && (
+                    {currentTask.status === TaskStatus.FAILED && currentTask.error && (
                       <Alert className="border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-950/30 shadow-sm">
                         <XCircle className="h-4 w-4 text-red-500" />
                         <AlertDescription className="text-red-700 dark:text-red-300">
@@ -798,6 +825,7 @@ function ConvertPageContent() {
                       <Alert className="border-green-200 dark:border-green-800 bg-green-50/80 dark:bg-green-950/30 shadow-sm">
                         <CheckCircle className="h-4 w-4 text-green-500" />
                         <AlertDescription className="text-green-700 dark:text-green-300 text-sm">
+                          <p className="font-medium mb-1">上传成功</p>
                           <p className="text-xs break-all">
                             {decodeURIComponent(currentTask.uploadResult.filePath)}
                           </p>
