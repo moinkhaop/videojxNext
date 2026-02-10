@@ -640,7 +640,18 @@ export class ConversionService {
         body: JSON.stringify({ webdavConfig })
       })
 
-      const result = await response.json()
+      const responseText = await response.text()
+      if (!responseText.trim()) {
+        return { success: false, message: `WebDAV测试返回空响应 (HTTP ${response.status})` }
+      }
+
+      let result: any
+      try {
+        result = JSON.parse(responseText)
+      } catch {
+        const message = this.extractErrorMessageFromResponse(responseText) ?? 'WebDAV测试返回非JSON响应'
+        return { success: false, message }
+      }
 
       if (result.success) {
         console.log(`[WebDAV测试] 连接成功`)
@@ -736,11 +747,30 @@ export class ConversionService {
         if (!responseText.trim()) {
           throw new Error(`服务器返回空响应 (HTTP ${response.status})`)
         }
-        
-        const result = JSON.parse(responseText)
+
+        if (!response.ok) {
+          const message = this.extractErrorMessageFromResponse(responseText)
+          throw new Error(message
+            ? `上传服务错误 (${response.status}): ${message}`
+            : `上传服务错误 (HTTP ${response.status})`)
+        }
+
+        let result: any
+        try {
+          result = JSON.parse(responseText)
+        } catch {
+          const message = this.extractErrorMessageFromResponse(responseText)
+          throw new Error(message
+            ? `上传服务返回非JSON响应: ${message}`
+            : '上传服务返回了无法解析的响应')
+        }
         
         if (!result.success) {
           throw new Error(result.error || '媒体上传失败')
+        }
+
+        if (!result.filePath) {
+          throw new Error('上传成功但未返回文件路径')
         }
 
         console.log(`[转存] 上传成功，尝试次数: ${attempt}`)
