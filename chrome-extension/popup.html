@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VideoJX 助手</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container popup-shell">
+      <div class="card">
+        <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
+          <h3>VideoJX 快捷面板</h3>
+          <button id="open-options" class="ghost">设置</button>
+        </div>
+        <div id="auth-status" class="muted">登录状态检查中...</div>
+      </div>
+
+      <div class="card col">
+        <h3>快速操作</h3>
+
+        <div class="row wrap">
+          <button id="btn-fill-active" class="secondary">读取当前页链接</button>
+          <button id="btn-check-session" class="ghost">刷新登录态</button>
+        </div>
+
+        <div class="col">
+          <label class="small">视频链接</label>
+          <textarea id="video-url" placeholder="粘贴抖音分享链接，或点击上方读取当前页"></textarea>
+        </div>
+
+        <div class="row">
+          <div class="col" style="flex: 1;">
+            <label class="small">解析器</label>
+            <select id="parser-select"></select>
+          </div>
+          <div class="col" style="flex: 1;">
+            <label class="small">WebDAV</label>
+            <select id="webdav-select"></select>
+          </div>
+        </div>
+
+        <div class="row wrap">
+          <button id="btn-parse" class="primary">解析预览</button>
+          <button id="btn-upload" class="primary">直接上传</button>
+        </div>
+      </div>
+
+      <div class="card col">
+        <h3>结果</h3>
+        <div id="result-box" class="notice">尚未执行任务</div>
+      </div>
+    </div>
+
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

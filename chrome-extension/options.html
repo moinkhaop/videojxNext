@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VideoJX 扩展设置</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h2 style="margin-bottom: 8px;">VideoJX Next 扩展设置</h2>
+        <div class="muted">管理账号、解析器、WebDAV、批量上传和历史记录。</div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="account">账号</button>
+        <button class="tab-btn" data-tab="settings">基础设置</button>
+        <button class="tab-btn" data-tab="parsers">解析器</button>
+        <button class="tab-btn" data-tab="webdav">WebDAV</button>
+        <button class="tab-btn" data-tab="batch">批量上传</button>
+        <button class="tab-btn" data-tab="history">历史记录</button>
+      </div>
+
+      <section class="tab-panel" id="tab-account">
+        <div class="card col">
+          <h3>账号状态</h3>
+          <div id="account-status" class="notice">正在检查登录状态...</div>
+
+          <div class="row wrap">
+            <button id="btn-refresh-session" class="ghost">刷新登录态</button>
+            <button id="btn-logout" class="danger">退出登录</button>
+          </div>
+
+          <hr />
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">邮箱</label>
+              <input id="auth-email" type="email" placeholder="you@example.com" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">密码</label>
+              <input id="auth-password" type="password" placeholder="至少 6 位" />
+            </div>
+          </div>
+
+          <div class="row wrap">
+            <button id="btn-login" class="primary">登录</button>
+            <button id="btn-register" class="secondary">注册</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-settings">
+        <div class="card col">
+          <h3>基础设置</h3>
+
+          <div class="col">
+            <label class="small">后端地址</label>
+            <input id="setting-api-base-url" type="text" placeholder="https://dyjx.ehhx.qzz.io" />
+            <div class="muted">扩展调用当前项目 API 的地址，默认本地开发端口。</div>
+          </div>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">批量并发数 (1-5)</label>
+              <input id="setting-batch-concurrency" type="number" min="1" max="5" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">历史记录上限 (100-1000)</label>
+              <input id="setting-history-limit" type="number" min="100" max="1000" />
+            </div>
+          </div>
+
+          <label class="row" style="gap: 8px;">
+            <input id="setting-auto-sync-history" type="checkbox" style="width: auto;" />
+            <span>登录后自动同步历史到云端</span>
+          </label>
+
+          <div class="row wrap">
+            <button id="btn-save-settings" class="primary">保存设置</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-parsers">
+        <div class="card col">
+          <h3>解析器配置</h3>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">名称</label>
+              <input id="parser-name" type="text" placeholder="例如：我的解析器" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">API URL</label>
+              <input id="parser-api-url" type="text" placeholder="https://api.example.com/parse" />
+            </div>
+          </div>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">请求方法</label>
+              <select id="parser-method">
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+              </select>
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">URL 参数名</label>
+              <input id="parser-param" type="text" value="url" />
+            </div>
+          </div>
+
+          <div class="row wrap">
+            <button id="btn-parser-save" class="primary">新增/更新解析器</button>
+            <button id="btn-parser-reset" class="ghost">清空表单</button>
+          </div>
+
+          <div id="parser-list" class="list"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-webdav">
+        <div class="card col">
+          <h3>WebDAV 配置</h3>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">名称</label>
+              <input id="webdav-name" type="text" placeholder="例如：我的网盘" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">地址</label>
+              <input id="webdav-url" type="text" placeholder="https://dav.example.com" />
+            </div>
+          </div>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">用户名</label>
+              <input id="webdav-username" type="text" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">密码</label>
+              <input id="webdav-password" type="password" />
+            </div>
+          </div>
+
+          <div class="col">
+            <label class="small">基础路径 (可选)</label>
+            <input id="webdav-base-path" type="text" placeholder="/public/dy" />
+          </div>
+
+          <div class="row wrap">
+            <button id="btn-webdav-save" class="primary">新增/更新 WebDAV</button>
+            <button id="btn-webdav-reset" class="ghost">清空表单</button>
+          </div>
+
+          <div id="webdav-list" class="list"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-batch">
+        <div class="card col">
+          <h3>用户主页批量上传</h3>
+
+          <div class="col">
+            <label class="small">用户主页链接</label>
+            <input id="batch-user-url" type="text" placeholder="https://www.douyin.com/user/..." />
+          </div>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">解析数量上限</label>
+              <input id="batch-limit" type="number" value="20" min="1" max="200" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">解析器</label>
+              <select id="batch-parser"></select>
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">WebDAV</label>
+              <select id="batch-webdav"></select>
+            </div>
+          </div>
+
+          <div class="row wrap">
+            <button id="btn-batch-start" class="primary">开始批量上传</button>
+            <button id="btn-batch-refresh" class="ghost">刷新任务列表</button>
+          </div>
+
+          <div id="batch-task-list" class="list"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-history">
+        <div class="card col">
+          <h3>历史记录</h3>
+
+          <div class="row wrap">
+            <button id="btn-history-refresh" class="ghost">刷新</button>
+            <button id="btn-history-sync" class="secondary">同步到云端</button>
+            <button id="btn-history-clear" class="danger">清空本地历史</button>
+          </div>
+
+          <div id="history-list" class="list"></div>
+        </div>
+      </section>
+
+      <div id="global-notice" class="notice hidden"></div>
+    </div>
+
+    <script src="shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
