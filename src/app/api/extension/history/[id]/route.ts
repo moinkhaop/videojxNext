@@ -7,13 +7,9 @@ import {
 } from '../../_shared'
 
 type RouteContext = {
-  params:
-    | {
-        id: string
-      }
-    | Promise<{
-        id: string
-      }>
+  params: Promise<{
+    id: string
+  }>
 }
 
 export const runtime = 'nodejs'
@@ -34,8 +30,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
 
   try {
-    const params = await Promise.resolve(context.params)
-    const { id } = params
+    const { id } = await context.params
     if (!id) {
       return extensionJson(
         { success: false, error: '缺少历史记录ID' },
@@ -113,8 +108,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     return auth.response
   }
 
-  const params = await Promise.resolve(context.params)
-  const { id } = params
+  const { id } = await context.params
   if (!id) {
     return extensionJson(
       { success: false, error: '缺少历史记录ID' },
