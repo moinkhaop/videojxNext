@@ -12,6 +12,13 @@ type RouteContext = {
   }>
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, unknown>
+}
+
 export const runtime = 'nodejs'
 
 export async function OPTIONS() {
@@ -64,9 +71,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       )
     }
 
+    const existingRecord = asRecord(existing?.record_data)
+    const updatesRecord = asRecord(updates)
+
     const merged = {
-      ...(existing?.record_data ?? {}),
-      ...(updates ?? {}),
+      ...existingRecord,
+      ...updatesRecord,
       id,
       updatedAt: new Date().toISOString(),
       cloudSynced: true,
