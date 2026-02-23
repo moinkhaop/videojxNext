@@ -20,13 +20,19 @@
         <h3>快速操作</h3>
 
         <div class="row wrap">
-          <button id="btn-fill-active" class="secondary">读取当前页链接</button>
+          <button id="btn-get-share" class="secondary">获取分享链接</button>
+          <button id="btn-fill-active" class="ghost">读取地址栏</button>
+          <button id="btn-paste-clipboard" class="ghost">粘贴剪贴板</button>
           <button id="btn-check-session" class="ghost">刷新登录态</button>
+        </div>
+
+        <div class="muted">
+          抖音信息流页面的地址栏可能不是视频链接，建议用“获取分享链接”（会自动点分享并复制链接）。
         </div>
 
         <div class="col">
           <label class="small">视频链接</label>
-          <textarea id="video-url" placeholder="粘贴抖音分享链接，或点击上方读取当前页"></textarea>
+          <textarea id="video-url" placeholder="建议点击上方“获取分享链接”，或手动粘贴分享文案/链接"></textarea>
         </div>
 
         <div class="row">

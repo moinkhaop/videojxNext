@@ -600,6 +600,26 @@ async function parseActiveTabContext() {
   }
 }
 
+async function triggerCopyShareLinkOnActiveTab() {
+  const tabs = await tabsQuery({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0] ? tabs[0] : null;
+
+  if (!tab || !tab.id) {
+    throw new Error('未找到当前抖音标签页');
+  }
+
+  const response = await tabsSendMessage(tab.id, {
+    type: 'EXT_COPY_SHARE_LINK'
+  });
+
+  if (!response || response.ok === false) {
+    const message = response && response.error ? response.error : '无法触发复制链接动作';
+    throw new Error(message);
+  }
+
+  return response;
+}
+
 async function updateTask(taskId, patch) {
   const nextState = await mutateState((state) => {
     if (!state.tasks[taskId]) {
@@ -933,6 +953,10 @@ const handlers = {
 
   async VIDEO_EXTRACT_ACTIVE() {
     return parseActiveTabContext();
+  },
+
+  async VIDEO_COPY_SHARE_LINK() {
+    return triggerCopyShareLinkOnActiveTab();
   },
 
   async VIDEO_PARSE(payload) {

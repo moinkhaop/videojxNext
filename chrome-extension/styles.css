@@ -257,6 +257,23 @@ hr {
   min-height: 460px;
 }
 
+/* Popup: tighten spacing a bit */
+.popup-shell .card {
+  padding: 10px;
+}
+
+.popup-shell textarea {
+  min-height: 64px;
+}
+
+.popup-shell .row.wrap button {
+  padding: 7px 10px;
+}
+
+.popup-shell h3 {
+  font-size: 13px;
+}
+
 @media (max-width: 560px) {
   .popup-shell {
     width: 100%;

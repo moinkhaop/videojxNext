@@ -28,7 +28,9 @@
   const el = {
     authStatus: document.getElementById('auth-status'),
     openOptions: document.getElementById('open-options'),
+    btnGetShare: document.getElementById('btn-get-share'),
     btnFillActive: document.getElementById('btn-fill-active'),
+    btnPasteClipboard: document.getElementById('btn-paste-clipboard'),
     btnCheckSession: document.getElementById('btn-check-session'),
     videoUrl: document.getElementById('video-url'),
     parserSelect: document.getElementById('parser-select'),
@@ -56,9 +58,35 @@
   }
 
   function setLoading(loading) {
-    [el.btnFillActive, el.btnParse, el.btnUpload, el.btnCheckSession].forEach((button) => {
+    [el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnCheckSession].forEach((button) => {
       button.disabled = loading;
     });
+  }
+
+  async function readClipboardUrl() {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+      throw new Error('当前环境不支持读取剪贴板，请手动粘贴链接');
+    }
+
+    const text = await navigator.clipboard.readText();
+    const url = extractFirstUrl(text || '');
+    if (!url) {
+      throw new Error('剪贴板中未检测到链接');
+    }
+    return url;
+  }
+
+  async function pasteFromClipboard() {
+    setLoading(true);
+    try {
+      const url = await readClipboardUrl();
+      el.videoUrl.value = url;
+      setResult('已从剪贴板粘贴链接。', 'success');
+    } catch (error) {
+      setResult(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
   }
 
   function renderAuthStatus() {
@@ -120,7 +148,44 @@
         throw new Error('当前页面未识别到可用链接');
       }
       el.videoUrl.value = url;
-      setResult('已读取当前页面链接。', 'success');
+      setResult('已读取地址栏链接。', 'success');
+    } catch (error) {
+      setResult(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function getShareLink() {
+    setLoading(true);
+    setResult('正在获取分享链接（自动点击 分享 -> 复制链接）...', '');
+
+    try {
+      const result = await send('VIDEO_COPY_SHARE_LINK');
+      const direct = result && result.link ? extractFirstUrl(result.link) : '';
+
+      if (direct) {
+        el.videoUrl.value = direct;
+        setResult('已从页面直接获取分享链接。', 'success');
+        return;
+      }
+
+      // Fallback: read clipboard after triggering copy action.
+      const deadline = Date.now() + 3000;
+      let lastError = null;
+      while (Date.now() < deadline) {
+        try {
+          const url = await readClipboardUrl();
+          el.videoUrl.value = url;
+          setResult('已获取分享链接并填入。', 'success');
+          return;
+        } catch (error) {
+          lastError = error;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+
+      throw lastError || new Error('获取分享链接失败，请手动点击分享并复制链接后再粘贴');
     } catch (error) {
       setResult(error.message, 'error');
     } finally {
@@ -207,7 +272,9 @@
       chrome.runtime.openOptionsPage();
     });
 
+    el.btnGetShare.addEventListener('click', getShareLink);
     el.btnFillActive.addEventListener('click', fillFromActiveTab);
+    el.btnPasteClipboard.addEventListener('click', pasteFromClipboard);
     el.btnCheckSession.addEventListener('click', refreshSession);
     el.btnParse.addEventListener('click', parsePreview);
     el.btnUpload.addEventListener('click', directUpload);
