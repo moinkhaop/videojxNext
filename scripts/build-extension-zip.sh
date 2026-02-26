@@ -1,10 +1,10 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXT_DIR="$ROOT_DIR/chrome-extension"
 
-if [[ ! -d "$EXT_DIR" ]]; then
+if [ ! -d "$EXT_DIR" ]; then
   echo "[ext-zip] chrome-extension/ not found, skipping."
   exit 0
 fi
@@ -39,4 +39,3 @@ echo "[ext-zip] Building $NAME"
 
 cp -f "$OUT_DIST" "$OUT_PUBLIC"
 echo "[ext-zip] Output: $OUT_PUBLIC"
-

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "bash scripts/build-extension-zip.sh",
+    "prebuild": "sh scripts/build-extension-zip.sh",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
