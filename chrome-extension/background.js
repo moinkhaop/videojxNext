@@ -143,6 +143,16 @@ async function ensureInitialized() {
       state.parsers = clone(DEFAULT_STATE.parsers);
     }
 
+    // Keep builtin parsers across upgrades even if the stored array overwrote DEFAULT_STATE.parsers.
+    const requiredBuiltins = (DEFAULT_STATE.parsers || []).filter((p) => p && p.isBuiltin);
+    for (const builtin of requiredBuiltins) {
+      if (!builtin || !builtin.id) continue;
+      const exists = (state.parsers || []).some((item) => item && item.id === builtin.id);
+      if (!exists) {
+        state.parsers.unshift(clone(builtin));
+      }
+    }
+
     if (!state.defaults.parserId || !state.parsers.some((item) => item.id === state.defaults.parserId && !item.disabled)) {
       const defaultParser = state.parsers.find((item) => item.isDefault && !item.disabled) || state.parsers[0];
       state.defaults.parserId = defaultParser ? defaultParser.id : '';
@@ -539,11 +549,12 @@ async function tryParseViaActiveDouyinWebApi(awemeId) {
   const id = String(awemeId || '').trim();
   if (!/^[0-9]{10,25}$/.test(id)) return null;
 
-  const tabs = await tabsQuery({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0] ? tabs[0] : null;
-  if (!tab || !tab.id || !/douyin\.com/i.test(tab.url || '')) {
-    return null;
-  }
+  // Prefer active tab, but allow any Douyin tab in current window to satisfy parsing.
+  const tabs = await tabsQuery({ currentWindow: true });
+  const active = (tabs || []).find((t) => t && t.active);
+  const candidates = [active].concat(tabs || []).filter(Boolean);
+  const tab = candidates.find((t) => t && t.id && /douyin\.com/i.test(t.url || '')) || null;
+  if (!tab || !tab.id) return null;
 
   const response = await sendToContent(tab.id, {
     type: 'EXT_PARSE_AWEME',
@@ -628,13 +639,20 @@ async function directUpload(payload) {
 
   const awemeId = metaAwemeId || extractAwemeIdFromUrl(inputUrl) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
   let parsed = null;
+  let parsedByPage = false;
   try {
     if (awemeId) {
       parsed = await tryParseViaActiveDouyinWebApi(awemeId);
+      parsedByPage = Boolean(parsed);
     }
   } catch (error) {
     // Fallback to upstream parser when page API fails (e.g. not on Douyin tab / login restrictions).
     parsed = null;
+  }
+
+  const requiresPageApi = Boolean(selected.parser && selected.parser.builtinType === 'douyin_page_api');
+  if (requiresPageApi && !parsed) {
+    throw new Error('抖音页面解析器仅在抖音网页（推荐页/详情页）可用，请在抖音页面打开视频后重试');
   }
 
   if (!parsed) {
@@ -655,7 +673,7 @@ async function directUpload(payload) {
       pageUrl: metaPageUrl,
       linkSource: metaSource,
       mediaType: parsed.mediaType,
-      parserName: selected.parser.name,
+      parserName: parsedByPage ? '抖音页面API' : selected.parser.name,
       webdavName: selected.webdav.name,
       filePath,
       author: parsed.author || ''
@@ -1165,6 +1183,7 @@ const handlers = {
     let parsed = null;
     let parsedByPage = false;
 
+    const requiresPageApi = Boolean(parser && parser.builtinType === 'douyin_page_api');
     if (awemeId) {
       try {
         parsed = await tryParseViaActiveDouyinWebApi(awemeId);
@@ -1172,6 +1191,10 @@ const handlers = {
       } catch (error) {
         parsed = null;
       }
+    }
+
+    if (requiresPageApi && !parsed) {
+      throw new Error('抖音页面解析器仅在抖音网页（推荐页/详情页）可用，请在抖音页面打开视频后重试');
     }
 
     if (!parsed) {

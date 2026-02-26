@@ -10,6 +10,17 @@
     },
     parsers: [
       {
+        id: 'builtin_parser_douyin_page_api',
+        name: '抖音页面解析器（内置，支持长链接）',
+        apiUrl: 'builtin:douyin_page_api',
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        builtinType: 'douyin_page_api',
+        disabled: false
+      },
+      {
         id: 'builtin_parser_jxcxin',
         name: '默认抖音解析器',
         apiUrl: 'https://apis.jxcxin.cn/api/douyin',
