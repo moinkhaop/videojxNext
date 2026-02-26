@@ -1,4 +1,9 @@
 (function () {
+  if (globalThis.__videojxContentLoaded) {
+    return;
+  }
+  globalThis.__videojxContentLoaded = true;
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }

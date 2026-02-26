@@ -71,6 +71,53 @@ function tabsSendMessage(tabId, message) {
   });
 }
 
+function isNoReceivingEndError(error) {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  return /Receiving end does not exist|Could not establish connection/i.test(msg);
+}
+
+function scriptingExecuteFiles(tabId, files) {
+  return new Promise((resolve, reject) => {
+    if (!chrome.scripting || typeof chrome.scripting.executeScript !== 'function') {
+      reject(new Error('当前浏览器不支持脚本注入'));
+      return;
+    }
+
+    chrome.scripting.executeScript(
+      {
+        target: { tabId },
+        files
+      },
+      () => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message));
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+}
+
+async function ensureContentScript(tabId) {
+  // content.js is registered as a content_script, but in practice MV3 can miss it
+  // on SPA navigations or right after install. Inject and dedupe in content.js.
+  await scriptingExecuteFiles(tabId, ['content.js']);
+}
+
+async function sendToContent(tabId, message) {
+  try {
+    return await tabsSendMessage(tabId, message);
+  } catch (error) {
+    if (!isNoReceivingEndError(error)) {
+      throw error;
+    }
+    await ensureContentScript(tabId);
+    return await tabsSendMessage(tabId, message);
+  }
+}
+
 async function readState() {
   const stored = await storageGet(STORAGE_KEY);
   const merged = patchDeep(DEFAULT_STATE, stored || {});
@@ -593,7 +640,7 @@ async function parseActiveTabContext() {
   }
 
   try {
-    const response = await tabsSendMessage(tab.id, {
+    const response = await sendToContent(tab.id, {
       type: 'EXT_EXTRACT_CONTEXT'
     });
 
@@ -661,7 +708,7 @@ async function triggerCopyShareLinkOnActiveTab() {
     }
   }
 
-  const response = await tabsSendMessage(tab.id, {
+  const response = await sendToContent(tab.id, {
     type: 'EXT_COPY_SHARE_LINK'
   });
 
