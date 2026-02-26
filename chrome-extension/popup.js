@@ -281,9 +281,16 @@
 
     setLoading(true);
     try {
+      const meta = (() => {
+        if (!lastShareMeta || typeof lastShareMeta !== 'object') return null;
+        const values = [lastShareMeta.link, lastShareMeta.shortLink, lastShareMeta.longLink].filter(Boolean);
+        return values.includes(videoUrl) ? lastShareMeta : null;
+      })();
+
       const result = await send('VIDEO_PARSE', {
         videoUrl,
-        parserId: el.parserSelect.value
+        parserId: el.parserSelect.value,
+        meta
       });
 
       const parsed = result.parsed || {};

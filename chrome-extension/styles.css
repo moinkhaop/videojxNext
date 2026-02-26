@@ -254,9 +254,9 @@ hr {
 }
 
 .popup-shell {
-  width: 460px;
+  width: 580px;
   min-height: 620px;
-  max-height: 720px;
+  max-height: 760px;
   overflow: auto;
 }
 

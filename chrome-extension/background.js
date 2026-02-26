@@ -876,7 +876,7 @@ async function triggerCopyShareLinkOnActiveTab() {
     const url = buildIesShareUrl(awemeId);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
       const response = await fetch(url, {
         method: 'GET',
@@ -925,9 +925,9 @@ async function triggerCopyShareLinkOnActiveTab() {
     || extractAwemeIdFromUrl(direct)
     || extractAwemeIdFromUrl(tab.url || '');
 
-  // If the page already returned an iesdouyin share url, don't waste time trying to
-  // derive a v.douyin.com short url (often unavailable in HTML).
-  if (!shortLink && awemeId && !/iesdouyin\.com\/share\/video/i.test(direct)) {
+  // Best effort: derive a v.douyin.com short url by fetching the share page HTML.
+  // This is optional, and may fail depending on Douyin's page structure / login state.
+  if (!shortLink && awemeId) {
     shortLink = await fetchShortLinkByAwemeId(awemeId);
   }
 
@@ -1319,7 +1319,12 @@ const handlers = {
       throw new Error('请输入有效的视频链接');
     }
 
-    const awemeId = extractAwemeIdFromUrl(url);
+    const meta = payload && payload.meta && typeof payload.meta === 'object' ? payload.meta : null;
+    const metaShort = meta && meta.shortLink ? extractFirstUrl(meta.shortLink) : '';
+    const metaLong = meta && meta.longLink ? extractFirstUrl(meta.longLink) : '';
+    const metaAwemeId = meta && meta.awemeId ? String(meta.awemeId || '').trim() : '';
+
+    const awemeId = metaAwemeId || extractAwemeIdFromUrl(url) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
     let parsed = null;
     let parsedByPage = false;
 
@@ -1338,7 +1343,9 @@ const handlers = {
     }
 
     if (!parsed) {
-      parsed = await parseVideo(url, parser);
+      // Upstream parsers often only support v.douyin.com short links.
+      const parseUrl = (!requiresPageApi && metaShort && !/v\.douyin\.com/i.test(url)) ? metaShort : url;
+      parsed = await parseVideo(parseUrl, parser);
     }
 
     return {

@@ -578,11 +578,42 @@
     return bestGroup[bestGroup.length - 1].node;
   }
 
+  async function openSharePanelAndTryExtractShortLink() {
+    // Opening the share panel usually renders a QR image whose alt text includes the
+    // v.douyin.com short link, without needing to click "复制链接" (which may prompt).
+    try {
+      const active = document.querySelector('[data-e2e="feed-active-video"]');
+      const btn = (active && active.querySelector)
+        ? (active.querySelector('[data-e2e="video-player-share"]') || active.querySelector('[data-e2e="video-share-icon-container"]'))
+        : null;
+
+      const fallback = document.querySelector('[data-e2e="video-player-share"]')
+        || document.querySelector('[data-e2e="video-share-icon-container"]')
+        || findShareButtonFromRightToolbar();
+
+      const target = btn || fallback;
+      if (!target) return '';
+
+      target.click();
+      await sleep(350);
+
+      let short = extractDouyinShortLinkFromDom();
+      if (short) return short;
+
+      // Some panels lazy-load the QR image and its alt text.
+      await sleep(850);
+      short = extractDouyinShortLinkFromDom();
+      return short || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
   async function copyShareLink() {
     // Prefer a share link without clicking UI. Clicking Douyin's share/copy buttons
     // often triggers a blocking prompt that asks users to manually press Cmd/Ctrl+C.
     const context = extractCurrentContext();
-    const shortFromDom = extractDouyinShortLinkFromDom();
+    let shortFromDom = extractDouyinShortLinkFromDom();
     const awemeFromContext = extractAwemeIdFromText(context.videoUrl || context.pageUrl || window.location.href);
     const awemeFromDom = extractAwemeIdFromDom();
     const awemeId = awemeFromContext || awemeFromDom;
@@ -597,6 +628,20 @@
         longLink: longLink || context.videoUrl || '',
         awemeId,
         source: 'dom_shortlink'
+      };
+    }
+
+    // Best effort: open the share panel (no blocking clipboard prompt) and re-scan for shortlink.
+    shortFromDom = await openSharePanelAndTryExtractShortLink();
+    if (shortFromDom) {
+      return {
+        ok: true,
+        copied: false,
+        link: shortFromDom,
+        shortLink: shortFromDom,
+        longLink: longLink || context.videoUrl || '',
+        awemeId,
+        source: 'share_panel_dom_shortlink'
       };
     }
 
