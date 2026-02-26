@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import type { Json } from '@/lib/supabase/database.types'
 import {
   ensureSupabaseEnabled,
   extensionJson,
@@ -29,6 +30,16 @@ function normalizeConfig(value: unknown) {
     parsers,
     webdavServers,
     defaults,
+  }
+}
+
+function toJson(value: unknown): Json {
+  // Supabase jsonb expects Json (no undefined / functions / symbols). Stringify/parse
+  // is a pragmatic way to enforce this at the edge of the API.
+  try {
+    return JSON.parse(JSON.stringify(value ?? null)) as Json
+  } catch {
+    return {} as Json
   }
 }
 
@@ -112,7 +123,7 @@ export async function POST(request: NextRequest) {
     }
 
     const existingConfigData = asRecord(existing?.config_data)
-    const nextConfigData = {
+    const nextConfigData: Json = toJson({
       ...existingConfigData,
       extension: {
         ...(asRecord(existingConfigData.extension) || {}),
@@ -120,7 +131,7 @@ export async function POST(request: NextRequest) {
         updatedAt,
         syncedAt: new Date().toISOString(),
       },
-    }
+    })
 
     if (existing?.id) {
       const { error: updateError } = await client
@@ -165,4 +176,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
