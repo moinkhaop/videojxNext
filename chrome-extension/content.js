@@ -30,6 +30,72 @@
     return matched ? matched[0].trim().replace(/\/$/, '') : '';
   }
 
+  function extractDouyinShortLinkFromText(text) {
+    if (!text) return '';
+    const matched = String(text).match(/https?:\/\/v\.douyin\.com\/[0-9A-Za-z]+\/?/);
+    return matched ? matched[0].trim().replace(/\/$/, '') : '';
+  }
+
+  function extractDouyinShortLinkFromDom() {
+    // The recommendation feed sometimes embeds the share shortlink inside hidden alt/aria text.
+    try {
+      const candidates = [];
+
+      const imgs = Array.from(document.querySelectorAll('img[alt*="v.douyin.com"],img[alt*="https://v.douyin.com"]')).slice(0, 50);
+      for (const img of imgs) {
+        const alt = img.getAttribute('alt') || '';
+        const short = extractDouyinShortLinkFromText(alt);
+        if (short) return short;
+        candidates.push(alt);
+      }
+
+      // Fallback: scan a small set of attributes on visible-ish nodes near the player.
+      const attrs = ['data-clipboard-text', 'data-copy', 'aria-label', 'title'];
+      const nodes = Array.from(document.querySelectorAll('[data-e2e],[role="button"],button,a,div,span')).slice(0, 500);
+      for (const node of nodes) {
+        for (const key of attrs) {
+          const value = node.getAttribute ? (node.getAttribute(key) || '') : '';
+          const short = extractDouyinShortLinkFromText(value);
+          if (short) return short;
+        }
+      }
+
+      // Last resort: scan HTML. This can be large, so do it only when explicitly requested.
+      const html = document.documentElement && document.documentElement.outerHTML ? document.documentElement.outerHTML : '';
+      return extractDouyinShortLinkFromText(html);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function extractAwemeIdFromText(text) {
+    if (!text) return '';
+    const matched = String(text).match(/\/video\/([0-9]{10,25})/);
+    return matched && matched[1] ? matched[1] : '';
+  }
+
+  function extractAwemeIdFromDom() {
+    try {
+      const active = document.querySelector('[data-e2e="feed-active-video"][data-e2e-vid]');
+      if (active) {
+        const vid = active.getAttribute('data-e2e-vid') || '';
+        if (/^[0-9]{10,25}$/.test(vid)) return vid;
+      }
+      const any = document.querySelector('[data-e2e-vid]');
+      if (any) {
+        const vid = any.getAttribute('data-e2e-vid') || '';
+        if (/^[0-9]{10,25}$/.test(vid)) return vid;
+      }
+    } catch (error) {
+    }
+    return '';
+  }
+
+  function buildDouyinLongUrl(awemeId) {
+    if (!awemeId) return '';
+    return `https://www.douyin.com/video/${awemeId}`;
+  }
+
   function extractVideoUrlFromMeta() {
     const candidates = [];
     const og = document.querySelector('meta[property="og:url"]');
@@ -129,6 +195,7 @@
 
   function findShareButton() {
     const selectors = [
+      '[data-e2e="video-player-share"]',
       'button[aria-label*="分享"]',
       '[role="button"][aria-label*="分享"]',
       'button[title*="分享"]',
@@ -347,20 +414,52 @@
   }
 
   async function copyShareLink() {
-    // Prefer a deterministic video link without clicking UI (feed address bar may be irrelevant).
+    // Prefer a real share shortlink (v.douyin.com) without clicking UI.
     const context = extractCurrentContext();
-    if (context.videoUrl && /\/video\//i.test(context.videoUrl)) {
-      return { ok: true, copied: false, link: context.videoUrl, source: 'context' };
+    const shortFromDom = extractDouyinShortLinkFromDom();
+    const awemeFromContext = extractAwemeIdFromText(context.videoUrl || context.pageUrl || window.location.href);
+    const awemeFromDom = extractAwemeIdFromDom();
+    const awemeId = awemeFromContext || awemeFromDom;
+    const longLink = awemeId ? buildDouyinLongUrl(awemeId) : '';
+
+    if (shortFromDom) {
+      return {
+        ok: true,
+        copied: false,
+        link: shortFromDom,
+        shortLink: shortFromDom,
+        longLink: longLink || context.videoUrl || '',
+        awemeId,
+        source: 'dom_shortlink'
+      };
     }
 
     const fromCenter = extractVideoUrlNearViewportCenter();
     if (fromCenter) {
-      return { ok: true, copied: false, link: fromCenter, source: 'center_anchor' };
+      return {
+        ok: true,
+        copied: false,
+        link: fromCenter,
+        shortLink: '',
+        longLink: longLink || fromCenter,
+        awemeId: awemeId || extractAwemeIdFromText(fromCenter),
+        source: 'center_anchor'
+      };
     }
 
     const fromScripts = extractVideoOrShareUrlFromScripts();
     if (fromScripts) {
-      return { ok: true, copied: false, link: fromScripts, source: 'script' };
+      const short = /v\.douyin\.com/i.test(fromScripts) ? fromScripts : '';
+      const inferredId = extractAwemeIdFromText(fromScripts);
+      return {
+        ok: true,
+        copied: false,
+        link: fromScripts,
+        shortLink: short,
+        longLink: /\/video\//i.test(fromScripts) ? fromScripts : (longLink || ''),
+        awemeId: awemeId || inferredId,
+        source: 'script'
+      };
     }
 
     // If share menu is already open, just click copy.
@@ -368,7 +467,15 @@
     if (existingCopy) {
       const link = findShareLinkInDom();
       existingCopy.click();
-      return { ok: true, copied: true, link, source: 'existing_menu' };
+      return {
+        ok: true,
+        copied: true,
+        link,
+        shortLink: /v\.douyin\.com/i.test(link) ? link : '',
+        longLink: /\/video\//i.test(link) ? link : (longLink || ''),
+        awemeId: awemeId || extractAwemeIdFromText(link),
+        source: 'existing_menu'
+      };
     }
 
     const shareButton = findShareButton();
@@ -387,12 +494,33 @@
         // Prefer reading link from DOM if present.
         const link = findShareLinkInDom();
         copyBtn.click();
-        return { ok: true, copied: true, link, source: 'share_menu' };
+        return {
+          ok: true,
+          copied: true,
+          link,
+          shortLink: /v\.douyin\.com/i.test(link) ? link : '',
+          longLink: /\/video\//i.test(link) ? link : (longLink || ''),
+          awemeId: awemeId || extractAwemeIdFromText(link),
+          source: 'share_menu'
+        };
       }
       await sleep(120);
     }
 
-    return { ok: false, error: '未找到“复制链接”按钮，请手动点分享面板后再试' };
+    // Login gating: share menu might show login prompt instead of copy button.
+    if (awemeId || longLink) {
+      return {
+        ok: true,
+        copied: false,
+        link: longLink || context.videoUrl || window.location.href,
+        shortLink: '',
+        longLink: longLink || context.videoUrl || '',
+        awemeId,
+        source: 'fallback_long'
+      };
+    }
+
+    return { ok: false, error: '未找到“复制链接”按钮（可能需要登录）。请手动打开分享面板后再试。' };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

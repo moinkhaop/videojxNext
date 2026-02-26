@@ -47,6 +47,8 @@
     auth: { loggedIn: false, user: null }
   };
 
+  let lastShareMeta = null;
+
   function setResult(message, type) {
     el.resultBox.className = 'notice';
     if (type === 'error') {
@@ -81,6 +83,7 @@
     try {
       const url = await readClipboardUrl();
       el.videoUrl.value = url;
+      lastShareMeta = null;
       setResult('已从剪贴板粘贴链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -148,6 +151,14 @@
         throw new Error('当前页面未识别到可用链接');
       }
       el.videoUrl.value = url;
+      lastShareMeta = {
+        pageUrl: ctx.pageUrl || '',
+        link: url,
+        shortLink: '',
+        longLink: /\/video\//i.test(url) ? url : '',
+        awemeId: '',
+        source: 'active_context'
+      };
       setResult('已读取地址栏链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -163,10 +174,34 @@
     try {
       const result = await send('VIDEO_COPY_SHARE_LINK');
       const direct = result && result.link ? extractFirstUrl(result.link) : '';
+      const shortLink = result && result.shortLink ? extractFirstUrl(result.shortLink) : '';
+      const longLink = result && result.longLink ? extractFirstUrl(result.longLink) : '';
+      const awemeId = result && result.awemeId ? String(result.awemeId || '').trim() : '';
+
+      lastShareMeta = {
+        pageUrl: result && result.pageUrl ? String(result.pageUrl || '') : '',
+        link: direct,
+        shortLink,
+        longLink,
+        awemeId,
+        source: result && result.source ? String(result.source || '') : ''
+      };
+
+      if (shortLink && /v\.douyin\.com/i.test(shortLink)) {
+        el.videoUrl.value = shortLink;
+        setResult('已获取分享短链并填入。', 'success');
+        return;
+      }
 
       if (direct) {
         el.videoUrl.value = direct;
-        setResult('已从页面直接获取分享链接。', 'success');
+        if (/v\.douyin\.com/i.test(direct)) {
+          setResult('已获取分享短链并填入。', 'success');
+        } else if (/\/video\//i.test(direct)) {
+          setResult('已获取视频长链并填入（若解析器不支持长链，可重试获取短链）。', 'success');
+        } else {
+          setResult('已从页面直接获取链接。', 'success');
+        }
         return;
       }
 
@@ -177,6 +212,7 @@
         try {
           const url = await readClipboardUrl();
           el.videoUrl.value = url;
+          lastShareMeta = null;
           setResult('已获取分享链接并填入。', 'success');
           return;
         } catch (error) {
@@ -252,10 +288,17 @@
     setResult('处理中，请稍候...', '');
 
     try {
+      const meta = (() => {
+        if (!lastShareMeta || typeof lastShareMeta !== 'object') return null;
+        const values = [lastShareMeta.link, lastShareMeta.shortLink, lastShareMeta.longLink].filter(Boolean);
+        return values.includes(videoUrl) ? lastShareMeta : null;
+      })();
+
       const result = await send('VIDEO_DIRECT_UPLOAD', {
         videoUrl,
         parserId: el.parserSelect.value,
-        webdavId: el.webdavSelect.value
+        webdavId: el.webdavSelect.value,
+        meta
       });
 
       const title = result.parsed && result.parsed.title ? result.parsed.title : '未命名';

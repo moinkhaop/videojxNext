@@ -19,7 +19,8 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    const cleanedVideoUrl = videoUrl.trim()
+    const cleanedVideoUrl = String(videoUrl || '').trim()
+    const normalizedVideoUrl = normalizeDouyinInputUrl(extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl)
     const parserName = parserConfig.name?.trim() || '自定义解析器'
     const urlParamName = parserConfig.urlParamName?.trim() || 'url'
 
@@ -35,6 +36,9 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[API] 解析视频链接: ${cleanedVideoUrl}`)
+    if (normalizedVideoUrl && normalizedVideoUrl !== cleanedVideoUrl) {
+      console.log(`[API] 归一化抖音链接: ${normalizedVideoUrl}`)
+    }
     console.log(`[API] 使用解析器: ${parserName}`)
 
     const headers: Record<string, string> = {
@@ -83,7 +87,7 @@ export async function POST(request: NextRequest) {
           }
         })
       }
-      queryParams.set(urlParamName, cleanedVideoUrl)
+      queryParams.set(urlParamName, normalizedVideoUrl)
 
       queryParams.forEach((value, key) => {
         upstreamUrl.searchParams.set(key, value)
@@ -100,7 +104,7 @@ export async function POST(request: NextRequest) {
 
       const bodyPayload = {
         ...(parserConfig.customBodyParams || {}),
-        [urlParamName]: cleanedVideoUrl
+        [urlParamName]: normalizedVideoUrl
       }
 
       requestBody = JSON.stringify(bodyPayload)
@@ -465,6 +469,35 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(mockResult)
 }
 
+function extractFirstUrlFromText(text: string): string {
+  const source = String(text || '')
+  const match = source.match(/https?:\/\/[^\s]+/i)
+  return match ? match[0].trim() : ''
+}
+
+function normalizeDouyinInputUrl(input: string): string {
+  const url = String(input || '').trim()
+  if (!url) return ''
+
+  // If user pasted just an aweme_id, convert to a stable share page URL.
+  if (/^[0-9]{10,25}$/.test(url)) {
+    return `https://www.iesdouyin.com/share/video/${url}`
+  }
+
+  // Only normalize Douyin URLs.
+  if (!/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(url)) {
+    return url
+  }
+
+  // Normalize long video pages to the share page URL. Many upstream parsers accept this input format.
+  const awemeMatch = url.match(/\/video\/([0-9]{10,25})/i)
+  if (awemeMatch && awemeMatch[1]) {
+    return `https://www.iesdouyin.com/share/video/${awemeMatch[1]}`
+  }
+
+  return url
+}
+
 function safeParseJsonBody(body: string): any | null {
   if (!body || !body.trim()) {
     return null
@@ -644,4 +677,3 @@ function extractDescription(dataSource: any, fallbackTitle?: string): string | u
   // 如果没有找到描述，使用标题作为备用
   return fallbackTitle
 }
-

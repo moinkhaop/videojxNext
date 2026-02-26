@@ -533,6 +533,13 @@ async function directUpload(payload) {
     throw new Error('请输入有效的视频链接');
   }
 
+  const meta = payload && payload.meta && typeof payload.meta === 'object' ? payload.meta : null;
+  const metaShort = meta && meta.shortLink ? extractFirstUrl(meta.shortLink) : '';
+  const metaLong = meta && meta.longLink ? extractFirstUrl(meta.longLink) : '';
+  const metaAwemeId = meta && meta.awemeId ? String(meta.awemeId || '').trim() : '';
+  const metaPageUrl = meta && meta.pageUrl ? String(meta.pageUrl || '') : '';
+  const metaSource = meta && meta.source ? String(meta.source || '') : '';
+
   const selected = pickParserAndWebdav(payload, state);
 
   const parsed = await parseVideo(inputUrl, selected.parser);
@@ -544,6 +551,11 @@ async function directUpload(payload) {
     status: 'success',
     detail: {
       inputUrl,
+      shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
+      videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
+      awemeId: metaAwemeId,
+      pageUrl: metaPageUrl,
+      linkSource: metaSource,
       mediaType: parsed.mediaType,
       parserName: selected.parser.name,
       webdavName: selected.webdav.name,
@@ -608,6 +620,47 @@ async function triggerCopyShareLinkOnActiveTab() {
     throw new Error('未找到当前抖音标签页');
   }
 
+  function extractAwemeIdFromUrl(url) {
+    const text = String(url || '');
+    const matched = text.match(/\/video\/([0-9]{10,25})/);
+    return matched && matched[1] ? matched[1] : '';
+  }
+
+  function extractShortLinkFromText(text) {
+    const matched = String(text || '').match(/https?:\/\/v\.douyin\.com\/[0-9A-Za-z]+\/?/);
+    return matched ? matched[0].trim().replace(/\/$/, '') : '';
+  }
+
+  function buildIesShareUrl(awemeId) {
+    return `https://www.iesdouyin.com/share/video/${awemeId}`;
+  }
+
+  async function fetchShortLinkByAwemeId(awemeId) {
+    if (!awemeId) return '';
+    const url = buildIesShareUrl(awemeId);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,*/*'
+        },
+        signal: controller.signal
+      });
+
+      const text = await response.text();
+      return extractShortLinkFromText(text);
+    } catch (error) {
+      return '';
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   const response = await tabsSendMessage(tab.id, {
     type: 'EXT_COPY_SHARE_LINK'
   });
@@ -617,7 +670,43 @@ async function triggerCopyShareLinkOnActiveTab() {
     throw new Error(message);
   }
 
-  return response;
+  const direct = extractFirstUrl(response.link || '');
+  let shortLink = extractFirstUrl(response.shortLink || '');
+  if (!shortLink && /v\.douyin\.com/i.test(direct)) {
+    shortLink = direct;
+  }
+
+  let longLink = extractFirstUrl(response.longLink || '');
+  if (!longLink && /\/video\//i.test(direct)) {
+    longLink = direct;
+  }
+  if (!longLink && /\/video\//i.test(tab.url || '')) {
+    longLink = extractFirstUrl(tab.url || '');
+  }
+
+  const awemeId = String(response.awemeId || '').trim()
+    || extractAwemeIdFromUrl(longLink)
+    || extractAwemeIdFromUrl(direct)
+    || extractAwemeIdFromUrl(tab.url || '');
+
+  if (!shortLink && awemeId) {
+    shortLink = await fetchShortLinkByAwemeId(awemeId);
+  }
+
+  const finalLink = shortLink || direct || longLink;
+  if (!finalLink) {
+    throw new Error('未获取到可用的视频链接');
+  }
+
+  return {
+    ...response,
+    ok: true,
+    link: finalLink,
+    shortLink: shortLink || '',
+    longLink: longLink || '',
+    awemeId: awemeId || '',
+    pageUrl: response.pageUrl || tab.url || '',
+  };
 }
 
 async function updateTask(taskId, patch) {
