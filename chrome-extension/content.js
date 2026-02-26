@@ -101,6 +101,141 @@
     return `https://www.douyin.com/video/${awemeId}`;
   }
 
+  function pickFirstUrl(list) {
+    if (!Array.isArray(list)) return '';
+    for (const item of list) {
+      if (typeof item === 'string' && /^https?:\/\//i.test(item)) {
+        return item.trim();
+      }
+    }
+    return '';
+  }
+
+  function parseAwemeDetailToParsedInfo(awemeDetail) {
+    if (!awemeDetail || typeof awemeDetail !== 'object') {
+      throw new Error('aweme_detail 为空');
+    }
+
+    const title = String(awemeDetail.desc || awemeDetail.preview_title || awemeDetail.title || '').trim() || '未命名';
+    const author = awemeDetail.author && typeof awemeDetail.author === 'object'
+      ? String(awemeDetail.author.nickname || awemeDetail.author.unique_id || awemeDetail.author.short_id || '').trim()
+      : '';
+
+    // Images
+    const images = Array.isArray(awemeDetail.images) ? awemeDetail.images : [];
+    if (images.length > 0) {
+      const normalized = images.map((img, index) => {
+        const url = pickFirstUrl(img && img.url_list ? img.url_list : (img && img.urlList ? img.urlList : []));
+        if (!url) return null;
+        return { url, filename: `image_${String(index + 1).padStart(3, '0')}.jpg` };
+      }).filter(Boolean);
+
+      if (normalized.length > 0) {
+        return {
+          title,
+          author,
+          description: title,
+          mediaType: 'image_album',
+          images: normalized,
+          imageCount: normalized.length,
+          thumbnail: normalized[0].url
+        };
+      }
+    }
+
+    const video = awemeDetail.video && typeof awemeDetail.video === 'object' ? awemeDetail.video : null;
+    if (!video) {
+      throw new Error('未检测到 video 字段');
+    }
+
+    const playAddr = video.play_addr || video.playAddr || null;
+    const downloadAddr = video.download_addr || video.downloadAddr || null;
+    const playUrl = pickFirstUrl(playAddr && playAddr.url_list ? playAddr.url_list : []);
+    const downloadUrl = pickFirstUrl(downloadAddr && downloadAddr.url_list ? downloadAddr.url_list : []);
+
+    const finalUrl = playUrl || downloadUrl;
+    if (!finalUrl) {
+      throw new Error('未检测到可播放/可下载的视频地址');
+    }
+
+    const durationMs = Number(awemeDetail.duration || 0);
+    const durationSec = Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs / 1000) : undefined;
+
+    return {
+      title,
+      author,
+      description: title,
+      mediaType: 'video',
+      url: finalUrl,
+      duration: durationSec,
+      thumbnail: pickFirstUrl(video.cover && video.cover.url_list ? video.cover.url_list : [])
+        || pickFirstUrl(video.origin_cover && video.origin_cover.url_list ? video.origin_cover.url_list : '')
+    };
+  }
+
+  function fetchAwemeDetailInMainWorld(awemeId) {
+    return new Promise((resolve, reject) => {
+      const id = String(awemeId || '').trim();
+      if (!/^[0-9]{10,25}$/.test(id)) {
+        reject(new Error('aweme_id 无效'));
+        return;
+      }
+
+      const requestId = `videojx_aweme_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('请求抖音 aweme detail 超时'));
+      }, 12000);
+
+      function cleanup() {
+        clearTimeout(timeoutId);
+        window.removeEventListener('message', onMessage);
+      }
+
+      function onMessage(event) {
+        if (event.source !== window) return;
+        const data = event.data;
+        if (!data || data.type !== 'VIDEOJX_AWEME_DETAIL_RESULT' || data.requestId !== requestId) {
+          return;
+        }
+        cleanup();
+        if (!data.ok) {
+          reject(new Error(data.error || '抖音 aweme detail 请求失败'));
+          return;
+        }
+        resolve(data.payload);
+      }
+
+      window.addEventListener('message', onMessage);
+
+      const script = document.createElement('script');
+      script.textContent = `(() => {\n` +
+        `  const requestId = ${JSON.stringify(requestId)};\n` +
+        `  const awemeId = ${JSON.stringify(id)};\n` +
+        `  const post = (ok, payload, error) => {\n` +
+        `    try { window.postMessage({ type: 'VIDEOJX_AWEME_DETAIL_RESULT', requestId, ok, payload, error }, '*'); } catch (e) {}\n` +
+        `  };\n` +
+        `  fetch('/aweme/v1/web/aweme/detail/?aid=6383&aweme_id=' + encodeURIComponent(awemeId), { credentials: 'include' })\n` +
+        `    .then(r => r.json())\n` +
+        `    .then(j => post(true, j, ''))\n` +
+        `    .catch(e => post(false, null, (e && e.message) ? e.message : String(e)));\n` +
+        `})();\n`;
+
+      (document.documentElement || document.head || document.body).appendChild(script);
+      script.remove();
+    });
+  }
+
+  async function parseAwemeViaWebApi(awemeId) {
+    const json = await fetchAwemeDetailInMainWorld(awemeId);
+    const detail = json && (json.aweme_detail || json.awemeDetail) ? (json.aweme_detail || json.awemeDetail) : null;
+    if (!detail) {
+      const code = json && (json.status_code ?? json.statusCode);
+      throw new Error(`抖音接口未返回 aweme_detail (status_code=${code})`);
+    }
+    return parseAwemeDetailToParsedInfo(detail);
+  }
+
   function extractVideoUrlFromMeta() {
     const candidates = [];
     const og = document.querySelector('meta[property="og:url"]');
@@ -542,6 +677,19 @@
       (async () => {
         const result = await copyShareLink();
         sendResponse(result);
+      })();
+      return true;
+    }
+
+    if (message.type === 'EXT_PARSE_AWEME') {
+      (async () => {
+        try {
+          const awemeId = String(message.awemeId || extractAwemeIdFromDom() || '').trim();
+          const parsed = await parseAwemeViaWebApi(awemeId);
+          sendResponse({ ok: true, parsed, awemeId });
+        } catch (error) {
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : '抖音页面解析失败' });
+        }
       })();
       return true;
     }

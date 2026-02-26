@@ -525,6 +525,43 @@ async function parseVideo(videoUrl, parserConfig) {
   return response.data;
 }
 
+function extractAwemeIdFromUrl(url) {
+  const text = String(url || '');
+  const matched = text.match(/\/video\/([0-9]{10,25})/);
+  if (matched && matched[1]) return matched[1];
+  const iesMatched = text.match(/iesdouyin\.com\/share\/video\/([0-9]{10,25})/i);
+  if (iesMatched && iesMatched[1]) return iesMatched[1];
+  if (/^[0-9]{10,25}$/.test(text.trim())) return text.trim();
+  return '';
+}
+
+async function tryParseViaActiveDouyinWebApi(awemeId) {
+  const id = String(awemeId || '').trim();
+  if (!/^[0-9]{10,25}$/.test(id)) return null;
+
+  const tabs = await tabsQuery({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0] ? tabs[0] : null;
+  if (!tab || !tab.id || !/douyin\.com/i.test(tab.url || '')) {
+    return null;
+  }
+
+  const response = await sendToContent(tab.id, {
+    type: 'EXT_PARSE_AWEME',
+    awemeId: id
+  });
+
+  if (!response || response.ok === false) {
+    const message = response && response.error ? response.error : '抖音页面解析失败';
+    throw new Error(message);
+  }
+
+  if (!response.parsed) {
+    throw new Error('抖音页面解析结果为空');
+  }
+
+  return response.parsed;
+}
+
 async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath) {
   if (!parsedInfo || typeof parsedInfo !== 'object') {
     throw new Error('缺少解析数据');
@@ -589,7 +626,21 @@ async function directUpload(payload) {
 
   const selected = pickParserAndWebdav(payload, state);
 
-  const parsed = await parseVideo(inputUrl, selected.parser);
+  const awemeId = metaAwemeId || extractAwemeIdFromUrl(inputUrl) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
+  let parsed = null;
+  try {
+    if (awemeId) {
+      parsed = await tryParseViaActiveDouyinWebApi(awemeId);
+    }
+  } catch (error) {
+    // Fallback to upstream parser when page API fails (e.g. not on Douyin tab / login restrictions).
+    parsed = null;
+  }
+
+  if (!parsed) {
+    parsed = await parseVideo(inputUrl, selected.parser);
+  }
+
   const filePath = await uploadParsedMedia(parsed, selected.webdav);
 
   const history = await createHistoryRecord({
@@ -600,7 +651,7 @@ async function directUpload(payload) {
       inputUrl,
       shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
       videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
-      awemeId: metaAwemeId,
+      awemeId: metaAwemeId || awemeId,
       pageUrl: metaPageUrl,
       linkSource: metaSource,
       mediaType: parsed.mediaType,
@@ -1110,10 +1161,26 @@ const handlers = {
       throw new Error('请输入有效的视频链接');
     }
 
-    const parsed = await parseVideo(url, parser);
+    const awemeId = extractAwemeIdFromUrl(url);
+    let parsed = null;
+    let parsedByPage = false;
+
+    if (awemeId) {
+      try {
+        parsed = await tryParseViaActiveDouyinWebApi(awemeId);
+        parsedByPage = Boolean(parsed);
+      } catch (error) {
+        parsed = null;
+      }
+    }
+
+    if (!parsed) {
+      parsed = await parseVideo(url, parser);
+    }
+
     return {
       parsed,
-      parserName: parser.name
+      parserName: parsedByPage ? '抖音页面API' : parser.name
     };
   },
 
