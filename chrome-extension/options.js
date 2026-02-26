@@ -35,6 +35,7 @@
     authEmail: document.getElementById('auth-email'),
     authPassword: document.getElementById('auth-password'),
     btnRefreshSession: document.getElementById('btn-refresh-session'),
+    btnConfigSync: document.getElementById('btn-config-sync'),
     btnLogin: document.getElementById('btn-login'),
     btnRegister: document.getElementById('btn-register'),
     btnLogout: document.getElementById('btn-logout'),
@@ -517,6 +518,18 @@
         setNotice(error.message, 'error');
       }
     });
+
+    if (el.btnConfigSync) {
+      el.btnConfigSync.addEventListener('click', async () => {
+        try {
+          const result = await send('CONFIG_SYNC_AUTO');
+          await loadState();
+          setNotice(result && result.message ? result.message : '配置同步完成', 'success');
+        } catch (error) {
+          setNotice(error.message, 'error');
+        }
+      });
+    }
 
     el.btnLogin.addEventListener('click', async () => {
       try {

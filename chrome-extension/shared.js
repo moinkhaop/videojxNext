@@ -6,7 +6,9 @@
       apiBaseUrl: 'https://dyjx.ehhx.qzz.io',
       autoSyncHistory: true,
       batchConcurrency: 2,
-      historyLimit: 500
+      historyLimit: 500,
+      configUpdatedAt: 0,
+      lastConfigSyncAt: 0
     },
     parsers: [
       {

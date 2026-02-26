@@ -186,6 +186,8 @@ async function ensureInitialized() {
     state.settings.apiBaseUrl = normalizeBaseUrl(state.settings.apiBaseUrl || DEFAULT_STATE.settings.apiBaseUrl);
     state.settings.batchConcurrency = Math.max(1, Math.min(5, Number(state.settings.batchConcurrency || 2)));
     state.settings.historyLimit = Math.max(100, Math.min(1000, Number(state.settings.historyLimit || 500)));
+    state.settings.configUpdatedAt = Math.max(0, Number(state.settings.configUpdatedAt || 0));
+    state.settings.lastConfigSyncAt = Math.max(0, Number(state.settings.lastConfigSyncAt || 0));
   });
 }
 
@@ -355,6 +357,10 @@ async function login(payload) {
   });
 
   const session = await persistAuth(response);
+  try {
+    await syncConfigAuto();
+  } catch (error) {
+  }
   return {
     user: session.user,
     expiresAt: session.expiresAt
@@ -389,6 +395,120 @@ async function logout() {
   }
 
   await clearAuth();
+}
+
+function pickExtensionConfigSnapshot(state) {
+  return {
+    settings: {
+      apiBaseUrl: normalizeBaseUrl(state?.settings?.apiBaseUrl || DEFAULT_STATE.settings.apiBaseUrl),
+      autoSyncHistory: state?.settings?.autoSyncHistory !== false,
+      batchConcurrency: Math.max(1, Math.min(5, Number(state?.settings?.batchConcurrency || 2))),
+      historyLimit: Math.max(100, Math.min(1000, Number(state?.settings?.historyLimit || 500)))
+    },
+    parsers: Array.isArray(state?.parsers) ? state.parsers : [],
+    webdavServers: Array.isArray(state?.webdavServers) ? state.webdavServers : [],
+    defaults: state?.defaults && typeof state.defaults === 'object'
+      ? state.defaults
+      : { parserId: '', webdavId: '' }
+  };
+}
+
+async function applyCloudConfig(config, updatedAt) {
+  const payload = config && typeof config === 'object' ? config : {};
+  await mutateState((state) => {
+    if (payload.settings && typeof payload.settings === 'object') {
+      state.settings = {
+        ...state.settings,
+        ...payload.settings,
+        apiBaseUrl: normalizeBaseUrl(payload.settings.apiBaseUrl || state.settings.apiBaseUrl)
+      };
+
+      state.settings.batchConcurrency = Math.max(1, Math.min(5, Number(state.settings.batchConcurrency || 2)));
+      state.settings.historyLimit = Math.max(100, Math.min(1000, Number(state.settings.historyLimit || 500)));
+    }
+
+    if (Array.isArray(payload.parsers)) {
+      state.parsers = payload.parsers;
+    }
+
+    if (Array.isArray(payload.webdavServers)) {
+      state.webdavServers = payload.webdavServers;
+    }
+
+    if (payload.defaults && typeof payload.defaults === 'object') {
+      state.defaults = {
+        ...state.defaults,
+        ...payload.defaults
+      };
+    }
+
+    state.settings.configUpdatedAt = Math.max(0, Number(updatedAt || 0));
+    state.settings.lastConfigSyncAt = Date.now();
+  });
+
+  // Ensure builtin parsers exist even if cloud config overwrote them.
+  await ensureInitialized();
+}
+
+async function syncConfigAuto() {
+  const state = await readState();
+  if (!state.auth || !state.auth.accessToken) {
+    throw new Error('请先登录再同步配置');
+  }
+
+  const localUpdatedAt = Math.max(0, Number(state.settings && state.settings.configUpdatedAt ? state.settings.configUpdatedAt : 0));
+
+  const remote = await apiRequest('/api/extension/config', {
+    method: 'GET',
+    useAuth: true
+  });
+
+  const remoteUpdatedAt = Math.max(0, Number(remote && remote.data && remote.data.updatedAt ? remote.data.updatedAt : 0));
+  const remoteConfig = remote && remote.data ? remote.data.config : null;
+
+  if (!remoteUpdatedAt) {
+    const nextUpdatedAt = localUpdatedAt || Date.now();
+    const snapshot = pickExtensionConfigSnapshot(state);
+
+    await apiRequest('/api/extension/config', {
+      method: 'POST',
+      useAuth: true,
+      body: { config: snapshot, updatedAt: nextUpdatedAt }
+    });
+
+    await mutateState((next) => {
+      next.settings.configUpdatedAt = nextUpdatedAt;
+      next.settings.lastConfigSyncAt = Date.now();
+    });
+
+    return { mode: 'push', updatedAt: nextUpdatedAt, remoteUpdatedAt, message: '云端暂无配置，已上传本机配置。' };
+  }
+
+  if (remoteUpdatedAt > localUpdatedAt) {
+    await applyCloudConfig(remoteConfig, remoteUpdatedAt);
+    return { mode: 'pull', updatedAt: remoteUpdatedAt, remoteUpdatedAt, message: '已拉取云端配置并覆盖本机配置。' };
+  }
+
+  if (localUpdatedAt > remoteUpdatedAt) {
+    const snapshot = pickExtensionConfigSnapshot(state);
+    await apiRequest('/api/extension/config', {
+      method: 'POST',
+      useAuth: true,
+      body: { config: snapshot, updatedAt: localUpdatedAt }
+    });
+
+    await mutateState((next) => {
+      next.settings.lastConfigSyncAt = Date.now();
+    });
+
+    return { mode: 'push', updatedAt: localUpdatedAt, remoteUpdatedAt, message: '本机配置较新，已上传到云端。' };
+  }
+
+  await mutateState((next) => {
+    next.settings.lastConfigSyncAt = Date.now();
+  });
+
+  return { mode: 'noop', updatedAt: localUpdatedAt, remoteUpdatedAt, message: '配置已是最新，无需同步。' };
 }
 
 async function createHistoryRecord(input) {
@@ -1042,6 +1162,8 @@ async function getPublicState() {
 
 async function saveConfiguration(payload) {
   await mutateState((state) => {
+    let touched = false;
+
     if (payload.settings && typeof payload.settings === 'object') {
       state.settings = {
         ...state.settings,
@@ -1051,14 +1173,17 @@ async function saveConfiguration(payload) {
 
       state.settings.batchConcurrency = Math.max(1, Math.min(5, Number(state.settings.batchConcurrency || 2)));
       state.settings.historyLimit = Math.max(100, Math.min(1000, Number(state.settings.historyLimit || 500)));
+      touched = true;
     }
 
     if (Array.isArray(payload.parsers)) {
       state.parsers = payload.parsers;
+      touched = true;
     }
 
     if (Array.isArray(payload.webdavServers)) {
       state.webdavServers = payload.webdavServers;
+      touched = true;
     }
 
     if (payload.defaults && typeof payload.defaults === 'object') {
@@ -1066,6 +1191,7 @@ async function saveConfiguration(payload) {
         ...state.defaults,
         ...payload.defaults
       };
+      touched = true;
     }
 
     const parserExists = (state.parsers || []).some((item) => item.id === state.defaults.parserId && !item.disabled);
@@ -1078,6 +1204,10 @@ async function saveConfiguration(payload) {
     if (!webdavExists) {
       const fallbackWebdav = (state.webdavServers || []).find((item) => !item.disabled);
       state.defaults.webdavId = fallbackWebdav ? fallbackWebdav.id : '';
+    }
+
+    if (touched) {
+      state.settings.configUpdatedAt = Date.now();
     }
   });
 
@@ -1138,6 +1268,14 @@ const handlers = {
 
   async CONFIG_SAVE(payload) {
     return saveConfiguration(payload || {});
+  },
+
+  async CONFIG_SYNC_AUTO() {
+    const result = await syncConfigAuto();
+    return {
+      ...(result || {}),
+      state: await getPublicState()
+    };
   },
 
   async AUTH_LOGIN(payload) {

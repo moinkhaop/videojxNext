@@ -1,0 +1,168 @@
+import { NextRequest } from 'next/server'
+import {
+  ensureSupabaseEnabled,
+  extensionJson,
+  extensionOptionsResponse,
+  requireExtensionAuth,
+} from '../_shared'
+
+export const runtime = 'nodejs'
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, unknown>
+}
+
+function normalizeConfig(value: unknown) {
+  const source = asRecord(value)
+
+  const settings = asRecord(source.settings)
+  const parsers = Array.isArray(source.parsers) ? source.parsers : []
+  const webdavServers = Array.isArray(source.webdavServers) ? source.webdavServers : []
+  const defaults = asRecord(source.defaults)
+
+  // Only keep fields that the extension understands, so cloud data stays clean.
+  return {
+    settings,
+    parsers,
+    webdavServers,
+    defaults,
+  }
+}
+
+export async function OPTIONS() {
+  return extensionOptionsResponse()
+}
+
+export async function GET(request: NextRequest) {
+  const unavailable = ensureSupabaseEnabled()
+  if (unavailable) {
+    return unavailable
+  }
+
+  const auth = await requireExtensionAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
+  const { client, userId } = auth.context
+  const { data, error } = await client
+    .from('user_configs')
+    .select('id, config_data, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    return extensionJson(
+      { success: false, error: error.message || '读取云端配置失败' },
+      { status: 500 }
+    )
+  }
+
+  const rawConfigData = data?.config_data ?? {}
+  const configData = asRecord(rawConfigData)
+  const extensionNode = asRecord(configData.extension)
+  const updatedAt = Number(extensionNode.updatedAt || 0)
+  const config = normalizeConfig(extensionNode.config)
+
+  return extensionJson({
+    success: true,
+    data: {
+      config,
+      updatedAt,
+      rowUpdatedAt: data?.updated_at ?? null,
+    },
+  })
+}
+
+export async function POST(request: NextRequest) {
+  const unavailable = ensureSupabaseEnabled()
+  if (unavailable) {
+    return unavailable
+  }
+
+  const auth = await requireExtensionAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
+  try {
+    const body = await request.json()
+    const config = normalizeConfig(body?.config)
+    const updatedAt = Number(body?.updatedAt || Date.now())
+
+    const { client, userId } = auth.context
+    const { data: existing, error: selectError } = await client
+      .from('user_configs')
+      .select('id, config_data')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (selectError) {
+      return extensionJson(
+        { success: false, error: selectError.message || '查询云端配置失败' },
+        { status: 500 }
+      )
+    }
+
+    const existingConfigData = asRecord(existing?.config_data)
+    const nextConfigData = {
+      ...existingConfigData,
+      extension: {
+        ...(asRecord(existingConfigData.extension) || {}),
+        config,
+        updatedAt,
+        syncedAt: new Date().toISOString(),
+      },
+    }
+
+    if (existing?.id) {
+      const { error: updateError } = await client
+        .from('user_configs')
+        .update({ config_data: nextConfigData })
+        .eq('id', existing.id)
+        .eq('user_id', userId)
+
+      if (updateError) {
+        return extensionJson(
+          { success: false, error: updateError.message || '写入云端配置失败' },
+          { status: 500 }
+        )
+      }
+    } else {
+      const { error: insertError } = await client
+        .from('user_configs')
+        .insert({
+          user_id: userId,
+          config_data: nextConfigData,
+        })
+
+      if (insertError) {
+        return extensionJson(
+          { success: false, error: insertError.message || '写入云端配置失败' },
+          { status: 500 }
+        )
+      }
+    }
+
+    return extensionJson({
+      success: true,
+      data: {
+        config,
+        updatedAt,
+      },
+    })
+  } catch (error) {
+    return extensionJson(
+      { success: false, error: error instanceof Error ? error.message : '写入云端配置失败' },
+      { status: 500 }
+    )
+  }
+}
+
