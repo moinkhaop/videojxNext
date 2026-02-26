@@ -173,6 +173,20 @@
     };
   }
 
+  function extractShareUrlFromAwemeDetail(awemeDetail) {
+    if (!awemeDetail || typeof awemeDetail !== 'object') {
+      return '';
+    }
+    const direct = typeof awemeDetail.share_url === 'string' ? awemeDetail.share_url : '';
+    if (direct) return direct.trim();
+    const shareInfo = awemeDetail.share_info || awemeDetail.shareInfo;
+    if (shareInfo && typeof shareInfo === 'object') {
+      const nested = shareInfo.share_url || shareInfo.shareUrl || shareInfo.url;
+      if (typeof nested === 'string' && nested.trim()) return nested.trim();
+    }
+    return '';
+  }
+
   function fetchAwemeDetailInMainWorld(awemeId) {
     return new Promise((resolve, reject) => {
       const id = String(awemeId || '').trim();
@@ -234,6 +248,17 @@
       throw new Error(`抖音接口未返回 aweme_detail (status_code=${code})`);
     }
     return parseAwemeDetailToParsedInfo(detail);
+  }
+
+  async function getShareUrlViaWebApi(awemeId) {
+    const json = await fetchAwemeDetailInMainWorld(awemeId);
+    const detail = json && (json.aweme_detail || json.awemeDetail) ? (json.aweme_detail || json.awemeDetail) : null;
+    if (!detail) {
+      const code = json && (json.status_code ?? json.statusCode);
+      throw new Error(`抖音接口未返回 aweme_detail (status_code=${code})`);
+    }
+    const url = extractShareUrlFromAwemeDetail(detail);
+    return url || '';
   }
 
   function extractVideoUrlFromMeta() {
@@ -554,7 +579,8 @@
   }
 
   async function copyShareLink() {
-    // Prefer a real share shortlink (v.douyin.com) without clicking UI.
+    // Prefer a share link without clicking UI. Clicking Douyin's share/copy buttons
+    // often triggers a blocking prompt that asks users to manually press Cmd/Ctrl+C.
     const context = extractCurrentContext();
     const shortFromDom = extractDouyinShortLinkFromDom();
     const awemeFromContext = extractAwemeIdFromText(context.videoUrl || context.pageUrl || window.location.href);
@@ -572,6 +598,24 @@
         awemeId,
         source: 'dom_shortlink'
       };
+    }
+
+    if (awemeId) {
+      try {
+        const shareUrl = await getShareUrlViaWebApi(awemeId);
+        if (shareUrl) {
+          return {
+            ok: true,
+            copied: false,
+            link: shareUrl,
+            shortLink: '',
+            longLink: longLink || context.videoUrl || '',
+            awemeId,
+            source: 'aweme_share_url'
+          };
+        }
+      } catch (error) {
+      }
     }
 
     const fromCenter = extractVideoUrlNearViewportCenter();
@@ -602,52 +646,6 @@
       };
     }
 
-    // If share menu is already open, just click copy.
-    const existingCopy = findCopyLinkButton();
-    if (existingCopy) {
-      const link = findShareLinkInDom();
-      existingCopy.click();
-      return {
-        ok: true,
-        copied: true,
-        link,
-        shortLink: /v\.douyin\.com/i.test(link) ? link : '',
-        longLink: /\/video\//i.test(link) ? link : (longLink || ''),
-        awemeId: awemeId || extractAwemeIdFromText(link),
-        source: 'existing_menu'
-      };
-    }
-
-    const shareButton = findShareButton();
-    const toolbarShare = shareButton || findShareButtonFromRightToolbar();
-    if (!toolbarShare) {
-      return { ok: false, error: '未找到分享按钮。建议先单击视频区域让右侧工具栏显示，再点击“获取分享链接”。' };
-    }
-
-    toolbarShare.click();
-
-    // Wait for share menu to appear.
-    const timeoutAt = Date.now() + 2500;
-    while (Date.now() < timeoutAt) {
-      const copyBtn = findCopyLinkButton();
-      if (copyBtn) {
-        // Prefer reading link from DOM if present.
-        const link = findShareLinkInDom();
-        copyBtn.click();
-        return {
-          ok: true,
-          copied: true,
-          link,
-          shortLink: /v\.douyin\.com/i.test(link) ? link : '',
-          longLink: /\/video\//i.test(link) ? link : (longLink || ''),
-          awemeId: awemeId || extractAwemeIdFromText(link),
-          source: 'share_menu'
-        };
-      }
-      await sleep(120);
-    }
-
-    // Login gating: share menu might show login prompt instead of copy button.
     if (awemeId || longLink) {
       return {
         ok: true,
@@ -660,7 +658,7 @@
       };
     }
 
-    return { ok: false, error: '未找到“复制链接”按钮（可能需要登录）。请手动打开分享面板后再试。' };
+    return { ok: false, error: '未获取到可用链接，请刷新页面后重试。' };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

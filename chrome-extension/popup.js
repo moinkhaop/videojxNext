@@ -65,6 +65,38 @@
     });
   }
 
+  async function writeClipboardText(text) {
+    const value = String(text || '');
+    if (!value) {
+      throw new Error('复制内容为空');
+    }
+
+    // Primary: async clipboard API (requires user gesture, which we have on button click).
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+    } catch (error) {
+    }
+
+    // Fallback: execCommand copy.
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand && document.execCommand('copy');
+    textarea.remove();
+    if (!ok) {
+      throw new Error('自动复制失败，请手动复制');
+    }
+  }
+
   async function readClipboardUrl() {
     if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
       throw new Error('当前环境不支持读取剪贴板，请手动粘贴链接');
@@ -169,7 +201,7 @@
 
   async function getShareLink() {
     setLoading(true);
-    setResult('正在获取分享链接（自动点击 分享 -> 复制链接）...', '');
+    setResult('正在获取分享链接...', '');
 
     try {
       const result = await send('VIDEO_COPY_SHARE_LINK');
@@ -187,20 +219,14 @@
         source: result && result.source ? String(result.source || '') : ''
       };
 
-      if (shortLink && /v\.douyin\.com/i.test(shortLink)) {
-        el.videoUrl.value = shortLink;
-        setResult('已获取分享短链并填入。', 'success');
-        return;
-      }
-
-      if (direct) {
-        el.videoUrl.value = direct;
-        if (/v\.douyin\.com/i.test(direct)) {
-          setResult('已获取分享短链并填入。', 'success');
-        } else if (/\/video\//i.test(direct)) {
-          setResult('已获取视频长链并填入（若解析器不支持长链，可重试获取短链）。', 'success');
-        } else {
-          setResult('已从页面直接获取链接。', 'success');
+      const finalLink = shortLink || direct || longLink;
+      if (finalLink) {
+        el.videoUrl.value = finalLink;
+        try {
+          await writeClipboardText(finalLink);
+          setResult('已获取链接并复制到剪贴板。', 'success');
+        } catch (error) {
+          setResult(`已获取链接，但自动复制失败：${error.message}`, 'success');
         }
         return;
       }

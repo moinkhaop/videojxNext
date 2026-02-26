@@ -925,7 +925,9 @@ async function triggerCopyShareLinkOnActiveTab() {
     || extractAwemeIdFromUrl(direct)
     || extractAwemeIdFromUrl(tab.url || '');
 
-  if (!shortLink && awemeId) {
+  // If the page already returned an iesdouyin share url, don't waste time trying to
+  // derive a v.douyin.com short url (often unavailable in HTML).
+  if (!shortLink && awemeId && !/iesdouyin\.com\/share\/video/i.test(direct)) {
     shortLink = await fetchShortLinkByAwemeId(awemeId);
   }
 
