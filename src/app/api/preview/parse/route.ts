@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { PreviewParseResponse, VideoParserConfig, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
 export async function POST(request: NextRequest) {
   try {
     const { videoUrl, parserConfig } = await request.json()
@@ -12,12 +15,26 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
+    const cleanedVideoUrl = String(videoUrl || '').trim()
+    const extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
+    const initialNormalizedUrl = normalizeDouyinInputUrl(extractedUrl)
+    const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
+    const normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
+
     // {{ AURA: Modify - 重构请求构建逻辑以支持自定义参数 }}
     // 构建请求到第三方解析API
-    let finalApiUrl = parserConfig.apiUrl;
+    const upstreamUrl = new URL(String(parserConfig.apiUrl || '').trim(), request.url)
+    if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
+      return NextResponse.json({
+        success: false,
+        error: '解析API地址仅支持 http/https 协议'
+      }, { status: 400 })
+    }
+
+    let finalApiUrl = upstreamUrl.toString();
     let method = parserConfig.requestMethod || 'POST'; // 使用配置的请求方法
     const headers: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      'User-Agent': DEFAULT_USER_AGENT
     }
 
     // 添加自定义请求头
@@ -29,12 +46,12 @@ export async function POST(request: NextRequest) {
     if (method === 'GET') {
       // 构建GET请求的查询参数
       // {{ AURA: Fix - 修复GET请求URL重复参数的问题 }}
-      const url = new URL(finalApiUrl);
+      const url = new URL(finalApiUrl, request.url);
       
       // 添加视频URL参数
       const urlParamName = parserConfig.urlParamName || 'url';
       // {{ AURA: Fix - 使用 .set 覆盖可能已存在的URL参数，而不是 .append }}
-      url.searchParams.set(urlParamName, videoUrl);
+      url.searchParams.set(urlParamName, normalizedVideoUrl);
       
       // 添加自定义查询参数
       if (parserConfig.customQueryParams) {
@@ -59,7 +76,7 @@ export async function POST(request: NextRequest) {
     let body: any = {};
     if (method === 'POST') {
       const urlParamName = parserConfig.urlParamName || 'url';
-      body[urlParamName] = videoUrl;
+      body[urlParamName] = normalizedVideoUrl;
       if (parserConfig.customBodyParams) {
         Object.assign(body, parserConfig.customBodyParams);
       }
@@ -78,7 +95,7 @@ export async function POST(request: NextRequest) {
       url: finalApiUrl,
       method: method,
       headers: Object.keys(headers),
-      videoUrl: videoUrl.substring(0, 50) + '...'
+      videoUrl: normalizedVideoUrl.substring(0, 50) + '...'
     });
 
     const controller = new AbortController();
@@ -213,7 +230,7 @@ export async function POST(request: NextRequest) {
           console.error('[预览解析] jxcxin API返回错误:', {
             code: data.code,
             msg: data.msg,
-            url: videoUrl,
+            url: normalizedVideoUrl,
             fullResponse: data
           });
           
@@ -237,7 +254,7 @@ export async function POST(request: NextRequest) {
           status: data.status,
           success: data.success,
           message: data.message,
-          url: videoUrl,
+          url: normalizedVideoUrl,
           fullResponse: data
         });
         
@@ -371,6 +388,64 @@ export async function POST(request: NextRequest) {
       success: false,
       error: error instanceof Error ? error.message : '解析过程中发生未知错误'
     }, { status: 500 })
+  }
+}
+
+function extractFirstUrlFromText(text: string): string {
+  const source = String(text || '')
+  const match = source.match(/https?:\/\/[^\s]+/i)
+  return match ? match[0].trim() : ''
+}
+
+function normalizeDouyinInputUrl(input: string): string {
+  const url = String(input || '').trim()
+  if (!url) return ''
+
+  if (/^[0-9]{10,25}$/.test(url)) {
+    return `https://www.iesdouyin.com/share/video/${url}`
+  }
+
+  if (!/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(url)) {
+    return url
+  }
+
+  const awemeMatch = url.match(/\/video\/([0-9]{10,25})/i)
+  if (awemeMatch && awemeMatch[1]) {
+    return `https://www.iesdouyin.com/share/video/${awemeMatch[1]}`
+  }
+
+  return url
+}
+
+function shouldResolveShareUrl(url: string): boolean {
+  const source = String(url || '').trim()
+  if (!source) return false
+  if (!/^https?:\/\//i.test(source)) return false
+  return /^https?:\/\/v\.douyin\.com\//i.test(source)
+}
+
+async function resolveShareUrlIfNeeded(url: string, timeoutMs: number): Promise<string> {
+  if (!shouldResolveShareUrl(url)) {
+    return url
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': DEFAULT_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      signal: controller.signal
+    })
+    return response.url || url
+  } catch {
+    return url
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

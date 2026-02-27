@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       ? body.sampleUrl.trim()
       : DEFAULT_HEALTH_SAMPLE_URL
 
-    const { finalApiUrl, method, requestOptions } = buildHealthRequest(parserConfig, sampleUrl)
+    const { finalApiUrl, method, requestOptions } = buildHealthRequest(parserConfig, sampleUrl, request.url)
 
     const startedAt = Date.now()
     const controller = new AbortController()
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl: string): {
+function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl: string, baseUrl: string): {
   finalApiUrl: string
   method: 'GET' | 'POST'
   requestOptions: RequestInit
@@ -99,7 +99,16 @@ function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl:
   const urlParamName = parserConfig.urlParamName?.trim() || 'url'
   const parserName = parserConfig.name?.trim() || ''
 
-  const upstreamUrl = new URL(parserConfig.apiUrl!)
+  let upstreamUrl: URL
+  try {
+    upstreamUrl = new URL(String(parserConfig.apiUrl || '').trim(), baseUrl)
+  } catch {
+    throw new Error('解析器API地址格式错误')
+  }
+
+  if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
+    throw new Error('解析器API地址仅支持 http/https 协议')
+  }
 
   const headers: Record<string, string> = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'

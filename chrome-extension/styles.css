@@ -28,7 +28,7 @@ body {
   width: 100%;
   max-width: 920px;
   margin: 0 auto;
-  padding: 12px;
+  padding: 16px;
 }
 
 h1,
@@ -254,19 +254,19 @@ hr {
 }
 
 .popup-shell {
-  width: 520px;
-  min-height: 620px;
-  max-height: 760px;
+  width: 720px;
+  min-height: 760px;
+  max-height: 900px;
   overflow: auto;
 }
 
 /* Popup: tighten spacing a bit */
 .popup-shell .card {
-  padding: 10px;
+  padding: 14px;
 }
 
 .popup-shell textarea {
-  min-height: 64px;
+  min-height: 84px;
 }
 
 .popup-shell .row.wrap button {
@@ -327,7 +327,7 @@ hr {
 .grid-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 12px;
 }
 
 .grid-actions #btn-get-share {
@@ -356,10 +356,16 @@ hr {
 
 .meta-row {
   display: grid;
-  grid-template-columns: 38px 1fr auto auto;
+  grid-template-columns: 38px 1fr auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.meta-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .meta-label {

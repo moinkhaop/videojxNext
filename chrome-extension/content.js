@@ -4,6 +4,55 @@
   }
   globalThis.__videojxContentLoaded = true;
 
+  // Install a main-world fetch hook early (best-effort) so we can reuse the page's own
+  // signed API responses when our direct request lacks anti-bot params.
+  (function ensureMainWorldFetchHook() {
+    try {
+      const script = document.createElement('script');
+      script.textContent =
+        `(() => {\n` +
+        `  try {\n` +
+        `    if (window.__VIDEOJX_FETCH_HOOK_INSTALLED) return;\n` +
+        `    window.__VIDEOJX_FETCH_HOOK_INSTALLED = true;\n` +
+        `    window.__VIDEOJX_AWEME_CACHE = window.__VIDEOJX_AWEME_CACHE || Object.create(null);\n` +
+        `    const cache = window.__VIDEOJX_AWEME_CACHE;\n` +
+        `    const origFetch = window.fetch;\n` +
+        `    if (typeof origFetch !== 'function') return;\n` +
+        `    window.fetch = async (...args) => {\n` +
+        `      const res = await origFetch(...args);\n` +
+        `      try {\n` +
+        `        const input = args && args[0] ? args[0] : '';\n` +
+        `        const url = (typeof input === 'string') ? input : (input && input.url ? String(input.url) : '');\n` +
+        `        if (!url || (!url.includes('/aweme/v1/web/') && !url.includes('aweme/v1/web/'))) return res;\n` +
+        `        if (!res || !res.ok) return res;\n` +
+        `        const data = await res.clone().json().catch(() => null);\n` +
+        `        if (!data || typeof data !== 'object') return res;\n` +
+        `        const detail = data.aweme_detail || data.awemeDetail;\n` +
+        `        if (detail && typeof detail === 'object') {\n` +
+        `          const id = String(detail.aweme_id || detail.awemeId || '').trim();\n` +
+        `          if (id) cache[id] = detail;\n` +
+        `          return res;\n` +
+        `        }\n` +
+        `        const list = data.aweme_list || data.awemeList;\n` +
+        `        if (Array.isArray(list)) {\n` +
+        `          for (const item of list) {\n` +
+        `            if (!item || typeof item !== 'object') continue;\n` +
+        `            const id = String(item.aweme_id || item.awemeId || '').trim();\n` +
+        `            if (id) cache[id] = item;\n` +
+        `          }\n` +
+        `        }\n` +
+        `      } catch (e) {}\n` +
+        `      return res;\n` +
+        `    };\n` +
+        `  } catch (e) {}\n` +
+        `})();\n`;
+
+      (document.documentElement || document.head || document.body).appendChild(script);
+      script.remove();
+    } catch (error) {
+    }
+  })();
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -187,6 +236,55 @@
     return '';
   }
 
+  function readCachedAwemeDetailInMainWorld(awemeId) {
+    return new Promise((resolve) => {
+      const id = String(awemeId || '').trim();
+      if (!/^[0-9]{10,25}$/.test(id)) {
+        resolve(null);
+        return;
+      }
+
+      const requestId = `videojx_cache_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, 1200);
+
+      function cleanup() {
+        clearTimeout(timeoutId);
+        window.removeEventListener('message', onMessage);
+      }
+
+      function onMessage(event) {
+        if (event.source !== window) return;
+        const data = event.data;
+        if (!data || data.type !== 'VIDEOJX_AWEME_CACHE_RESULT' || data.requestId !== requestId) {
+          return;
+        }
+        cleanup();
+        resolve(data.payload || null);
+      }
+
+      window.addEventListener('message', onMessage);
+
+      const script = document.createElement('script');
+      script.textContent =
+        `(() => {\n` +
+        `  const requestId = ${JSON.stringify(requestId)};\n` +
+        `  const awemeId = ${JSON.stringify(id)};\n` +
+        `  let payload = null;\n` +
+        `  try {\n` +
+        `    const cache = window.__VIDEOJX_AWEME_CACHE;\n` +
+        `    payload = (cache && cache[awemeId]) ? cache[awemeId] : null;\n` +
+        `  } catch (e) {}\n` +
+        `  try { window.postMessage({ type: 'VIDEOJX_AWEME_CACHE_RESULT', requestId, payload }, '*'); } catch (e) {}\n` +
+        `})();\n`;
+
+      (document.documentElement || document.head || document.body).appendChild(script);
+      script.remove();
+    });
+  }
+
   function fetchAwemeDetailInMainWorld(awemeId) {
     return new Promise((resolve, reject) => {
       const id = String(awemeId || '').trim();
@@ -241,6 +339,11 @@
   }
 
   async function parseAwemeViaWebApi(awemeId) {
+    const cached = await readCachedAwemeDetailInMainWorld(awemeId);
+    if (cached) {
+      return parseAwemeDetailToParsedInfo(cached);
+    }
+
     const json = await fetchAwemeDetailInMainWorld(awemeId);
     const detail = json && (json.aweme_detail || json.awemeDetail) ? (json.aweme_detail || json.awemeDetail) : null;
     if (!detail) {
@@ -251,6 +354,11 @@
   }
 
   async function getShareUrlViaWebApi(awemeId) {
+    const cached = await readCachedAwemeDetailInMainWorld(awemeId);
+    if (cached) {
+      return extractShareUrlFromAwemeDetail(cached) || '';
+    }
+
     const json = await fetchAwemeDetailInMainWorld(awemeId);
     const detail = json && (json.aweme_detail || json.awemeDetail) ? (json.aweme_detail || json.awemeDetail) : null;
     if (!detail) {

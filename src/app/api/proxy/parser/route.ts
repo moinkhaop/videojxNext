@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { VideoParseResponse, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
 export async function POST(request: NextRequest) {
   try {
     const { videoUrl, parserConfig } = await request.json()
@@ -20,29 +23,46 @@ export async function POST(request: NextRequest) {
     }
 
     const cleanedVideoUrl = String(videoUrl || '').trim()
-    const normalizedVideoUrl = normalizeDouyinInputUrl(extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl)
+    const extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
+    const initialNormalizedUrl = normalizeDouyinInputUrl(extractedUrl)
     const parserName = parserConfig.name?.trim() || '自定义解析器'
     const urlParamName = parserConfig.urlParamName?.trim() || 'url'
 
     let upstreamUrl: URL
     try {
-      upstreamUrl = new URL(parserConfig.apiUrl)
+      upstreamUrl = new URL(String(parserConfig.apiUrl).trim(), request.url)
     } catch (urlError) {
       console.error('[API] 解析API地址格式错误:', urlError)
       return NextResponse.json({
         success: false,
-        error: '解析API地址必须是完整的 http:// 或 https:// URL'
+        error: '解析API地址格式错误，请填写完整URL或以 / 开头的站内路径'
       }, { status: 400 })
     }
 
+    if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
+      return NextResponse.json({
+        success: false,
+        error: '解析API地址仅支持 http/https 协议'
+      }, { status: 400 })
+    }
+
+    const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
+    const normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
+
     console.log(`[API] 解析视频链接: ${cleanedVideoUrl}`)
-    if (normalizedVideoUrl && normalizedVideoUrl !== cleanedVideoUrl) {
-      console.log(`[API] 归一化抖音链接: ${normalizedVideoUrl}`)
+    if (extractedUrl && extractedUrl !== cleanedVideoUrl) {
+      console.log(`[API] 从文本提取URL: ${extractedUrl}`)
+    }
+    if (resolvedUrl && resolvedUrl !== initialNormalizedUrl) {
+      console.log(`[API] 解析短链重定向: ${resolvedUrl}`)
+    }
+    if (normalizedVideoUrl && normalizedVideoUrl !== extractedUrl) {
+      console.log(`[API] 归一化链接: ${normalizedVideoUrl}`)
     }
     console.log(`[API] 使用解析器: ${parserName}`)
 
     const headers: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      'User-Agent': DEFAULT_USER_AGENT
     }
 
     if (parserConfig.customHeaders) {
@@ -162,6 +182,15 @@ export async function POST(request: NextRequest) {
         success: false,
         error: '解析API返回了非JSON响应'
       }, { status: 502 })
+    }
+
+    // 如果上游已经返回了标准化格式（例如站内内置解析器），直接透传。
+    if (isVideoParseResponseLike(data)) {
+      return NextResponse.json({
+        success: true,
+        data: data.data,
+        rawData: data.rawData ?? data
+      } satisfies VideoParseResponse)
     }
 
     console.log('[API] 成功获取响应片段:', previewPayloadForLog(data))
@@ -475,6 +504,16 @@ function extractFirstUrlFromText(text: string): string {
   return match ? match[0].trim() : ''
 }
 
+function isVideoParseResponseLike(payload: any): payload is VideoParseResponse {
+  if (!payload || typeof payload !== 'object') return false
+  if (payload.success !== true) return false
+  const data = payload.data
+  if (!data || typeof data !== 'object') return false
+  const hasVideo = typeof data.url === 'string' && data.url.startsWith('http')
+  const hasImages = Array.isArray(data.images) && data.images.length > 0
+  return typeof data.mediaType === 'string' && (hasVideo || hasImages)
+}
+
 function normalizeDouyinInputUrl(input: string): string {
   const url = String(input || '').trim()
   if (!url) return ''
@@ -496,6 +535,39 @@ function normalizeDouyinInputUrl(input: string): string {
   }
 
   return url
+}
+
+function shouldResolveShareUrl(url: string): boolean {
+  const source = String(url || '').trim()
+  if (!source) return false
+  if (!/^https?:\/\//i.test(source)) return false
+  // Resolve Douyin short links; many upstream parsers require a long/share URL.
+  return /^https?:\/\/v\.douyin\.com\//i.test(source)
+}
+
+async function resolveShareUrlIfNeeded(url: string, timeoutMs: number): Promise<string> {
+  if (!shouldResolveShareUrl(url)) {
+    return url
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': DEFAULT_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      signal: controller.signal
+    })
+    return response.url || url
+  } catch {
+    return url
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 function safeParseJsonBody(body: string): any | null {
