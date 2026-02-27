@@ -229,6 +229,18 @@ export class ConfigManager {
   static getDefaultParsers(): VideoParserConfig[] {
     const parsers: VideoParserConfig[] = []
 
+    parsers.push({
+      id: 'builtin_parser_next_douyin',
+      name: '内置抖音解析器',
+      apiUrl: '/api/douyin/parse',
+      isDefault: !builtinEdgeOneParserUrl,
+      isBuiltin: true,
+      requestMethod: 'POST',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
     if (builtinEdgeOneParserUrl) {
       parsers.push({
         id: 'builtin_parser_edgeone_douyin',
@@ -247,12 +259,99 @@ export class ConfigManager {
       id: 'builtin_parser_jxcxin',
       name: '默认抖音解析器',
       apiUrl: 'https://apis.jxcxin.cn/api/douyin',
-      isDefault: !builtinEdgeOneParserUrl,
+      isDefault: false,
       isBuiltin: true,
       requestMethod: 'GET',
       urlParamName: 'url',
       capabilities: [ParserCapability.SINGLE_VIDEO],
       supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    // ===== Douyin / Universal public nodes (third-party) =====
+    parsers.push({
+      id: 'builtin_parser_douyin_wtf',
+      name: 'douyin.wtf（抖音/多平台）',
+      apiUrl: 'https://api.douyin.wtf/api/hybrid/video_data',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_yujn',
+      name: '遇见API（抖音/多平台）',
+      apiUrl: 'https://api.yujn.cn/api/dy_jx.php',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'msg',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_xzdx',
+      name: 'xzdx.top（多平台）',
+      apiUrl: 'https://xzdx.top/api/duan',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_oick_douyin',
+      name: 'Oick（抖音）',
+      apiUrl: 'https://api.oick.cn/douyin/',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_pearktrue_douyin',
+      name: 'Pearktrue（抖音/多平台）',
+      apiUrl: 'https://api.pearktrue.cn/api/video/douyin/',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    // ===== Bilibili =====
+    parsers.push({
+      id: 'builtin_parser_next_bilibili',
+      name: '内置B站解析器',
+      apiUrl: '/api/bilibili/parse',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'POST',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.BILIBILI]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_mir6_bilibili',
+      name: 'mir6（B站）',
+      apiUrl: 'https://api.mir6.com/api/bzjiexi',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      customQueryParams: { type: 'json' },
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.BILIBILI]
     })
 
     return parsers

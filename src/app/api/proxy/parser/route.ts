@@ -5,6 +5,12 @@ const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 export async function POST(request: NextRequest) {
+  let cleanedVideoUrl = ''
+  let extractedUrl = ''
+  let normalizedVideoUrl = ''
+  let parserName = '自定义解析器'
+  let resolvedUpstreamUrl: URL | null = null
+
   try {
     const { videoUrl, parserConfig } = await request.json()
 
@@ -22,10 +28,10 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    const cleanedVideoUrl = String(videoUrl || '').trim()
-    const extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
+    cleanedVideoUrl = String(videoUrl || '').trim()
+    extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
     const initialNormalizedUrl = normalizeDouyinInputUrl(extractedUrl)
-    const parserName = parserConfig.name?.trim() || '自定义解析器'
+    parserName = parserConfig.name?.trim() || '自定义解析器'
     const urlParamName = parserConfig.urlParamName?.trim() || 'url'
 
     let upstreamUrl: URL
@@ -46,8 +52,10 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
+    resolvedUpstreamUrl = upstreamUrl
+
     const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
-    const normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
+    normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
 
     console.log(`[API] 解析视频链接: ${cleanedVideoUrl}`)
     if (extractedUrl && extractedUrl !== cleanedVideoUrl) {
@@ -154,10 +162,7 @@ export async function POST(request: NextRequest) {
     } catch (fetchError) {
       clearTimeout(timeoutId)
       console.error('[API] 请求失败:', fetchError instanceof Error ? fetchError.message : String(fetchError))
-      return NextResponse.json({
-        success: false,
-        error: `请求解析API失败: ${fetchError instanceof Error ? fetchError.message : '网络错误'}`
-      }, { status: 500 })
+      throw new Error(`请求解析API失败: ${fetchError instanceof Error ? fetchError.message : '网络错误'}`)
     }
 
     clearTimeout(timeoutId)
@@ -168,20 +173,14 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const upstreamMessage = extractUpstreamErrorMessage(rawBody)
       console.error(`[API] 解析API返回错误: ${response.status} ${upstreamMessage}`)
-      return NextResponse.json({
-        success: false,
-        error: `${parserName} 返回错误 (${response.status}): ${upstreamMessage || '请求失败'}`
-      }, { status: response.status })
+      throw new Error(`${parserName} 返回错误 (${response.status}): ${upstreamMessage || '请求失败'}`)
     }
 
     const data = safeParseJsonBody(rawBody)
 
     if (!data) {
       console.error('[API] 无法将上游响应解析为JSON')
-      return NextResponse.json({
-        success: false,
-        error: '解析API返回了非JSON响应'
-      }, { status: 502 })
+      throw new Error('解析API返回了非JSON响应')
     }
 
     // 如果上游已经返回了标准化格式（例如站内内置解析器），直接透传。
@@ -333,41 +332,7 @@ export async function POST(request: NextRequest) {
         
         // 如果还是没找到视频URL且也没有图片，使用备用URL (使用测试视频)
         if (!videoUrl && images.length === 0) {
-          console.warn('[API] 无法从API响应中获取媒体URL，尝试使用备用测试视频')
-          
-          // 备用测试视频URL列表
-          const backupUrls = [
-            'https://www.w3schools.com/html/mov_bbb.mp4', // W3Schools 示例视频
-            'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4', // 另一个测试视频
-            'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', // Google 示例视频
-            'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4' // 另一个 Google 示例视频
-          ];
-          
-          // 随机选择一个备用URL
-          videoUrl = backupUrls[Math.floor(Math.random() * backupUrls.length)];
-          detectedMediaType = MediaType.VIDEO
-          
-          // 标记为测试模式
-          const title = dataSource.title || dataSource.name || '未知视频 (测试模式)'
-          
-          parsedInfo = {
-            title: `${title} [测试模式]`,
-            author: extractAuthor(dataSource),
-            description: extractDescription(dataSource, title),
-            mediaType: MediaType.VIDEO,
-            url: videoUrl,
-            duration: 30,
-            fileSize: 1024 * 1024 * 10, // 10MB
-            format: 'mp4',
-            thumbnail: 'https://source.unsplash.com/random/1280x720/?video'
-          }
-          
-          console.log('[API] 已切换到测试模式，将使用备用视频URL')
-          return NextResponse.json({
-            success: true,
-            data: parsedInfo,
-            message: '已切换到测试模式：无法从API获取真实视频URL'
-          })
+          throw new Error('无法从API响应中获取媒体URL（未找到视频或图集直链）')
         }
         
         console.log(`[API] 检测到媒体类型: ${detectedMediaType}`)
@@ -410,10 +375,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (error) {
       console.error('[API] 数据解析错误:', error)
-      return NextResponse.json({
-        success: false,
-        error: error instanceof Error ? error.message : '解析视频信息失败，API返回数据格式不兼容'
-      }, { status: 400 })
+      throw new Error(error instanceof Error ? error.message : '解析视频信息失败，API返回数据格式不兼容')
     }
 
     const result: VideoParseResponse = {
@@ -425,10 +387,36 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('[API] 视频解析错误:', error)
+    const failure = error instanceof Error ? error.message : '解析过程中发生未知错误'
+    const platform = detectPlatformHint(extractedUrl || cleanedVideoUrl)
+
+    const failures: string[] = [failure]
+
+    const fallbackResponse = await tryFallbackParse({
+      requestUrl: request.url,
+      platform,
+      inputUrl: extractedUrl || cleanedVideoUrl,
+      usedParserName: parserName,
+      usedParserUrl: resolvedUpstreamUrl?.toString() || '',
+      failures
+    })
+
+    if (fallbackResponse) {
+      return NextResponse.json(fallbackResponse)
+    }
+
     return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : '解析过程中发生未知错误'
-    }, { status: 500 })
+      error: failures[0] || '解析失败',
+      rawData: {
+        failures: failures.slice(0, 3),
+        platform,
+        extractedUrl: extractedUrl || undefined,
+        resolvedUrl: normalizedVideoUrl || undefined,
+        parserName,
+        parserUrl: resolvedUpstreamUrl?.toString() || undefined
+      }
+    }, { status: 502 })
   }
 }
 
@@ -607,6 +595,21 @@ function extractUpstreamErrorMessage(body: string): string {
   return sanitizeTextSnippet(body)
 }
 
+function extractErrorMessageFromObject(payload: any): string {
+  if (!payload || typeof payload !== 'object') {
+    return ''
+  }
+
+  const keys = ['error', 'message', 'msg', 'detail', 'reason']
+  for (const key of keys) {
+    const value = payload?.[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
 function sanitizeTextSnippet(text: string, maxLength = 200): string {
   if (!text) return ''
   const condensed = text.replace(/\s+/g, ' ').trim()
@@ -748,4 +751,80 @@ function extractDescription(dataSource: any, fallbackTitle?: string): string | u
   
   // 如果没有找到描述，使用标题作为备用
   return fallbackTitle
+}
+
+type PlatformHint = 'douyin' | 'bilibili' | 'unknown'
+
+function detectPlatformHint(input: string): PlatformHint {
+  const text = String(input || '').trim()
+  if (!text) return 'unknown'
+
+  if (/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(text) || /^[0-9]{10,25}$/.test(text)) {
+    return 'douyin'
+  }
+
+  if (/bilibili\.com|b23\.tv/i.test(text) || /(^|\W)(BV[0-9A-Za-z]{10,})/i.test(text) || /(^|\W)av[0-9]{1,12}(\W|$)/i.test(text)) {
+    return 'bilibili'
+  }
+
+  return 'unknown'
+}
+
+async function tryFallbackParse(args: {
+  requestUrl: string
+  platform: PlatformHint
+  inputUrl: string
+  usedParserName: string
+  usedParserUrl: string
+  failures: string[]
+}): Promise<VideoParseResponse | null> {
+  const { platform, requestUrl, inputUrl, usedParserName, usedParserUrl, failures } = args
+  if (platform === 'unknown') {
+    return null
+  }
+
+  const fallbackPath = platform === 'douyin'
+    ? '/api/douyin/parse'
+    : '/api/bilibili/parse'
+
+  try {
+    const endpoint = new URL(fallbackPath, requestUrl).toString()
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: inputUrl, videoUrl: inputUrl })
+    })
+
+    const raw = await response.text()
+    const parsed = safeParseJsonBody(raw)
+
+    if (!response.ok || !parsed) {
+      throw new Error(`HTTP ${response.status}: ${extractUpstreamErrorMessage(raw) || 'fallback returned non-json'}`)
+    }
+
+    if (!isVideoParseResponseLike(parsed)) {
+      const upstreamErr = extractErrorMessageFromObject(parsed) || extractUpstreamErrorMessage(raw)
+      throw new Error(upstreamErr || 'fallback response is not VideoParseResponse')
+    }
+
+    const result: VideoParseResponse = {
+      success: true,
+      data: parsed.data,
+      rawData: {
+        ...(parsed.rawData ?? parsed),
+        fallback: {
+          fromParser: usedParserName,
+          fromUrl: usedParserUrl,
+          failures: failures.slice(0, 3),
+          usedFallback: fallbackPath
+        }
+      }
+    }
+
+    console.log(`[API] 解析失败后自动降级到内置解析器: ${fallbackPath}`)
+    return result
+  } catch (error) {
+    failures.push(`fallback(${fallbackPath}): ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
 }

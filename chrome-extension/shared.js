@@ -23,12 +23,82 @@
         disabled: false
       },
       {
+        id: 'builtin_parser_next_douyin',
+        name: '内置抖音解析器（多上游自动降级）',
+        apiUrl: '/api/douyin/parse',
+        requestMethod: 'POST',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
         id: 'builtin_parser_jxcxin',
         name: '默认抖音解析器',
         apiUrl: 'https://apis.jxcxin.cn/api/douyin',
         requestMethod: 'GET',
         urlParamName: 'url',
         isDefault: true,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_douyin_wtf',
+        name: 'douyin.wtf（抖音/多平台）',
+        apiUrl: 'https://api.douyin.wtf/api/hybrid/video_data',
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_yujn',
+        name: '遇见API（抖音/多平台）',
+        apiUrl: 'https://api.yujn.cn/api/dy_jx.php',
+        requestMethod: 'GET',
+        urlParamName: 'msg',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_xzdx',
+        name: 'xzdx.top（多平台）',
+        apiUrl: 'https://xzdx.top/api/duan',
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_oick_douyin',
+        name: 'Oick（抖音）',
+        apiUrl: 'https://api.oick.cn/douyin/',
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_pearktrue_douyin',
+        name: 'Pearktrue（抖音/多平台）',
+        apiUrl: 'https://api.pearktrue.cn/api/video/douyin/',
+        requestMethod: 'GET',
+        urlParamName: 'url',
+        isDefault: false,
+        isBuiltin: true,
+        disabled: false
+      },
+      {
+        id: 'builtin_parser_next_bilibili',
+        name: '内置B站解析器（上游失败自动降级官方接口）',
+        apiUrl: '/api/bilibili/parse',
+        requestMethod: 'POST',
+        urlParamName: 'url',
+        isDefault: false,
         isBuiltin: true,
         disabled: false
       }

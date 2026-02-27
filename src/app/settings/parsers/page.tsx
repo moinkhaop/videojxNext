@@ -76,7 +76,7 @@ export default function ParsersConfigPage() {
       name: "测试模式解析器",
       apiUrl: "/api/proxy/parser?test=true",
       apiKey: "",
-      requestMethod: 'POST',
+      requestMethod: 'GET',
       urlParamName: 'url',
       isDefault: configs.length === 0
     }

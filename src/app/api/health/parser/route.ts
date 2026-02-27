@@ -37,7 +37,18 @@ export async function POST(request: NextRequest) {
       ? body.sampleUrl.trim()
       : DEFAULT_HEALTH_SAMPLE_URL
 
-    const { finalApiUrl, method, requestOptions } = buildHealthRequest(parserConfig, sampleUrl, request.url)
+    let finalApiUrl: string
+    let method: 'GET' | 'POST'
+    let requestOptions: RequestInit
+
+    try {
+      ({ finalApiUrl, method, requestOptions } = buildHealthRequest(parserConfig, sampleUrl, request.url))
+    } catch (error) {
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : '构建健康检查请求失败'
+      }, { status: 400 })
+    }
 
     const startedAt = Date.now()
     const controller = new AbortController()

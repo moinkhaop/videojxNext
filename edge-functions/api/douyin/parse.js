@@ -1,5 +1,12 @@
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-const DEFAULT_UPSTREAMS = ['https://apis.jxcxin.cn/api/douyin?url={url}']
+const DEFAULT_UPSTREAMS = [
+  'jxcxin|https://apis.jxcxin.cn/api/douyin?url={url}',
+  'douyin_wtf|https://api.douyin.wtf/api/hybrid/video_data?url={url}',
+  'yujn|https://api.yujn.cn/api/dy_jx.php?msg={url}',
+  'xzdx|https://xzdx.top/api/duan?url={url}',
+  'oick|https://api.oick.cn/douyin/?url={url}',
+  'pearktrue|https://api.pearktrue.cn/api/video/douyin/?url={url}',
+]
 
 export default async function onRequest(context) {
   try {
@@ -257,7 +264,8 @@ async function callUpstream(upstream, resolvedUrl, timeoutMs) {
 
 function applyUrlTemplate(template, targetUrl) {
   if (template.includes('{url}')) {
-    return template.replaceAll('{url}', encodeURIComponent(targetUrl))
+    // Avoid String.prototype.replaceAll for maximum edge runtime compatibility.
+    return template.split('{url}').join(encodeURIComponent(targetUrl))
   }
 
   const requestUrl = new URL(template)
