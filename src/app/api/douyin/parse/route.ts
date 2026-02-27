@@ -487,7 +487,16 @@ function collectImageUrls(dataSource: any): string[] {
     }
   }
 
-  return [...new Set(results)]
+  // Avoid iterating Set (spread) so the typecheck passes with older TS targets.
+  const unique: string[] = []
+  const seen: Record<string, true> = Object.create(null)
+  for (const url of results) {
+    if (!url) continue
+    if (seen[url]) continue
+    seen[url] = true
+    unique.push(url)
+  }
+  return unique
 }
 
 function detectVideoUrl(dataSource: any): string {

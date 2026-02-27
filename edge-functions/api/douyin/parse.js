@@ -438,7 +438,15 @@ function collectImageUrls(dataSource) {
     }
   }
 
-  return [...new Set(results)]
+  const unique = []
+  const seen = Object.create(null)
+  for (const url of results) {
+    if (!url) continue
+    if (seen[url]) continue
+    seen[url] = true
+    unique.push(url)
+  }
+  return unique
 }
 
 function pickAuthor(dataSource) {
