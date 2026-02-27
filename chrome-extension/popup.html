@@ -33,7 +33,26 @@
 
         <div class="col">
           <label class="small">视频链接</label>
-          <textarea id="video-url" placeholder="可粘贴分享文案/链接，或直接用上方按钮自动获取。"></textarea>
+          <textarea id="video-url" wrap="off" spellcheck="false" placeholder="可粘贴分享文案/链接，或直接用上方按钮自动获取。"></textarea>
+        </div>
+
+        <div id="share-meta" class="share-meta hidden">
+          <div class="meta-row">
+            <div class="meta-label">短链</div>
+            <code id="meta-short" class="meta-value"></code>
+            <button id="btn-copy-short" class="chip">复制</button>
+            <button id="btn-use-short" class="chip">使用</button>
+          </div>
+          <div class="meta-row">
+            <div class="meta-label">长链</div>
+            <code id="meta-long" class="meta-value"></code>
+            <button id="btn-copy-long" class="chip">复制</button>
+            <button id="btn-use-long" class="chip">使用</button>
+          </div>
+          <div class="meta-foot muted">
+            <span>awemeId: </span><code id="meta-aweme"></code>
+            <span style="margin-left: 10px;">来源: </span><code id="meta-source"></code>
+          </div>
         </div>
 
         <div class="row" style="align-items: flex-end;">

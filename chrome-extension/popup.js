@@ -33,6 +33,15 @@
     btnPasteClipboard: document.getElementById('btn-paste-clipboard'),
     btnCheckSession: document.getElementById('btn-check-session'),
     videoUrl: document.getElementById('video-url'),
+    shareMeta: document.getElementById('share-meta'),
+    metaShort: document.getElementById('meta-short'),
+    metaLong: document.getElementById('meta-long'),
+    metaAweme: document.getElementById('meta-aweme'),
+    metaSource: document.getElementById('meta-source'),
+    btnCopyShort: document.getElementById('btn-copy-short'),
+    btnUseShort: document.getElementById('btn-use-short'),
+    btnCopyLong: document.getElementById('btn-copy-long'),
+    btnUseLong: document.getElementById('btn-use-long'),
     parserSelect: document.getElementById('parser-select'),
     webdavSelect: document.getElementById('webdav-select'),
     btnParse: document.getElementById('btn-parse'),
@@ -48,6 +57,30 @@
   };
 
   let lastShareMeta = null;
+
+  function renderShareMeta() {
+    if (!el.shareMeta) return;
+
+    if (!lastShareMeta || typeof lastShareMeta !== 'object') {
+      el.shareMeta.classList.add('hidden');
+      if (el.metaShort) el.metaShort.textContent = '';
+      if (el.metaLong) el.metaLong.textContent = '';
+      if (el.metaAweme) el.metaAweme.textContent = '';
+      if (el.metaSource) el.metaSource.textContent = '';
+      return;
+    }
+
+    const shortLink = lastShareMeta.shortLink ? extractFirstUrl(lastShareMeta.shortLink) : '';
+    const longLink = lastShareMeta.longLink ? extractFirstUrl(lastShareMeta.longLink) : '';
+    const awemeId = lastShareMeta.awemeId ? String(lastShareMeta.awemeId || '').trim() : '';
+    const source = lastShareMeta.source ? String(lastShareMeta.source || '').trim() : '';
+
+    el.shareMeta.classList.remove('hidden');
+    if (el.metaShort) el.metaShort.textContent = shortLink || '-';
+    if (el.metaLong) el.metaLong.textContent = longLink || '-';
+    if (el.metaAweme) el.metaAweme.textContent = awemeId || '-';
+    if (el.metaSource) el.metaSource.textContent = source || '-';
+  }
 
   function setResult(message, type) {
     el.resultBox.className = 'notice';
@@ -116,6 +149,7 @@
       const url = await readClipboardUrl();
       el.videoUrl.value = url;
       lastShareMeta = null;
+      renderShareMeta();
       setResult('已从剪贴板粘贴链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -191,6 +225,7 @@
         awemeId: '',
         source: 'active_context'
       };
+      renderShareMeta();
       setResult('已读取地址栏链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -218,6 +253,7 @@
         awemeId,
         source: result && result.source ? String(result.source || '') : ''
       };
+      renderShareMeta();
 
       const finalLink = shortLink || direct || longLink;
       if (finalLink) {
@@ -253,6 +289,42 @@
     } finally {
       setLoading(false);
     }
+  }
+
+  async function copyMetaLink(kind) {
+    if (!lastShareMeta || typeof lastShareMeta !== 'object') {
+      setResult('尚未获取到链接元信息。', 'error');
+      return;
+    }
+    const value = kind === 'short'
+      ? extractFirstUrl(lastShareMeta.shortLink || '')
+      : extractFirstUrl(lastShareMeta.longLink || '');
+    if (!value) {
+      setResult(kind === 'short' ? '当前未获取到短链。' : '当前未获取到长链。', 'error');
+      return;
+    }
+    try {
+      await writeClipboardText(value);
+      setResult('已复制到剪贴板。', 'success');
+    } catch (error) {
+      setResult(`复制失败：${error.message}`, 'error');
+    }
+  }
+
+  function useMetaLink(kind) {
+    if (!lastShareMeta || typeof lastShareMeta !== 'object') {
+      setResult('尚未获取到链接元信息。', 'error');
+      return;
+    }
+    const value = kind === 'short'
+      ? extractFirstUrl(lastShareMeta.shortLink || '')
+      : extractFirstUrl(lastShareMeta.longLink || '');
+    if (!value) {
+      setResult(kind === 'short' ? '当前未获取到短链。' : '当前未获取到长链。', 'error');
+      return;
+    }
+    el.videoUrl.value = value;
+    setResult('已填入链接输入框。', 'success');
   }
 
   async function refreshSession() {
@@ -354,11 +426,24 @@
     el.btnCheckSession.addEventListener('click', refreshSession);
     el.btnParse.addEventListener('click', parsePreview);
     el.btnUpload.addEventListener('click', directUpload);
+
+    if (el.btnCopyShort) el.btnCopyShort.addEventListener('click', () => copyMetaLink('short'));
+    if (el.btnCopyLong) el.btnCopyLong.addEventListener('click', () => copyMetaLink('long'));
+    if (el.btnUseShort) el.btnUseShort.addEventListener('click', () => useMetaLink('short'));
+    if (el.btnUseLong) el.btnUseLong.addEventListener('click', () => useMetaLink('long'));
+
+    if (el.videoUrl) {
+      el.videoUrl.addEventListener('input', () => {
+        // If the user manually edits the field, the stored meta may no longer match.
+        // Keep meta visible (for quick switching) but avoid using stale meta elsewhere.
+      });
+    }
   }
 
   async function bootstrap() {
     bindEvents();
     await loadState();
+    renderShareMeta();
   }
 
   bootstrap().catch((error) => {

@@ -740,6 +740,20 @@ function pickParserAndWebdav(payload, state) {
   return { parser, webdav };
 }
 
+function pickFallbackParser(state, excludedParserId) {
+  const excluded = String(excludedParserId || '').trim();
+  const candidates = (state.parsers || [])
+    .filter((item) => item && !item.disabled)
+    .filter((item) => item.id !== excluded)
+    .filter((item) => item.builtinType !== 'douyin_page_api' && item.apiUrl !== 'builtin:douyin_page_api');
+
+  if (candidates.length === 0) return null;
+
+  const preferredId = state && state.defaults && state.defaults.parserId ? String(state.defaults.parserId) : '';
+  const preferred = preferredId ? candidates.find((p) => p.id === preferredId) : null;
+  return preferred || candidates.find((p) => p.isDefault) || candidates[0] || null;
+}
+
 async function directUpload(payload) {
   const state = await readState();
   const inputUrl = extractFirstUrl(payload.videoUrl || '');
@@ -760,6 +774,9 @@ async function directUpload(payload) {
   const awemeId = metaAwemeId || extractAwemeIdFromUrl(inputUrl) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
   let parsed = null;
   let parsedByPage = false;
+  let pageApiError = '';
+  let fallbackUsed = false;
+  let finalParserName = selected.parser.name;
   try {
     if (awemeId) {
       parsed = await tryParseViaActiveDouyinWebApi(awemeId);
@@ -767,16 +784,31 @@ async function directUpload(payload) {
     }
   } catch (error) {
     // Fallback to upstream parser when page API fails (e.g. not on Douyin tab / login restrictions).
+    pageApiError = toErrorMessage(error);
     parsed = null;
   }
 
   const requiresPageApi = Boolean(selected.parser && selected.parser.builtinType === 'douyin_page_api');
   if (requiresPageApi && !parsed) {
-    throw new Error('抖音页面解析器仅在抖音网页（推荐页/详情页）可用，请在抖音页面打开视频后重试');
+    // Page API parser is best when a Douyin tab is available, but users may want to paste
+    // short links elsewhere. Degrade to an upstream parser if configured.
+    const fallbackParser = pickFallbackParser(state, selected.parser.id);
+    const fallbackUrl = metaShort || inputUrl || metaLong;
+
+    if (fallbackParser && fallbackUrl) {
+      parsed = await parseVideo(fallbackUrl, fallbackParser);
+      parsedByPage = false;
+      fallbackUsed = true;
+      finalParserName = `${fallbackParser.name} (自动降级)`;
+    } else {
+      const hint = pageApiError ? `抖音页面解析失败：${pageApiError}` : '未找到可用的抖音网页标签页';
+      throw new Error(`${hint}。请在抖音网页（推荐页/详情页）打开视频后重试，或切换到网络解析器。`);
+    }
   }
 
   if (!parsed) {
-    parsed = await parseVideo(inputUrl, selected.parser);
+    const parseUrl = metaShort || inputUrl || metaLong;
+    parsed = await parseVideo(parseUrl, selected.parser);
   }
 
   const filePath = await uploadParsedMedia(parsed, selected.webdav);
@@ -793,7 +825,8 @@ async function directUpload(payload) {
       pageUrl: metaPageUrl,
       linkSource: metaSource,
       mediaType: parsed.mediaType,
-      parserName: parsedByPage ? '抖音页面API' : selected.parser.name,
+      parserName: parsedByPage ? '抖音页面API' : finalParserName,
+      pageApiError: parsedByPage ? '' : (fallbackUsed ? pageApiError : ''),
       webdavName: selected.webdav.name,
       filePath,
       author: parsed.author || ''
@@ -1327,6 +1360,7 @@ const handlers = {
     const awemeId = metaAwemeId || extractAwemeIdFromUrl(url) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
     let parsed = null;
     let parsedByPage = false;
+    let pageApiError = '';
 
     const requiresPageApi = Boolean(parser && parser.builtinType === 'douyin_page_api');
     if (awemeId) {
@@ -1334,12 +1368,25 @@ const handlers = {
         parsed = await tryParseViaActiveDouyinWebApi(awemeId);
         parsedByPage = Boolean(parsed);
       } catch (error) {
+        pageApiError = toErrorMessage(error);
         parsed = null;
       }
     }
 
     if (requiresPageApi && !parsed) {
-      throw new Error('抖音页面解析器仅在抖音网页（推荐页/详情页）可用，请在抖音页面打开视频后重试');
+      const fallbackParser = pickFallbackParser(state, parser.id);
+      const fallbackUrl = metaShort || url || metaLong;
+      if (fallbackParser && fallbackUrl) {
+        parsed = await parseVideo(fallbackUrl, fallbackParser);
+        parsedByPage = false;
+        return {
+          parsed,
+          parserName: `${fallbackParser.name} (自动降级)`
+        };
+      }
+
+      const hint = pageApiError ? `抖音页面解析失败：${pageApiError}` : '未找到可用的抖音网页标签页';
+      throw new Error(`${hint}。请在抖音网页（推荐页/详情页）打开视频后重试，或切换到网络解析器。`);
     }
 
     if (!parsed) {
