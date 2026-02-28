@@ -39,6 +39,7 @@ interface TwoColumnPreviewProps {
   className?: string
   currentTask: ConversionTask | null
   progress: number
+  progressHint?: string
 }
 
 // {{ AURA: Add - 从 convert/page.tsx 移入状态显示相关函数 }}
@@ -109,6 +110,7 @@ export function TwoColumnPreview({
   className = '',
   currentTask,
   progress,
+  progressHint,
 }: TwoColumnPreviewProps) {
   const isVideo = mediaInfo.mediaType === MediaType.VIDEO
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
@@ -403,6 +405,21 @@ export function TwoColumnPreview({
             </div>
 
             <div className="p-4 space-y-3">
+              {(isUploading || currentTask?.status === TaskStatus.UPLOADING) && (
+                <div className="p-3 rounded-lg border border-blue-100 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/20">
+                  <div className="flex items-center justify-between text-xs text-gray-700 dark:text-gray-300 mb-2">
+                    <span className="font-medium">上传进度</span>
+                    <span className="tabular-nums">{Math.max(0, Math.min(100, Math.floor(progress)))}%</span>
+                  </div>
+                  <Progress value={Math.max(0, Math.min(100, Math.floor(progress)))} />
+                  {progressHint && (
+                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                      {progressHint}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* 主要操作 - 确认上传或成功状态 */}
               {currentTask?.status === TaskStatus.SUCCESS ? (
                 <>

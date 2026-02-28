@@ -709,11 +709,29 @@ export class ConversionService {
   static async uploadToWebDAV(
     mediaInfo: ParsedVideoInfo,
     webdavConfig: WebDAVConfig,
-    folderPath?: string
+    folderPath?: string,
+    onProgress?: (progress: number, hint: string) => void
   ): Promise<string> {
     const maxRetries = 5
     let attempt = 0
     let lastError
+    let lastProgress = 60
+    const startedAt = Date.now()
+
+    const formatElapsed = (ms: number) => {
+      const seconds = Math.max(0, Math.floor(ms / 1000))
+      if (seconds < 60) return `${seconds}s`
+      const minutes = Math.floor(seconds / 60)
+      const rest = seconds % 60
+      return `${minutes}m${String(rest).padStart(2, '0')}s`
+    }
+
+    const emit = (progress: number, hint: string) => {
+      if (!onProgress) return
+      const clamped = Math.max(0, Math.min(99, Math.floor(progress)))
+      lastProgress = Math.max(lastProgress, clamped)
+      onProgress(clamped, hint)
+    }
     
     // 根据媒体类型生成文件名
     let fileName = ''
@@ -727,21 +745,46 @@ export class ConversionService {
     while (attempt < maxRetries) {
       try {
         attempt++
+        emit(
+          Math.min(90, 60 + attempt * 2),
+          `服务器上传中（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
+        )
         console.log(`[转存] WebDAV上传尝试 ${attempt}/${maxRetries}: ${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}`)
+
+        const controller = new AbortController()
+        const timeoutMs = Number(process.env.NEXT_PUBLIC_WEBDAV_PROXY_TIMEOUT_MS ?? '180000')
+        const timeoutId = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 180000)
+
+        // Keep ticking while the server is doing download/upload work.
+        const progressCeiling = Math.max(70, Math.min(95, 92 + attempt))
+        const ticker = setInterval(() => {
+          if (lastProgress >= progressCeiling) return
+          emit(
+            lastProgress + 1,
+            `服务器上传中（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
+          )
+        }, 900)
         
-        const response = await fetch('/api/proxy/webdav', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined,
-            images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined,
-            webdavConfig,
-            fileName,
-            folderPath: folderPath || ''
+        let response: Response
+        try {
+          response = await fetch('/api/proxy/webdav', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined,
+              images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined,
+              webdavConfig,
+              fileName,
+              folderPath: folderPath || ''
+            }),
+            signal: controller.signal
           })
-        })
+        } finally {
+          clearTimeout(timeoutId)
+          clearInterval(ticker)
+        }
 
         const responseText = await response.text()
         if (!responseText.trim()) {
@@ -774,15 +817,24 @@ export class ConversionService {
         }
 
         console.log(`[转存] 上传成功，尝试次数: ${attempt}`)
+        emit(99, `上传完成，正在收尾（已用时 ${formatElapsed(Date.now() - startedAt)}）`)
         return result.filePath
         
       } catch (error) {
         lastError = error
         console.error(`[转存] 上传尝试 ${attempt} 失败:`, error)
+        emit(
+          Math.max(60, lastProgress),
+          `上传失败（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
+        )
         
         if (attempt < maxRetries) {
           const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000)
           console.log(`[转存] 等待 ${waitTime/1000} 秒后重试...`)
+          emit(
+            Math.max(60, lastProgress),
+            `等待 ${Math.round(waitTime / 1000)} 秒后重试（第 ${attempt + 1}/${maxRetries} 次）`
+          )
           await new Promise(resolve => setTimeout(resolve, waitTime))
         } else {
           break
@@ -964,10 +1016,11 @@ export class ConversionService {
   static async uploadParsedMedia(
     parsedInfo: ParsedVideoInfo,
     webdavConfig: WebDAVConfig,
-    folderPath?: string
+    folderPath?: string,
+    onProgress?: (progress: number, hint: string) => void
   ): Promise<string> {
     console.log(`[上传] 开始上传已解析的媒体: ${parsedInfo.title}`)
-    return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath)
+    return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath, onProgress)
   }
 
   // 解析视频链接

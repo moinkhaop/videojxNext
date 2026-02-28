@@ -49,6 +49,7 @@ function ConvertPageContent() {
   const [webdavServers, setWebdavServers] = useState<WebDAVConfig[]>([])
   const [currentTask, setCurrentTask] = useState<ConversionTask | null>(null)
   const [progress, setProgress] = useState(0)
+  const [progressHint, setProgressHint] = useState('')
   const [isConverting, setIsConverting] = useState(false)
   
   // 预览状态管理
@@ -206,6 +207,7 @@ function ConvertPageContent() {
 
     setIsConverting(true)
     setProgress(0)
+    setProgressHint('正在解析...')
 
     if (extractedUrl !== videoUrl.trim()) {
       console.log(`[预览] 从分享文本中提取到URL: ${extractedUrl}`)
@@ -241,10 +243,12 @@ function ConvertPageContent() {
       } : null)
       
       setProgress(100)
+      setProgressHint('解析完成')
       console.log(`[预览] 解析成功: ${parsedInfo.title}`)
 
     } catch (error) {
       console.error('解析过程出现异常:', error)
+      setProgressHint('')
       setCurrentTask(prev => {
         if (!prev) return null
         return {
@@ -280,6 +284,7 @@ function ConvertPageContent() {
     // 立即更新UI状态，显示加载动画
     setIsConverting(true)
     setProgress(0)
+    setProgressHint('准备上传...')
     setCurrentTask(prev => prev ? {
       ...prev,
       status: TaskStatus.UPLOADING,
@@ -292,11 +297,17 @@ function ConvertPageContent() {
     setTimeout(async () => {
       try {
         setProgress(50)
+        setProgressHint('服务器处理中...')
 
         // 基于已解析的数据进行上传
         const filePath = await ConversionService.uploadParsedMedia(
           previewState.previewData!,
-          webdav
+          webdav,
+          undefined,
+          (p, hint) => {
+            setProgress(p)
+            setProgressHint(hint)
+          }
         )
 
         // 更新任务状态为成功
@@ -320,6 +331,7 @@ function ConvertPageContent() {
           return finalTask
         })
         setProgress(100)
+        setProgressHint('上传成功')
 
         console.log('上传成功:', filePath)
 
@@ -338,6 +350,7 @@ function ConvertPageContent() {
 
       } catch (error) {
         console.error('上传过程出现异常:', error)
+        setProgressHint('')
         setCurrentTask(prev => {
           if (!prev) return null
           return {
@@ -364,6 +377,7 @@ function ConvertPageContent() {
     })
     setCurrentTask(null)
     setProgress(0)
+    setProgressHint('')
 
     // 自动重新解析（使用相同的链接和解析器）
     if (videoUrl.trim() && selectedParser) {
@@ -408,6 +422,7 @@ function ConvertPageContent() {
 
     setIsConverting(true)
     setProgress(0)
+    setProgressHint('准备解析...')
 
     if (extractedUrl !== videoUrl.trim()) {
       console.log(`[直接上传] 从分享文本中提取到URL: ${extractedUrl}`)
@@ -439,6 +454,7 @@ function ConvertPageContent() {
       } : null)
 
       setProgress(50)
+      setProgressHint('解析完成，准备上传...')
       console.log(`[直接上传] 解析成功: ${parsedInfo.title}`)
 
       // 第二阶段：上传
@@ -449,10 +465,16 @@ function ConvertPageContent() {
         uploadResult: undefined
       } : null)
       setProgress(60)
+      setProgressHint('服务器处理中...')
 
       const filePath = await ConversionService.uploadParsedMedia(
         parsedInfo,
-        webdav
+        webdav,
+        undefined,
+        (p, hint) => {
+          setProgress(p)
+          setProgressHint(hint)
+        }
       )
 
       // 更新任务状态为成功
@@ -471,6 +493,7 @@ function ConvertPageContent() {
 
       setCurrentTask(finalTask)
       setProgress(100)
+      setProgressHint('上传成功')
 
       console.log('直接上传成功:', filePath)
 
@@ -493,6 +516,7 @@ function ConvertPageContent() {
       setTimeout(() => {
         setCurrentTask(null)
         setProgress(0)
+        setProgressHint('')
       }, 2000)
 
     } catch (error) {
@@ -516,6 +540,7 @@ function ConvertPageContent() {
     setVideoUrl('')
     setCurrentTask(null)
     setProgress(0)
+    setProgressHint('')
     setIsConverting(false)
     setPreviewState({
       isPreviewMode: false,
@@ -760,7 +785,7 @@ function ConvertPageContent() {
                   </div>
                   <div className="flex items-center gap-2">
                     {/* 进度条标签 */}
-                    {(isConverting || currentTask?.status === TaskStatus.PARSING) && (
+                    {(isConverting || currentTask?.status === TaskStatus.PARSING || currentTask?.status === TaskStatus.UPLOADING) && (
                       <Badge variant="outline" className="px-3 py-1.5 border-blue-300 bg-blue-50 dark:bg-blue-950/30">
                         <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
                         <span className="text-sm">{progress}%</span>
@@ -779,6 +804,11 @@ function ConvertPageContent() {
                 </div>
               </CardHeader>
               <CardContent className="flex-1 flex flex-col overflow-auto">
+                {progressHint && (
+                  <div className="mb-3 text-xs text-muted-foreground">
+                    {progressHint}
+                  </div>
+                )}
                 {/* 空状态提示 */}
                 {!currentTask && (
                   <div className="flex flex-col items-center justify-center flex-1 text-center">
@@ -807,6 +837,7 @@ function ConvertPageContent() {
                         onReset={resetForm}
                         currentTask={currentTask}
                         progress={progress}
+                        progressHint={progressHint}
                       />
                     )}
 
