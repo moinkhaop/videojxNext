@@ -514,6 +514,19 @@
           expiresAt: 0
         };
         renderAccount();
+
+        // After session refresh, best-effort pull cloud config so WebDAV/parsers stay in sync.
+        if (data.loggedIn) {
+          try {
+            const result = await send('CONFIG_SYNC_AUTO');
+            await loadState();
+            setNotice(result && result.message ? result.message : '已同步云端配置', 'success');
+            return;
+          } catch (error) {
+            // If cloud sync fails, still keep session status.
+          }
+        }
+
         setNotice(data.loggedIn ? '登录状态有效' : '当前未登录', data.loggedIn ? 'success' : '');
       } catch (error) {
         setNotice(error.message, 'error');
@@ -537,8 +550,18 @@
         const email = el.authEmail.value.trim();
         const password = el.authPassword.value;
         const result = await send('AUTH_LOGIN', { email, password });
+
+        // Best-effort auto sync config right after login so WebDAV/parsers appear immediately.
+        let syncMessage = '';
+        try {
+          const syncResult = await send('CONFIG_SYNC_AUTO');
+          syncMessage = syncResult && syncResult.message ? `（${syncResult.message}）` : '';
+        } catch (error) {
+          syncMessage = '';
+        }
+
         await loadState();
-        setNotice(`登录成功：${result.user && result.user.email ? result.user.email : '用户'}`, 'success');
+        setNotice(`登录成功：${result.user && result.user.email ? result.user.email : '用户'}${syncMessage}`, 'success');
       } catch (error) {
         setNotice(error.message, 'error');
       }
