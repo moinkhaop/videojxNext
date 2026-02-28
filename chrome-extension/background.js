@@ -693,7 +693,7 @@ async function tryParseViaActiveDouyinWebApi(awemeId) {
   return response.parsed;
 }
 
-async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath) {
+async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath, sourceUrl) {
   if (!parsedInfo || typeof parsedInfo !== 'object') {
     throw new Error('缺少解析数据');
   }
@@ -702,8 +702,11 @@ async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath) {
     throw new Error('缺少 WebDAV 配置');
   }
 
+  const resolvedSourceUrl = extractFirstUrl(sourceUrl || parsedInfo.sourceUrl || parsedInfo.share_url || '');
+
   const body = {
     videoUrl: parsedInfo.mediaType === 'video' ? parsedInfo.url : undefined,
+    sourceUrl: resolvedSourceUrl || undefined,
     images: parsedInfo.mediaType === 'image_album' ? parsedInfo.images : undefined,
     webdavConfig,
     fileName: inferFileName(parsedInfo),
@@ -811,7 +814,8 @@ async function directUpload(payload) {
     parsed = await parseVideo(parseUrl, selected.parser);
   }
 
-  const filePath = await uploadParsedMedia(parsed, selected.webdav);
+  const uploadSourceUrl = metaLong || metaShort || inputUrl || '';
+  const filePath = await uploadParsedMedia(parsed, selected.webdav, '', uploadSourceUrl);
 
   const history = await createHistoryRecord({
     type: 'single',
@@ -1083,7 +1087,13 @@ async function runUserBatchUpload(taskId, payload) {
         const title = video && video.title ? video.title : `视频_${index + 1}`;
 
         try {
-          const filePath = await uploadParsedMedia(video, selected.webdav, sanitizeName(parsedUser?.data?.userInfo?.nickname || '', 60));
+          const videoSourceUrl = extractFirstUrl(video.share_url || video.url || userUrl || '');
+          const filePath = await uploadParsedMedia(
+            video,
+            selected.webdav,
+            sanitizeName(parsedUser?.data?.userInfo?.nickname || '', 60),
+            videoSourceUrl
+          );
 
           const history = await createHistoryRecord({
             type: 'single',
