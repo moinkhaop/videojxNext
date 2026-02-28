@@ -144,13 +144,13 @@ function extractFirstUrl(text) {
 
   const longMatch = normalized.match(/(?:https?:\/\/)?(?:www\.)?(?:douyin\.com|iesdouyin\.com)\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i)
   if (longMatch && longMatch[0]) {
-    const candidate = longMatch[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/u, '')
+    const candidate = longMatch[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/, '')
     return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`
   }
 
   const generic = normalized.match(/https?:\/\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i)
   if (generic && generic[0]) {
-    return generic[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/u, '')
+    return generic[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/, '')
   }
 
   return ''

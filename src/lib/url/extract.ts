@@ -2,7 +2,7 @@ const HTTP_URL_PATTERN = /https?:\/\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i
 const DOUYIN_SHORT_LINK_PATTERN = /(?:https?:\/\/)?v\.douyin\.com\/([A-Za-z0-9_-]{4,})(?:\/)?/i
 const DOUYIN_LONG_LINK_PATTERN =
   /(?:https?:\/\/)?(?:www\.)?(?:douyin\.com|iesdouyin\.com)\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i
-const TRAILING_PUNCTUATION_PATTERN = /[),.;!?'"`，。！？；、）】》〉」』”’]+$/u
+const TRAILING_PUNCTUATION_PATTERN = /[),.;!?'"`，。！？；、）】》〉」』”’]+$/
 
 function normalizeShareText(text: string): string {
   return String(text || '')
