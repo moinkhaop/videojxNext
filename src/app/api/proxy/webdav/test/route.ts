@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVConfig } from '@/types'
 
+export const runtime = 'nodejs'
+
 function base64Encode(value: string): string {
   const source = String(value ?? '')
 

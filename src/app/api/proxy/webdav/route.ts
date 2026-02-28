@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVUploadResponse, ImageInfo, WebDAVConfig } from '@/types'
 
+// Force Node runtime: Edge environments on some platforms (EdgeOne) can return 545
+// ("Error return from script") for long-running streaming proxy requests.
+export const runtime = 'nodejs'
+
 const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
 const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 20000
 const DEFAULT_MAX_VIDEO_RETRIES = 3

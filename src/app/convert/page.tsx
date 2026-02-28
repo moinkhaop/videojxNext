@@ -308,7 +308,7 @@ function ConvertPageContent() {
             setProgress(p)
             setProgressHint(hint)
           },
-          currentTask?.videoUrl
+          currentTask?.videoUrl || videoUrl
         )
 
         // 更新任务状态为成功
