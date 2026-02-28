@@ -19,6 +19,7 @@ import { CleanupService } from './cleanup'
 import { FilenameSanitizer } from './filename-sanitizer'
 import { parserRouter } from './parser-router'
 import { apiCapabilityDetector } from './capability-detector'
+import { extractFirstUrlFromText } from './url/extract'
 
 export type BatchPoolStage = 'normal_batch' | 'douyin_upload'
 
@@ -683,26 +684,25 @@ export class ConversionService {
   
   // 处理短视频分享文本，提取真实URL
   private static extractRealUrl(input: string): string {
+    const source = String(input || '').trim()
+    if (!source) {
+      return ''
+    }
+
+    const extracted = extractFirstUrlFromText(source)
+    if (extracted) {
+      return extracted
+    }
+
     // 如果已经是有效URL，直接返回
     try {
-      new URL(input)
-      return input
+      new URL(source)
+      return source
     } catch {
       // 不是有效URL，尝试提取
     }
-    
-    // 处理抖音分享文本格式
-    // 例如: "7.97 DUL:/ 02/05 z@T.yg 不知道啊被季莹莹抽了之后就这样了# 永劫无间手游 # 季莹莹 # 胡桃 # cos # 猎奇  https://v.douyin.com/d689EsOAlug/ 复制此链接，打开Dou音搜索，直接观看视频！"
-    // 改进的URL正则表达式，能够更好地匹配各种分享文本中的URL
-    const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&=\/=]*))/g
-    const matches = input.match(urlRegex)
-    
-    if (matches && matches.length > 0) {
-      // 返回第一个匹配的URL并移除末尾斜杠
-      return matches[0].replace(/\/$/, '')
-    }
-    
-    return input
+
+    return source
   }
 
   // 上传媒体到WebDAV

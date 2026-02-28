@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MediaType, ParsedVideoInfo, VideoParseResponse } from '@/types'
+import { extractFirstUrlFromText } from '@/lib/url/extract'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -19,41 +20,57 @@ const DEFAULT_UPSTREAMS = [
 ]
 
 export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams
-  const input = pickFirstNonEmpty([
-    searchParams.get('url'),
-    searchParams.get('videoUrl'),
-    searchParams.get('text'),
-    searchParams.get('content')
-  ])
+  try {
+    const searchParams = request.nextUrl.searchParams
+    const input = pickFirstNonEmpty([
+      searchParams.get('url'),
+      searchParams.get('videoUrl'),
+      searchParams.get('text'),
+      searchParams.get('content')
+    ])
 
-  if (!input) {
-    return NextResponse.json({ success: false, error: '缺少 url 参数' }, { status: 400 })
+    if (!input) {
+      return NextResponse.json({ success: false, error: '缺少 url 参数' }, { status: 400 })
+    }
+
+    return await handleParse(input)
+  } catch (error) {
+    console.error('[douyin/parse] GET 顶层异常:', error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : '抖音解析服务异常' },
+      { status: 502 }
+    )
   }
-
-  return await handleParse(input)
 }
 
 export async function POST(request: NextRequest) {
-  let body: any = null
   try {
-    body = await request.json()
-  } catch {
-    body = null
+    let body: any = null
+    try {
+      body = await request.json()
+    } catch {
+      body = null
+    }
+
+    const input = pickFirstNonEmpty([
+      body?.url,
+      body?.videoUrl,
+      body?.text,
+      body?.content
+    ])
+
+    if (!input) {
+      return NextResponse.json({ success: false, error: '缺少 url 或 videoUrl 参数' }, { status: 400 })
+    }
+
+    return await handleParse(String(input))
+  } catch (error) {
+    console.error('[douyin/parse] POST 顶层异常:', error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : '抖音解析服务异常' },
+      { status: 502 }
+    )
   }
-
-  const input = pickFirstNonEmpty([
-    body?.url,
-    body?.videoUrl,
-    body?.text,
-    body?.content
-  ])
-
-  if (!input) {
-    return NextResponse.json({ success: false, error: '缺少 url 或 videoUrl 参数' }, { status: 400 })
-  }
-
-  return await handleParse(String(input))
 }
 
 async function handleParse(input: string) {
@@ -353,12 +370,6 @@ function adaptToParsedVideoInfo(rawResponse: any): ParsedVideoInfo {
     time: dataSource?.time ?? dataSource?.create_time ?? dataSource?.createTime,
     cover: pickFirstNonEmpty([dataSource?.cover, thumbnail]),
   }
-}
-
-function extractFirstUrlFromText(text: string): string {
-  const source = String(text || '')
-  const match = source.match(/https?:\/\/[^\s]+/i)
-  return match ? match[0].trim() : ''
 }
 
 function normalizeDouyinInputUrl(input: string): string {

@@ -829,6 +829,18 @@ function ConvertPageContent() {
                           <p className="text-xs break-all">
                             {decodeURIComponent(currentTask.uploadResult.filePath)}
                           </p>
+                          <div className="mt-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={resetForm}
+                              className="h-8 border-green-300 text-green-700 hover:bg-green-100 dark:border-green-800 dark:text-green-300 dark:hover:bg-green-900/40"
+                            >
+                              <X className="w-3 h-3 mr-1" />
+                              清空
+                            </Button>
+                          </div>
                         </AlertDescription>
                       </Alert>
                     )}

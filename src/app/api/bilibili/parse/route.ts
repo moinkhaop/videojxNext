@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MediaType, ParsedVideoInfo, VideoParseResponse } from '@/types'
+import { extractFirstUrlFromText } from '@/lib/url/extract'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -431,12 +432,6 @@ function inferFormat(url: string): string | undefined {
   return match[1]
 }
 
-function extractFirstUrlFromText(text: string): string {
-  const source = String(text || '')
-  const match = source.match(/https?:\/\/[^\s]+/i)
-  return match ? match[0].trim() : ''
-}
-
 function normalizeBilibiliInput(input: string): NormalizedBilibiliInput {
   const source = String(input || '').trim()
   if (!source) return { url: '', bvid: '', aid: '' }
@@ -676,4 +671,3 @@ function pickFirstNonEmpty(values: Array<unknown>): string {
   }
   return ''
 }
-

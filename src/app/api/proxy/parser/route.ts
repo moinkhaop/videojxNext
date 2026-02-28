@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { VideoParseResponse, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
+import { extractFirstUrlFromText } from '@/lib/url/extract'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+const INTERNAL_PARSER_ROUTE_LOADERS: Record<string, () => Promise<any>> = {
+  '/api/douyin/parse': () => import('@/app/api/douyin/parse/route'),
+  '/api/bilibili/parse': () => import('@/app/api/bilibili/parse/route'),
+}
 
 export async function POST(request: NextRequest) {
   let cleanedVideoUrl = ''
@@ -155,10 +161,21 @@ export async function POST(request: NextRequest) {
 
     let response: Response
     try {
-      response = await fetch(finalApiUrl, {
-        ...requestOptions,
-        signal: controller.signal
+      const internalResponse = await invokeInternalParserRouteIfSupported({
+        finalApiUrl,
+        requestUrl: request.url,
+        method,
+        body: requestBody
       })
+
+      if (internalResponse) {
+        response = internalResponse
+      } else {
+        response = await fetch(finalApiUrl, {
+          ...requestOptions,
+          signal: controller.signal
+        })
+      }
     } catch (fetchError) {
       clearTimeout(timeoutId)
       console.error('[API] 请求失败:', fetchError instanceof Error ? fetchError.message : String(fetchError))
@@ -420,6 +437,48 @@ export async function POST(request: NextRequest) {
   }
 }
 
+async function invokeInternalParserRouteIfSupported(args: {
+  finalApiUrl: string
+  requestUrl: string
+  method: 'GET' | 'POST'
+  body?: string
+}): Promise<Response | null> {
+  const { finalApiUrl, requestUrl, method, body } = args
+
+  let targetUrl: URL
+  let incomingUrl: URL
+  try {
+    targetUrl = new URL(finalApiUrl)
+    incomingUrl = new URL(requestUrl)
+  } catch {
+    return null
+  }
+
+  // Only intercept same-origin local parser endpoints.
+  if (targetUrl.origin !== incomingUrl.origin) {
+    return null
+  }
+
+  const loadRouteModule = INTERNAL_PARSER_ROUTE_LOADERS[targetUrl.pathname]
+  if (!loadRouteModule) {
+    return null
+  }
+
+  const routeModule = await loadRouteModule()
+  const handler = method === 'GET' ? routeModule?.GET : routeModule?.POST
+  if (typeof handler !== 'function') {
+    return null
+  }
+
+  const internalRequestInit: RequestInit = {
+    method,
+    headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+    body: method === 'POST' ? (body || '{}') : undefined,
+  }
+  const internalRequest = new NextRequest(new Request(targetUrl.toString(), internalRequestInit))
+  return await handler(internalRequest)
+}
+
 // 支持GET请求用于测试
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -484,12 +543,6 @@ export async function GET(request: NextRequest) {
 
   console.log('[API] 返回测试解析结果:', mockResult)
   return NextResponse.json(mockResult)
-}
-
-function extractFirstUrlFromText(text: string): string {
-  const source = String(text || '')
-  const match = source.match(/https?:\/\/[^\s]+/i)
-  return match ? match[0].trim() : ''
 }
 
 function isVideoParseResponseLike(payload: any): payload is VideoParseResponse {
@@ -788,11 +841,19 @@ async function tryFallbackParse(args: {
     : '/api/bilibili/parse'
 
   try {
-    const endpoint = new URL(fallbackPath, requestUrl).toString()
-    const response = await fetch(endpoint, {
+    const endpointUrl = new URL(fallbackPath, requestUrl)
+    const requestBody = JSON.stringify({ url: inputUrl, videoUrl: inputUrl })
+    const internalResponse = await invokeInternalParserRouteIfSupported({
+      finalApiUrl: endpointUrl.toString(),
+      requestUrl,
+      method: 'POST',
+      body: requestBody
+    })
+
+    const response = internalResponse ?? await fetch(endpointUrl.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: inputUrl, videoUrl: inputUrl })
+      body: requestBody
     })
 
     const raw = await response.text()

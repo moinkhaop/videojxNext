@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { PreviewParseResponse, VideoParserConfig, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
+import { extractFirstUrlFromText } from '@/lib/url/extract'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -389,12 +390,6 @@ export async function POST(request: NextRequest) {
       error: error instanceof Error ? error.message : '解析过程中发生未知错误'
     }, { status: 500 })
   }
-}
-
-function extractFirstUrlFromText(text: string): string {
-  const source = String(text || '')
-  const match = source.match(/https?:\/\/[^\s]+/i)
-  return match ? match[0].trim() : ''
 }
 
 function normalizeDouyinInputUrl(input: string): string {

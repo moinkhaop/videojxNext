@@ -151,8 +151,28 @@
   }
 
   function extractFirstUrl(text) {
-    const matched = String(text || '').match(/https?:\/\/[^\s]+/i);
-    return matched ? matched[0].trim().replace(/\/$/, '') : '';
+    const normalized = String(text || '')
+      .replace(/\u3000/g, ' ')
+      .replace(/：/g, ':')
+      .replace(/／/g, '/');
+
+    const short = normalized.match(/(?:https?:\/\/)?v\.douyin\.com\/([A-Za-z0-9_-]{4,})(?:\/)?/i);
+    if (short && short[1]) {
+      return `https://v.douyin.com/${short[1]}/`;
+    }
+
+    const douyin = normalized.match(/(?:https?:\/\/)?(?:www\.)?(?:douyin\.com|iesdouyin\.com)\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i);
+    if (douyin && douyin[0]) {
+      const candidate = douyin[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/u, '');
+      return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+    }
+
+    const generic = normalized.match(/https?:\/\/[A-Za-z0-9\-._~%!$&'()*+,;=:@/?#[\]]+/i);
+    if (generic && generic[0]) {
+      return generic[0].replace(/[),.;!?'"`，。！？；、）】》〉」』”’]+$/u, '');
+    }
+
+    return '';
   }
 
   function inferFileName(parsedInfo) {
