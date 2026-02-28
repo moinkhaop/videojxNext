@@ -60,6 +60,7 @@
     webdavPassword: document.getElementById('webdav-password'),
     webdavBasePath: document.getElementById('webdav-base-path'),
     btnWebdavSave: document.getElementById('btn-webdav-save'),
+    btnWebdavTest: document.getElementById('btn-webdav-test'),
     btnWebdavReset: document.getElementById('btn-webdav-reset'),
     webdavList: document.getElementById('webdav-list'),
 
@@ -632,13 +633,24 @@
   }
 
   function bindWebdavActions() {
+    const readWebdavForm = () => {
+      const name = sanitizeName(el.webdavName.value, 50);
+      let url = el.webdavUrl.value.trim();
+      const username = el.webdavUsername.value.trim();
+      const password = el.webdavPassword.value;
+      const basePath = el.webdavBasePath.value.trim();
+
+      if (url && !/^https?:\/\//i.test(url)) {
+        url = `https://${url}`;
+      }
+      url = url.replace(/\/$/, '');
+
+      return { name, url, username, password, basePath };
+    };
+
     el.btnWebdavSave.addEventListener('click', async () => {
       try {
-        const name = sanitizeName(el.webdavName.value, 50);
-        const url = el.webdavUrl.value.trim();
-        const username = el.webdavUsername.value.trim();
-        const password = el.webdavPassword.value;
-        const basePath = el.webdavBasePath.value.trim();
+        const { name, url, username, password, basePath } = readWebdavForm();
 
         if (!name || !url) {
           throw new Error('请填写 WebDAV 名称和地址');
@@ -678,6 +690,30 @@
         setNotice(error.message, 'error');
       }
     });
+
+    if (el.btnWebdavTest) {
+      el.btnWebdavTest.addEventListener('click', async () => {
+        try {
+          const { url, username, password, basePath } = readWebdavForm();
+          if (!url || !username || !password) {
+            throw new Error('请先填写地址、用户名、密码再测试');
+          }
+
+          setNotice('正在测试 WebDAV 连接...', '');
+          await send('WEBDAV_TEST', {
+            webdavConfig: {
+              url,
+              username,
+              password,
+              basePath
+            }
+          });
+          setNotice('WebDAV 连接测试成功', 'success');
+        } catch (error) {
+          setNotice(error.message, 'error');
+        }
+      });
+    }
 
     el.btnWebdavReset.addEventListener('click', resetWebdavForm);
   }

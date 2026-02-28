@@ -19,6 +19,50 @@ function toErrorMessage(error) {
   return String(error || '未知错误');
 }
 
+function isLikelyUpstreamParserUrl(value) {
+  if (!value) return false;
+  try {
+    const u = new URL(String(value));
+    const host = (u.hostname || '').toLowerCase();
+    if (host.endsWith('jxcxin.cn')) return true;
+    if (host === 'api.oick.cn' || host.endsWith('.oick.cn')) return true;
+    if (host.endsWith('pearktrue.cn')) return true;
+    if (host.endsWith('yujn.cn')) return true;
+    if (host.endsWith('xzdx.top')) return true;
+    if (host.endsWith('douyin.wtf')) return true;
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isLikelyDouyinUrl(value) {
+  return /douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(String(value || ''));
+}
+
+async function refreshDouyinDirectVideoUrl(sourceUrl) {
+  const input = extractFirstUrl(sourceUrl || '');
+  if (!input) {
+    throw new Error('缺少抖音链接，无法刷新直链');
+  }
+
+  const response = await apiRequest('/api/douyin/parse', {
+    method: 'POST',
+    body: {
+      url: input,
+      videoUrl: input,
+      text: input
+    }
+  });
+
+  const parsed = response && response.data ? response.data : null;
+  const url = parsed && parsed.mediaType === 'video' ? String(parsed.url || '') : '';
+  if (!url) {
+    throw new Error('刷新直链失败：未返回有效视频地址');
+  }
+  return { parsed, url };
+}
+
 function storageGet(key) {
   return new Promise((resolve, reject) => {
     chrome.storage.local.get([key], (result) => {
@@ -704,12 +748,36 @@ async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath, sourceUrl
 
   const resolvedSourceUrl = extractFirstUrl(sourceUrl || parsedInfo.sourceUrl || parsedInfo.share_url || '');
 
+  // If upstream parser returns its own API endpoint as "url", try to refresh via builtin parser to get a direct CDN link.
+  let effectiveParsedInfo = parsedInfo;
+  if (
+    effectiveParsedInfo.mediaType === 'video' &&
+    typeof effectiveParsedInfo.url === 'string' &&
+    isLikelyUpstreamParserUrl(effectiveParsedInfo.url) &&
+    resolvedSourceUrl &&
+    isLikelyDouyinUrl(resolvedSourceUrl)
+  ) {
+    try {
+      const refreshed = await refreshDouyinDirectVideoUrl(resolvedSourceUrl);
+      if (refreshed && refreshed.parsed) {
+        effectiveParsedInfo = {
+          ...effectiveParsedInfo,
+          url: refreshed.url,
+          // prefer refreshed format if any
+          format: refreshed.parsed.format || effectiveParsedInfo.format
+        };
+      }
+    } catch (error) {
+      // Best effort: still continue with original parsed url (server may handle it with sourceUrl fallback).
+    }
+  }
+
   const body = {
-    videoUrl: parsedInfo.mediaType === 'video' ? parsedInfo.url : undefined,
+    videoUrl: effectiveParsedInfo.mediaType === 'video' ? effectiveParsedInfo.url : undefined,
     sourceUrl: resolvedSourceUrl || undefined,
-    images: parsedInfo.mediaType === 'image_album' ? parsedInfo.images : undefined,
+    images: effectiveParsedInfo.mediaType === 'image_album' ? effectiveParsedInfo.images : undefined,
     webdavConfig,
-    fileName: inferFileName(parsedInfo),
+    fileName: inferFileName(effectiveParsedInfo),
     folderPath: folderPath || ''
   };
 
@@ -1413,6 +1481,25 @@ const handlers = {
 
   async VIDEO_DIRECT_UPLOAD(payload) {
     return directUpload(payload || {});
+  },
+
+  async WEBDAV_TEST(payload) {
+    const config = payload && payload.webdavConfig ? payload.webdavConfig : null;
+    if (!config || !config.url || !config.username || !config.password) {
+      throw new Error('缺少 WebDAV 配置（需要地址/用户名/密码）');
+    }
+    await apiRequest('/api/proxy/webdav/test', {
+      method: 'POST',
+      body: {
+        webdavConfig: {
+          url: String(config.url || ''),
+          username: String(config.username || ''),
+          password: String(config.password || ''),
+          basePath: String(config.basePath || '')
+        }
+      }
+    });
+    return { success: true };
   },
 
   async BATCH_START(payload) {
