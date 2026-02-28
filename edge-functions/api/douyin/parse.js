@@ -8,9 +8,20 @@ const DEFAULT_UPSTREAMS = [
   'pearktrue|https://api.pearktrue.cn/api/video/douyin/?url={url}',
 ]
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age': '86400',
+}
+
 export default async function onRequest(context) {
   try {
     const request = context.request
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
 
     if (!['GET', 'POST'].includes(request.method)) {
       return json({ success: false, error: '仅支持 GET/POST 请求' }, 405)
@@ -658,7 +669,8 @@ function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
-      'Content-Type': 'application/json; charset=utf-8'
+      'Content-Type': 'application/json; charset=utf-8',
+      ...CORS_HEADERS
     }
   })
 }

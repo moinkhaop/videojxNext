@@ -875,10 +875,31 @@ async function uploadParsedMedia(parsedInfo, webdavConfig, folderPath, sourceUrl
     folderPath: folderPath || ''
   };
 
-  const response = await apiRequest('/api/extension/upload', {
-    method: 'POST',
-    body
-  });
+  let response = null;
+  let lastError = null;
+
+  // Prefer direct call to the same endpoint the web app uses (fewer hops, fewer platform-specific failure points).
+  try {
+    response = await apiRequest('/api/proxy/webdav', {
+      method: 'POST',
+      body
+    });
+  } catch (error) {
+    lastError = error;
+    response = null;
+  }
+
+  // Fallback to the extension wrapper (adds CORS + can keep working even if the edge-function
+  // doesn't include CORS headers or has route mapping issues).
+  if (!response) {
+    response = await apiRequest('/api/extension/upload', {
+      method: 'POST',
+      body
+    }).catch((error) => {
+      // Prefer the more actionable error message if the direct call failed with something descriptive.
+      throw lastError instanceof Error ? lastError : error;
+    });
+  }
 
   if (!response || !response.success || !response.filePath) {
     throw new Error(response && response.error ? response.error : '上传失败');

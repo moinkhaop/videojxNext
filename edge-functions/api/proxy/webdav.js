@@ -3,9 +3,20 @@ const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 60000
 const DEFAULT_MAX_VIDEO_RETRIES = 3
 const DEFAULT_MAX_BUFFER_BYTES = 80 * 1024 * 1024 // 80MB safety cap to avoid crashing edge runtime
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age': '86400',
+}
+
 export default async function onRequest(context) {
   try {
     const request = context.request
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
 
     if (request.method !== 'POST') {
       return json({ success: false, error: '仅支持 POST 请求' }, 405)
@@ -472,7 +483,8 @@ function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
-      'Content-Type': 'application/json; charset=utf-8'
+      'Content-Type': 'application/json; charset=utf-8',
+      ...CORS_HEADERS
     }
   })
 }
