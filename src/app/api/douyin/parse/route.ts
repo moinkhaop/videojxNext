@@ -522,12 +522,26 @@ function detectVideoUrl(dataSource: any): string {
     getByPath(dataSource, 'video.play_addr_h264.url_list.0'),
     getByPath(dataSource, 'video.bit_rate.0.play_addr.url_list.0'),
     getByPath(dataSource, 'video_info.url'),
+    // NOTE: some upstreams put their own API endpoint into `url`. Keep it as last fallback.
     dataSource?.url,
   ]
 
-  const firstDirect = pickFirstHttpUrl(directCandidates)
-  if (firstDirect) {
-    return firstDirect
+  const urls: string[] = []
+  for (const item of directCandidates) {
+    if (typeof item === 'string' && /^https?:\/\//i.test(item)) {
+      urls.push(item)
+    }
+  }
+
+  // Prefer real media/CDN links over upstream parser endpoints (which may expire or block server fetches).
+  for (const url of urls) {
+    if (!isLikelyUpstreamParserUrl(url)) {
+      return url
+    }
+  }
+
+  if (urls.length > 0) {
+    return urls[0]
   }
 
   return deepFindHttpUrl(dataSource)
@@ -552,6 +566,24 @@ function pickFirstHttpUrl(values: any[]): string {
     }
   }
   return ''
+}
+
+function isLikelyUpstreamParserUrl(value: string): boolean {
+  if (!value) return false
+  try {
+    const u = new URL(value)
+    const host = u.hostname.toLowerCase()
+    // Known third-party parser domains commonly used by this project.
+    if (host.endsWith('jxcxin.cn')) return true
+    if (host === 'api.oick.cn' || host.endsWith('.oick.cn')) return true
+    if (host.endsWith('pearktrue.cn')) return true
+    if (host.endsWith('yujn.cn')) return true
+    if (host.endsWith('xzdx.top')) return true
+    if (host.endsWith('douyin.wtf')) return true
+    return false
+  } catch {
+    return false
+  }
 }
 
 function deepFindHttpUrl(node: any, depth = 0, visited = new Set<any>()): string {

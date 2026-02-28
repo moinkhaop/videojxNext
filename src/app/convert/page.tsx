@@ -93,6 +93,10 @@ function ConvertPageContent() {
     // 监听页面可见性变化
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        if (isConverting) {
+          console.log('[单视频转换] 页面重新可见，但正在处理任务，跳过刷新配置')
+          return
+        }
         console.log('[单视频转换] 页面重新可见，刷新配置')
         loadConfiguration()
       }
@@ -104,7 +108,7 @@ function ConvertPageContent() {
       window.removeEventListener('parsers-config-updated', handleConfigUpdate)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [])
+  }, [isConverting])
 
   // {{ AURA: Add - 处理URL参数自动填充 }}
   const searchParams = useSearchParams()
