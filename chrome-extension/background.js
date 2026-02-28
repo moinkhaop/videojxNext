@@ -191,15 +191,32 @@ async function ensureInitialized() {
     const requiredBuiltins = (DEFAULT_STATE.parsers || []).filter((p) => p && p.isBuiltin);
     for (const builtin of requiredBuiltins) {
       if (!builtin || !builtin.id) continue;
-      const exists = (state.parsers || []).some((item) => item && item.id === builtin.id);
-      if (!exists) {
+      const index = (state.parsers || []).findIndex((item) => item && item.id === builtin.id);
+      if (index === -1) {
         state.parsers.unshift(clone(builtin));
+        continue;
       }
+
+      // Patch builtin definitions on upgrade (apiUrl/isDefault/name can change). Keep user toggles like disabled.
+      const existing = state.parsers[index] || {};
+      const disabled = Boolean(existing.disabled);
+      state.parsers[index] = {
+        ...clone(builtin),
+        disabled
+      };
     }
 
     if (!state.defaults.parserId || !state.parsers.some((item) => item.id === state.defaults.parserId && !item.disabled)) {
       const defaultParser = state.parsers.find((item) => item.isDefault && !item.disabled) || state.parsers[0];
       state.defaults.parserId = defaultParser ? defaultParser.id : '';
+    }
+
+    // Migration: prefer stable builtin parser over third-party defaults.
+    if (
+      state.defaults.parserId === 'builtin_parser_jxcxin' &&
+      state.parsers.some((item) => item && item.id === 'builtin_parser_next_douyin' && !item.disabled)
+    ) {
+      state.defaults.parserId = 'builtin_parser_next_douyin';
     }
 
     if (!Array.isArray(state.webdavServers)) {
@@ -501,6 +518,7 @@ async function syncConfigAuto() {
   }
 
   const localUpdatedAt = Math.max(0, Number(state.settings && state.settings.configUpdatedAt ? state.settings.configUpdatedAt : 0));
+  const localSnapshot = pickExtensionConfigSnapshot(state);
 
   const remote = await apiRequest('/api/extension/config', {
     method: 'GET',
@@ -512,7 +530,7 @@ async function syncConfigAuto() {
 
   if (!remoteUpdatedAt) {
     const nextUpdatedAt = localUpdatedAt || Date.now();
-    const snapshot = pickExtensionConfigSnapshot(state);
+    const snapshot = localSnapshot;
 
     await apiRequest('/api/extension/config', {
       method: 'POST',
@@ -528,13 +546,37 @@ async function syncConfigAuto() {
     return { mode: 'push', updatedAt: nextUpdatedAt, remoteUpdatedAt, message: '云端暂无配置，已上传本机配置。' };
   }
 
+  // Heuristic: if remote has WebDAV configs but local is empty, prefer pulling remote even when
+  // localUpdatedAt looks newer (e.g. user changed any local setting before login, which bumps
+  // configUpdatedAt and would otherwise overwrite remote WebDAV list).
+  const localWebdavCount = Array.isArray(localSnapshot.webdavServers) ? localSnapshot.webdavServers.length : 0;
+  const remoteWebdavCount = remoteConfig && typeof remoteConfig === 'object' && Array.isArray(remoteConfig.webdavServers)
+    ? remoteConfig.webdavServers.length
+    : 0;
+  const remoteDefaultWebdavId = remoteConfig && typeof remoteConfig === 'object' && remoteConfig.defaults && typeof remoteConfig.defaults === 'object'
+    ? String(remoteConfig.defaults.webdavId || '')
+    : '';
+  const localDefaultWebdavId = localSnapshot.defaults && typeof localSnapshot.defaults === 'object'
+    ? String(localSnapshot.defaults.webdavId || '')
+    : '';
+
+  if (remoteWebdavCount > 0 && localWebdavCount === 0) {
+    await applyCloudConfig(remoteConfig, remoteUpdatedAt);
+    return { mode: 'pull', updatedAt: remoteUpdatedAt, remoteUpdatedAt, message: '已拉取云端 WebDAV 配置并覆盖本机配置。' };
+  }
+
+  if (remoteDefaultWebdavId && !localDefaultWebdavId) {
+    await applyCloudConfig(remoteConfig, remoteUpdatedAt);
+    return { mode: 'pull', updatedAt: remoteUpdatedAt, remoteUpdatedAt, message: '已拉取云端默认 WebDAV 配置并覆盖本机配置。' };
+  }
+
   if (remoteUpdatedAt > localUpdatedAt) {
     await applyCloudConfig(remoteConfig, remoteUpdatedAt);
     return { mode: 'pull', updatedAt: remoteUpdatedAt, remoteUpdatedAt, message: '已拉取云端配置并覆盖本机配置。' };
   }
 
   if (localUpdatedAt > remoteUpdatedAt) {
-    const snapshot = pickExtensionConfigSnapshot(state);
+    const snapshot = localSnapshot;
     await apiRequest('/api/extension/config', {
       method: 'POST',
       useAuth: true,
@@ -682,6 +724,58 @@ async function parseVideo(videoUrl, parserConfig) {
 
   if (!parserConfig) {
     throw new Error('缺少解析器配置');
+  }
+
+  const apiUrl = String(parserConfig.apiUrl || '').trim();
+  const urlParamName = String(parserConfig.urlParamName || 'url').trim() || 'url';
+
+  // If parser points to a local API route, call it directly to avoid the extra proxy hop
+  // (which is more likely to trigger EdgeOne 500/545 in practice).
+  if (/^\/api\//.test(apiUrl)) {
+    const configuredMethod = String(parserConfig.requestMethod || '').toUpperCase();
+    const method = configuredMethod === 'GET' ? 'GET' : 'POST';
+
+    if (method === 'GET') {
+      const query = new URLSearchParams();
+      const customQueryParams = parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
+        ? parserConfig.customQueryParams
+        : null;
+
+      if (customQueryParams) {
+        Object.entries(customQueryParams).forEach(([key, value]) => {
+          if (!key) return;
+          if (value === undefined || value === null) return;
+          query.set(String(key), String(value));
+        });
+      }
+
+      query.set(urlParamName, videoUrl);
+      const joiner = apiUrl.includes('?') ? '&' : '?';
+      const response = await apiRequest(`${apiUrl}${joiner}${query.toString()}`, {
+        method: 'GET'
+      });
+
+      if (!response || !response.data) {
+        throw new Error('解析结果为空');
+      }
+      return response.data;
+    }
+
+    const body = {
+      ...(parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object' ? parserConfig.customBodyParams : {}),
+      [urlParamName]: videoUrl
+    };
+
+    const response = await apiRequest(apiUrl, {
+      method: 'POST',
+      body
+    });
+
+    if (!response || !response.data) {
+      throw new Error('解析结果为空');
+    }
+
+    return response.data;
   }
 
   const response = await apiRequest('/api/extension/parse', {

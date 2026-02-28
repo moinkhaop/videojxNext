@@ -1,6 +1,7 @@
 const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
-const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 20000
+const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 60000
 const DEFAULT_MAX_VIDEO_RETRIES = 3
+const DEFAULT_MAX_BUFFER_BYTES = 80 * 1024 * 1024 // 80MB safety cap to avoid crashing edge runtime
 
 export default async function onRequest(context) {
   try {
@@ -59,8 +60,9 @@ export default async function onRequest(context) {
     }
 
     // Video: download then upload to WebDAV.
-    const timeoutMs = clampInt(getEnvInt(context.env, 'WEBDAV_VIDEO_DOWNLOAD_TIMEOUT_MS', DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS), 5000, 120000)
+    const timeoutMs = clampInt(getEnvInt(context.env, 'WEBDAV_VIDEO_DOWNLOAD_TIMEOUT_MS', DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS), 5000, 180000)
     const maxRetries = clampInt(getEnvInt(context.env, 'WEBDAV_VIDEO_MAX_RETRIES', DEFAULT_MAX_VIDEO_RETRIES), 1, 8)
+    const maxBufferBytes = clampInt(getEnvInt(context.env, 'WEBDAV_MAX_BUFFER_BYTES', DEFAULT_MAX_BUFFER_BYTES), 5 * 1024 * 1024, 200 * 1024 * 1024)
 
     const uploadUrl = buildWebDAVPath(webdavConfig, folderPath, fileName, { asFolder: false })
     const dirUrl = getWebDAVDirUrl(uploadUrl)
@@ -77,16 +79,16 @@ export default async function onRequest(context) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const downloadHeaders = buildDouyinHeaders('video', attempt)
-        const payload = await downloadAsArrayBuffer(downloadUrl, downloadHeaders, timeoutMs)
+        const payload = await downloadForUpload(downloadUrl, downloadHeaders, timeoutMs, maxBufferBytes)
 
         const uploadResp = await fetch(uploadUrl, {
           method: 'PUT',
           headers: {
             'Authorization': `Basic ${auth}`,
             'Content-Type': payload.contentType || 'application/octet-stream',
-            'Content-Length': String(payload.buffer.byteLength)
+            ...(payload.contentLength ? { 'Content-Length': payload.contentLength } : {})
           },
-          body: payload.buffer
+          body: payload.body
         })
 
         if (uploadResp.ok) {
@@ -207,20 +209,20 @@ function buildDouyinHeaders(kind, attempt = 1) {
 
 async function uploadBinaryToWebDAV(args) {
   const { sourceUrl, destUrl, auth, downloadHeaders, timeoutMs } = args
-  const payload = await downloadAsArrayBuffer(sourceUrl, downloadHeaders, timeoutMs)
+  const payload = await downloadForUpload(sourceUrl, downloadHeaders, timeoutMs, 15 * 1024 * 1024)
   const resp = await fetch(destUrl, {
     method: 'PUT',
     headers: {
       'Authorization': `Basic ${auth}`,
       'Content-Type': payload.contentType || 'application/octet-stream',
-      'Content-Length': String(payload.buffer.byteLength)
+      ...(payload.contentLength ? { 'Content-Length': payload.contentLength } : {})
     },
-    body: payload.buffer
+    body: payload.body
   })
   return resp.ok
 }
 
-async function downloadAsArrayBuffer(url, headers, timeoutMs) {
+async function downloadForUpload(url, headers, timeoutMs, maxBufferBytes) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -236,10 +238,29 @@ async function downloadAsArrayBuffer(url, headers, timeoutMs) {
       err.statusText = resp.statusText
       throw err
     }
+
+    const contentType = resp.headers.get('content-type') || 'application/octet-stream'
+    const contentLengthHeader = resp.headers.get('content-length')
+    const contentLength = contentLengthHeader && /^[0-9]{1,20}$/.test(contentLengthHeader) ? contentLengthHeader : ''
+
+    // Prefer streaming transfer to avoid buffering the whole video in edge runtime (545 risk).
+    if (resp.body) {
+      return {
+        body: resp.body,
+        contentType,
+        contentLength: contentLength || null
+      }
+    }
+
+    // Fallback: buffer in memory (only when body streaming isn't available).
     const buf = await resp.arrayBuffer()
+    if (maxBufferBytes > 0 && buf.byteLength > maxBufferBytes) {
+      throw new Error(`文件过大(${Math.round(buf.byteLength / 1024 / 1024)}MB)，请改用更小的视频或提升服务端限制`)
+    }
     return {
-      buffer: buf,
-      contentType: resp.headers.get('content-type') || 'application/octet-stream'
+      body: buf,
+      contentType,
+      contentLength: String(buf.byteLength)
     }
   } finally {
     clearTimeout(timer)
@@ -455,4 +476,3 @@ function json(payload, status = 200) {
     }
   })
 }
-

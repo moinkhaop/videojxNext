@@ -28,7 +28,7 @@
         apiUrl: '/api/douyin/parse',
         requestMethod: 'POST',
         urlParamName: 'url',
-        isDefault: false,
+        isDefault: true,
         isBuiltin: true,
         disabled: false
       },
@@ -38,7 +38,7 @@
         apiUrl: 'https://apis.jxcxin.cn/api/douyin',
         requestMethod: 'GET',
         urlParamName: 'url',
-        isDefault: true,
+        isDefault: false,
         isBuiltin: true,
         disabled: false
       },
@@ -105,7 +105,8 @@
     ],
     webdavServers: [],
     defaults: {
-      parserId: 'builtin_parser_jxcxin',
+      // Prefer stable builtin parser (server-side multi-upstream) over third-party nodes.
+      parserId: 'builtin_parser_next_douyin',
       webdavId: ''
     },
     auth: {
