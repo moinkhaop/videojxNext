@@ -999,15 +999,19 @@ export class ConversionService {
         console.log(`[转存] 提取到URL: ${extractedUrl}`)
         console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
 
-        const response = await fetch('/api/proxy/parser', {
+        const apiUrl = String(parserConfig.apiUrl || '').trim()
+        const isLocalParserEndpoint = /^\/api\//i.test(apiUrl)
+        const endpoint = isLocalParserEndpoint ? apiUrl : '/api/proxy/parser'
+        const payload = isLocalParserEndpoint
+          ? { url: extractedUrl, videoUrl: extractedUrl, text: videoUrl }
+          : { videoUrl: extractedUrl, parserConfig }
+
+        let response = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            videoUrl: extractedUrl,
-            parserConfig
-          })
+          body: JSON.stringify(payload)
         })
 
         const responseText = await response.text()
@@ -1024,45 +1028,10 @@ export class ConversionService {
             : `解析接口调用失败 (HTTP ${response.status})`)
         }
 
-        let result: VideoParseResponse
-        try {
-          result = JSON.parse(responseText)
-        } catch (parseError) {
-          console.error('[转存] 无法解析解析API响应JSON:', parseError)
-          const snippet = responseText.substring(0, 300)
-          throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
-        }
-
-        if (!result.success) {
-          throw new Error(result.error || '视频解析失败')
-        }
-
-        if (!result.data) {
-          throw new Error('API返回的数据为空')
-        }
-
-        if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
-          throw new Error('视频解析成功但未返回有效的视频URL')
-        }
-
-        if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
-          try {
-            new URL(result.data.url)
-          } catch {
-            throw new Error(`返回的URL无效: ${result.data.url}`)
-          }
-        }
-
-        if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
-          if (!result.data.images || result.data.images.length === 0) {
-            throw new Error('图集解析成功但没有找到任何图片')
-          }
-          console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
-        }
-
-        this.setParseCache(cacheKey, result.data)
-        console.log(`[转存] 解析成功，获取到${result.data.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${result.data.title}`)
-        return this.cloneParsedInfo(result.data)
+        const parsedInfo = this.handleParseResponseText(responseText)
+        this.setParseCache(cacheKey, parsedInfo)
+        console.log(`[转存] 解析成功，获取到${parsedInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${parsedInfo.title}`)
+        return this.cloneParsedInfo(parsedInfo)
       } catch (error) {
         console.error('[转存] 视频解析错误:', error)
         throw error
@@ -1076,6 +1045,46 @@ export class ConversionService {
     } finally {
       this.parseInFlight.delete(cacheKey)
     }
+  }
+
+  private static handleParseResponseText(responseText: string): ParsedVideoInfo {
+    let result: VideoParseResponse
+    try {
+      result = JSON.parse(responseText)
+    } catch (parseError) {
+      console.error('[转存] 无法解析解析API响应JSON:', parseError)
+      const snippet = responseText.substring(0, 300)
+      throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
+    }
+
+    if (!result.success) {
+      throw new Error(result.error || '视频解析失败')
+    }
+
+    if (!result.data) {
+      throw new Error('API返回的数据为空')
+    }
+
+    if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
+      throw new Error('视频解析成功但未返回有效的视频URL')
+    }
+
+    if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
+      try {
+        new URL(result.data.url)
+      } catch {
+        throw new Error(`返回的URL无效: ${result.data.url}`)
+      }
+    }
+
+    if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
+      if (!result.data.images || result.data.images.length === 0) {
+        throw new Error('图集解析成功但没有找到任何图片')
+      }
+      console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
+    }
+
+    return result.data
   }
 
   // 生成文件名
