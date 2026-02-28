@@ -5,6 +5,35 @@ const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
 const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 20000
 const DEFAULT_MAX_VIDEO_RETRIES = 3
 
+function base64Encode(value: string): string {
+  const source = String(value ?? '')
+
+  // Edge runtime: prefer btoa + TextEncoder.
+  if (typeof btoa === 'function' && typeof TextEncoder !== 'undefined') {
+    const bytes = new TextEncoder().encode(source)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode(...Array.from(chunk))
+    }
+    return btoa(binary)
+  }
+
+  // Node runtime fallback (should not run on EdgeOne scripts).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const maybeBuffer: any = (globalThis as any).Buffer
+  if (maybeBuffer && typeof maybeBuffer.from === 'function') {
+    return maybeBuffer.from(source).toString('base64')
+  }
+
+  throw new Error('无法生成Basic认证信息：运行环境缺少 base64 编码能力')
+}
+
+function buildBasicAuth(webdavConfig: WebDAVConfig): string {
+  return base64Encode(`${webdavConfig.username}:${webdavConfig.password}`)
+}
+
 const IMAGE_UPLOAD_CONCURRENCY = (() => {
   const fromEnv = Number(process.env.WEBDAV_IMAGE_UPLOAD_CONCURRENCY ?? String(DEFAULT_IMAGE_UPLOAD_CONCURRENCY))
   if (!Number.isFinite(fromEnv)) return DEFAULT_IMAGE_UPLOAD_CONCURRENCY
@@ -180,7 +209,9 @@ async function uploadImageFile(imageUrl: string, uploadPath: string, auth: strin
     // 下载图片
     const imageResponse = await fetch(imageUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.douyin.com/',
+        'Origin': 'https://www.douyin.com'
       }
     })
 
@@ -248,7 +279,7 @@ export async function POST(request: NextRequest) {
       const albumFolderPath = buildWebDAVPath(webdavConfig, folderPath, fileName)
       
       // 构建认证头
-      const auth = btoa(`${webdavConfig.username}:${webdavConfig.password}`)
+      const auth = buildBasicAuth(webdavConfig)
       
       // 创建文件夹
       const folderCreated = await createWebDAVFolder(albumFolderPath, auth)
@@ -319,20 +350,19 @@ export async function POST(request: NextRequest) {
           'Accept': 'video/*,*/*;q=0.9',
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
           'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
+          'Pragma': 'no-cache',
+          // Douyin/Bytedance CDN often requires a plausible site context.
+          'Referer': 'https://www.douyin.com/',
+          'Origin': 'https://www.douyin.com'
         };
-        
-        // 如果不是第一次尝试，添加Referer头
+
         if (attempt > 1) {
-          try {
-            headers['Referer'] = new URL(videoUrl).origin;
-          } catch (e) {
-            // URL解析失败，忽略Referer头
-          }
+          headers['Range'] = 'bytes=0-'
         }
         
         const videoResponse = await fetch(videoUrl, {
           headers,
+          redirect: 'follow',
           signal: controller.signal
         });
         
@@ -371,19 +401,33 @@ export async function POST(request: NextRequest) {
           }, { status: videoResponse.status })
         }
 
-        const videoBuffer = await videoResponse.arrayBuffer()
-        console.log(`[WebDAV] 视频文件大小: ${videoBuffer.byteLength} bytes`)
+        const contentLengthHeader = videoResponse.headers.get('content-length')
+        const contentTypeHeader = videoResponse.headers.get('content-type') || 'application/octet-stream'
+        const streamBody = videoResponse.body
+
+        let uploadBody: BodyInit
+        let contentLength: string | null = contentLengthHeader
+        if (streamBody) {
+          uploadBody = streamBody
+        } else {
+          const videoBuffer = await videoResponse.arrayBuffer()
+          console.log(`[WebDAV] 视频文件大小: ${videoBuffer.byteLength} bytes`)
+          uploadBody = videoBuffer
+          contentLength = String(videoBuffer.byteLength)
+        }
 
         // 构建WebDAV上传路径
         const uploadPath = buildWebDAVPath(webdavConfig, folderPath, fileName)
         console.log(`[WebDAV] 完整上传路径: ${uploadPath}`)
 
         // 构建认证头
-        const auth = Buffer.from(`${webdavConfig.username}:${webdavConfig.password}`).toString('base64')
-        const uploadHeaders = {
+        const auth = buildBasicAuth(webdavConfig)
+        const uploadHeaders: Record<string, string> = {
           'Authorization': `Basic ${auth}`,
-          'Content-Type': 'application/octet-stream',
-          'Content-Length': videoBuffer.byteLength.toString()
+          'Content-Type': contentTypeHeader,
+        }
+        if (contentLength) {
+          uploadHeaders['Content-Length'] = contentLength
         }
         console.log(`[WebDAV] 认证信息: 用户名=${webdavConfig.username}, 密码长度=${webdavConfig.password.length}`)
 
@@ -391,7 +435,7 @@ export async function POST(request: NextRequest) {
         const uploadResponse = await fetch(uploadPath, {
           method: 'PUT',
           headers: uploadHeaders,
-          body: videoBuffer
+          body: uploadBody
         })
 
         if (!uploadResponse.ok) {
@@ -597,7 +641,7 @@ export async function GET(request: NextRequest) {
     console.log(`[WebDAV] 测试连接到: ${decodedUrl}`)
     
     // 测试WebDAV连接
-    const auth = Buffer.from(`${decodedUsername}:${decodedPassword}`).toString('base64')
+    const auth = base64Encode(`${decodedUsername}:${decodedPassword}`)
     const testResponse = await fetch(decodedUrl, {
       method: 'PROPFIND',
       headers: {
