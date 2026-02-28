@@ -5,11 +5,6 @@ import { extractFirstUrlFromText } from '@/lib/url/extract'
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-const INTERNAL_PARSER_ROUTE_LOADERS: Record<string, () => Promise<any>> = {
-  '/api/douyin/parse': () => import('@/app/api/douyin/parse/route'),
-  '/api/bilibili/parse': () => import('@/app/api/bilibili/parse/route'),
-}
-
 export async function POST(request: NextRequest) {
   let cleanedVideoUrl = ''
   let extractedUrl = ''
@@ -161,21 +156,10 @@ export async function POST(request: NextRequest) {
 
     let response: Response
     try {
-      const internalResponse = await invokeInternalParserRouteIfSupported({
-        finalApiUrl,
-        requestUrl: request.url,
-        method,
-        body: requestBody
+      response = await fetch(finalApiUrl, {
+        ...requestOptions,
+        signal: controller.signal
       })
-
-      if (internalResponse) {
-        response = internalResponse
-      } else {
-        response = await fetch(finalApiUrl, {
-          ...requestOptions,
-          signal: controller.signal
-        })
-      }
     } catch (fetchError) {
       clearTimeout(timeoutId)
       console.error('[API] 请求失败:', fetchError instanceof Error ? fetchError.message : String(fetchError))
@@ -435,48 +419,6 @@ export async function POST(request: NextRequest) {
       }
     }, { status: 502 })
   }
-}
-
-async function invokeInternalParserRouteIfSupported(args: {
-  finalApiUrl: string
-  requestUrl: string
-  method: 'GET' | 'POST'
-  body?: string
-}): Promise<Response | null> {
-  const { finalApiUrl, requestUrl, method, body } = args
-
-  let targetUrl: URL
-  let incomingUrl: URL
-  try {
-    targetUrl = new URL(finalApiUrl)
-    incomingUrl = new URL(requestUrl)
-  } catch {
-    return null
-  }
-
-  // Only intercept same-origin local parser endpoints.
-  if (targetUrl.origin !== incomingUrl.origin) {
-    return null
-  }
-
-  const loadRouteModule = INTERNAL_PARSER_ROUTE_LOADERS[targetUrl.pathname]
-  if (!loadRouteModule) {
-    return null
-  }
-
-  const routeModule = await loadRouteModule()
-  const handler = method === 'GET' ? routeModule?.GET : routeModule?.POST
-  if (typeof handler !== 'function') {
-    return null
-  }
-
-  const internalRequestInit: RequestInit = {
-    method,
-    headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
-    body: method === 'POST' ? (body || '{}') : undefined,
-  }
-  const internalRequest = new NextRequest(new Request(targetUrl.toString(), internalRequestInit))
-  return await handler(internalRequest)
 }
 
 // 支持GET请求用于测试
@@ -841,19 +783,11 @@ async function tryFallbackParse(args: {
     : '/api/bilibili/parse'
 
   try {
-    const endpointUrl = new URL(fallbackPath, requestUrl)
-    const requestBody = JSON.stringify({ url: inputUrl, videoUrl: inputUrl })
-    const internalResponse = await invokeInternalParserRouteIfSupported({
-      finalApiUrl: endpointUrl.toString(),
-      requestUrl,
-      method: 'POST',
-      body: requestBody
-    })
-
-    const response = internalResponse ?? await fetch(endpointUrl.toString(), {
+    const endpoint = new URL(fallbackPath, requestUrl).toString()
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: requestBody
+      body: JSON.stringify({ url: inputUrl, videoUrl: inputUrl })
     })
 
     const raw = await response.text()
