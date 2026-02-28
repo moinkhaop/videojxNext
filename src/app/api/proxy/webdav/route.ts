@@ -4,6 +4,9 @@ import { WebDAVUploadResponse, ImageInfo, WebDAVConfig } from '@/types'
 // Force Node runtime: Edge environments on some platforms (EdgeOne) can return 545
 // ("Error return from script") for long-running streaming proxy requests.
 export const runtime = 'nodejs'
+// Some platforms allow extending serverless duration via this hint.
+// It is safe to ignore if unsupported.
+export const maxDuration = 300
 
 const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
 const DEFAULT_VIDEO_DOWNLOAD_TIMEOUT_MS = 20000
@@ -586,7 +589,10 @@ export async function POST(request: NextRequest) {
           const payload = await downloadForUpload({
             url: downloadUrl,
             headers,
-            timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS
+            timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS,
+            // Edge runtimes are less reliable with streaming request bodies for PUT.
+            // Buffering avoids platform-specific stream/duplex issues that can surface as 545.
+            preferBuffer: true
           })
           uploadBody = payload.body
           contentLength = payload.contentLength
@@ -725,7 +731,7 @@ export async function POST(request: NextRequest) {
 
                 let retryPayload: DownloadPayload
                 try {
-                  retryPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS })
+                  retryPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS, preferBuffer: true })
                 } catch (downloadError) {
                   retryDetails.push(`第${retryIndex}次: ${downloadError instanceof Error ? downloadError.message : String(downloadError)}`)
                   break
@@ -783,7 +789,7 @@ export async function POST(request: NextRequest) {
                 throw new Error('创建回退上传目录失败')
               }
 
-              let fallbackPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS })
+              let fallbackPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS, preferBuffer: true })
               let fallbackResponse = await putWebDAV({
                 url: fallbackUploadPath,
                 auth,
