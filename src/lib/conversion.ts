@@ -435,7 +435,10 @@ export class ConversionService {
 
               const filePath = await this.uploadToWebDAV(
                 task.parsedVideoInfo!,
-                batchTask.webdavConfig
+                batchTask.webdavConfig,
+                undefined,
+                undefined,
+                task.videoUrl
               )
 
               task.status = TaskStatus.SUCCESS
@@ -710,7 +713,8 @@ export class ConversionService {
     mediaInfo: ParsedVideoInfo,
     webdavConfig: WebDAVConfig,
     folderPath?: string,
-    onProgress?: (progress: number, hint: string) => void
+    onProgress?: (progress: number, hint: string) => void,
+    sourceUrl?: string
   ): Promise<string> {
     const maxRetries = 5
     let attempt = 0
@@ -774,6 +778,7 @@ export class ConversionService {
             },
             body: JSON.stringify({
               videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined,
+              sourceUrl: sourceUrl || undefined,
               images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined,
               webdavConfig,
               fileName,
@@ -977,7 +982,10 @@ export class ConversionService {
 
       const filePath = await this.uploadToWebDAV(
         task.parsedVideoInfo!, 
-        webdavConfig
+        webdavConfig,
+        undefined,
+        undefined,
+        task.videoUrl
       )
 
       task.status = TaskStatus.SUCCESS
@@ -1017,10 +1025,11 @@ export class ConversionService {
     parsedInfo: ParsedVideoInfo,
     webdavConfig: WebDAVConfig,
     folderPath?: string,
-    onProgress?: (progress: number, hint: string) => void
+    onProgress?: (progress: number, hint: string) => void,
+    sourceUrl?: string
   ): Promise<string> {
     console.log(`[上传] 开始上传已解析的媒体: ${parsedInfo.title}`)
-    return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath, onProgress)
+    return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath, onProgress, sourceUrl)
   }
 
   // 解析视频链接

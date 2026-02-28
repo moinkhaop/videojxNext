@@ -80,6 +80,157 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function isReadableStream(body: unknown): body is ReadableStream<Uint8Array> {
+  return Boolean(body) && typeof (body as any).getReader === 'function'
+}
+
+type DownloadPayload = {
+  body: BodyInit
+  contentLength: string | null
+  contentType: string
+}
+
+async function downloadForUpload(args: {
+  url: string
+  headers: Record<string, string>
+  timeoutMs: number
+  preferBuffer?: boolean
+}): Promise<DownloadPayload> {
+  const { url, headers, timeoutMs, preferBuffer = false } = args
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      redirect: 'follow',
+      signal: controller.signal
+    })
+
+    if (!response.ok) {
+      // Attach status for callers that want smarter retry/fallback decisions.
+      const err: any = new Error(`下载视频失败: ${response.status} ${response.statusText}`)
+      err.status = response.status
+      err.statusText = response.statusText
+      err.url = response.url || url
+      throw err
+    }
+
+    let contentLength = response.headers.get('content-length')
+    const contentType = response.headers.get('content-type') || 'application/octet-stream'
+
+    if (preferBuffer) {
+      const buffer = await response.arrayBuffer()
+      return {
+        body: buffer,
+        contentLength: String(buffer.byteLength),
+        contentType
+      }
+    }
+
+    if (response.body) {
+      if (!contentLength) {
+        // Some CDNs omit Content-Length on GET; try HEAD to obtain it for WebDAV servers
+        // that require Content-Length (411 Length Required).
+        try {
+          const head = await fetch(response.url || url, {
+            method: 'HEAD',
+            headers,
+            redirect: 'follow',
+            signal: controller.signal
+          })
+          const headLen = head.headers.get('content-length')
+          if (headLen) {
+            contentLength = headLen
+          }
+        } catch {
+        }
+      }
+
+      return {
+        body: response.body,
+        contentLength,
+        contentType
+      }
+    }
+
+    const buffer = await response.arrayBuffer()
+    return {
+      body: buffer,
+      contentLength: String(buffer.byteLength),
+      contentType
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function putWebDAV(args: {
+  url: string
+  auth: string
+  body: BodyInit
+  contentType: string
+  contentLength: string | null
+}): Promise<Response> {
+  const { url, auth, body, contentType, contentLength } = args
+  const headers: Record<string, string> = {
+    'Authorization': `Basic ${auth}`,
+    'Content-Type': contentType,
+  }
+  if (contentLength) {
+    headers['Content-Length'] = contentLength
+  }
+
+  // Node fetch requires duplex for streaming bodies; Edge ignores it.
+  const init: any = {
+    method: 'PUT',
+    headers,
+    body,
+  }
+  if (isReadableStream(body)) {
+    init.duplex = 'half'
+  }
+  return await fetch(url, init)
+}
+
+function getWebDAVDirUrl(fileUrl: string): string {
+  const u = new URL(fileUrl)
+  const path = u.pathname
+  const lastSlash = path.lastIndexOf('/')
+  const dirPath = lastSlash >= 0 ? path.slice(0, lastSlash + 1) : '/'
+  u.pathname = dirPath
+  u.search = ''
+  u.hash = ''
+  return u.toString()
+}
+
+async function ensureWebDAVFolderExists(folderUrl: string, auth: string, depth = 0): Promise<boolean> {
+  if (!folderUrl) return false
+  if (depth > 12) return false
+
+  const normalized = folderUrl.endsWith('/') ? folderUrl : `${folderUrl}/`
+  try {
+    const ok = await createWebDAVFolder(normalized, auth)
+    if (ok) return true
+  } catch {
+  }
+
+  // If parent is missing, MKCOL returns 409; create parent then retry.
+  try {
+    const u = new URL(normalized)
+    const trimmed = u.pathname.replace(/\/+$/, '')
+    const idx = trimmed.lastIndexOf('/')
+    if (idx <= 0) return false
+    u.pathname = trimmed.slice(0, idx + 1)
+    const parent = u.toString()
+    const parentOk = await ensureWebDAVFolderExists(parent, auth, depth + 1)
+    if (!parentOk) return false
+    return await createWebDAVFolder(normalized, auth)
+  } catch {
+    return false
+  }
+}
+
 function extractUpstreamErrorMessage(body: string): string | null {
   if (!body) {
     return null
@@ -106,6 +257,65 @@ function extractUpstreamErrorMessage(body: string): string | null {
   }
 
   return sanitized.length > 300 ? `${sanitized.substring(0, 300)}…` : sanitized
+}
+
+function isLikelyDouyinUrl(value: string): boolean {
+  if (!value) return false
+  try {
+    const u = new URL(value)
+    const host = u.hostname.toLowerCase()
+    return (
+      host === 'v.douyin.com' ||
+      host.endsWith('.douyin.com') ||
+      host === 'iesdouyin.com' ||
+      host.endsWith('.iesdouyin.com')
+    )
+  } catch {
+    return false
+  }
+}
+
+async function refreshDouyinDirectVideoUrl(sourceUrl: string, requestUrl: string): Promise<string> {
+  const endpoint = new URL('/api/douyin/parse', requestUrl)
+  const controller = new AbortController()
+  const timeoutMs = Math.min(Math.max(VIDEO_DOWNLOAD_TIMEOUT_MS, 8000), 30000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(endpoint.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ url: sourceUrl, videoUrl: sourceUrl, text: sourceUrl }),
+      signal: controller.signal
+    })
+
+    const text = await response.text().catch(() => '')
+    if (!response.ok) {
+      const detail = extractUpstreamErrorMessage(text)
+      throw new Error(detail ? `刷新解析失败: ${detail}` : `刷新解析失败: HTTP ${response.status}`)
+    }
+
+    let payload: any = null
+    try {
+      payload = text ? JSON.parse(text) : null
+    } catch {
+      payload = null
+    }
+
+    const url = payload?.data?.url
+    if (!payload?.success || !url || typeof url !== 'string') {
+      const detail = payload?.error || extractUpstreamErrorMessage(text) || '未返回有效视频URL'
+      throw new Error(`刷新解析失败: ${detail}`)
+    }
+
+    // Quick validation.
+    new URL(url)
+    return url
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // {{ AURA: Modify - 修复路径构建，添加URL编码和验证 }}
@@ -259,7 +469,7 @@ async function uploadImageFile(imageUrl: string, uploadPath: string, auth: strin
 
 export async function POST(request: NextRequest) {
   try {
-    const { videoUrl, images, webdavConfig, fileName, folderPath = '' } = await request.json()
+    const { videoUrl, sourceUrl, images, webdavConfig, fileName, folderPath = '' } = await request.json()
 
     if ((!videoUrl && (!images || images.length === 0)) || !webdavConfig || !fileName) {
       return NextResponse.json({
@@ -281,8 +491,8 @@ export async function POST(request: NextRequest) {
       // 构建认证头
       const auth = buildBasicAuth(webdavConfig)
       
-      // 创建文件夹
-      const folderCreated = await createWebDAVFolder(albumFolderPath, auth)
+      // 创建文件夹（递归创建父目录，避免 409）
+      const folderCreated = await ensureWebDAVFolderExists(albumFolderPath, auth)
       if (!folderCreated) {
         return NextResponse.json({
           success: false,
@@ -325,10 +535,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(result)
     }
     
-    // 处理视频上传 (保持原有方式不变)
-    // 首先下载视频文件
-    const maxRetries = MAX_VIDEO_RETRIES; // 最大重试次数
-    let lastError;
+    // 处理视频上传
+    const maxRetries = MAX_VIDEO_RETRIES // 最大重试次数
+    let lastError: unknown
+    let downloadUrl = String(videoUrl || '')
+    const normalizedSourceUrl = typeof sourceUrl === 'string' ? sourceUrl.trim() : ''
+    const canRefreshDouyin = Boolean(normalizedSourceUrl) && isLikelyDouyinUrl(normalizedSourceUrl)
+    let hasRefreshed = false
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -341,9 +554,6 @@ export async function POST(request: NextRequest) {
           userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1';
         }
         
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), VIDEO_DOWNLOAD_TIMEOUT_MS)
-        
         // 构建更丰富的请求头
         const headers: Record<string, string> = {
           'User-Agent': userAgent,
@@ -353,90 +563,118 @@ export async function POST(request: NextRequest) {
           'Pragma': 'no-cache',
           // Douyin/Bytedance CDN often requires a plausible site context.
           'Referer': 'https://www.douyin.com/',
-          'Origin': 'https://www.douyin.com'
+          'Origin': 'https://www.douyin.com',
+          'Sec-Fetch-Dest': 'video',
+          'Sec-Fetch-Mode': 'no-cors',
+          'Sec-Fetch-Site': 'cross-site',
+          'Upgrade-Insecure-Requests': '1',
         };
 
         if (attempt > 1) {
           headers['Range'] = 'bytes=0-'
         }
-        
-        const videoResponse = await fetch(videoUrl, {
-          headers,
-          redirect: 'follow',
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-
-        if (!videoResponse.ok) {
-          const errorMessage = `下载视频失败: ${videoResponse.status} ${videoResponse.statusText}`;
-          console.error(`[WebDAV] ${errorMessage}`);
-          
-          // 对于权限错误(403/401)、服务器错误(5xx)和临时错误(408, 429)，进行重试
-          const shouldRetry =
-            (videoResponse.status === 403 || videoResponse.status === 401 ||
-             videoResponse.status === 408 || videoResponse.status === 429 ||
-             videoResponse.status >= 500) &&
-            attempt < maxRetries;
-            
-          if (shouldRetry) {
-            // 使用指数退避策略等待后重试
-            const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // 最大等待10秒
-            console.log(`[WebDAV] 等待 ${waitTime/1000} 秒后重试...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            continue; // 继续下一次尝试
-          }
-          
-          // 对于403错误提供更具体的错误信息
-          let finalErrorMessage = errorMessage;
-          if (videoResponse.status === 403) {
-            finalErrorMessage += '。可能是视频链接已过期或需要登录，请尝试其他视频链接。';
-          } else if (videoResponse.status === 401) {
-            finalErrorMessage += '。认证失败，请检查视频链接是否正确。';
-          }
-          
-          return NextResponse.json({
-            success: false,
-            error: finalErrorMessage
-          }, { status: videoResponse.status })
-        }
-
-        const contentLengthHeader = videoResponse.headers.get('content-length')
-        const contentTypeHeader = videoResponse.headers.get('content-type') || 'application/octet-stream'
-        const streamBody = videoResponse.body
 
         let uploadBody: BodyInit
-        let contentLength: string | null = contentLengthHeader
-        if (streamBody) {
-          uploadBody = streamBody
-        } else {
-          const videoBuffer = await videoResponse.arrayBuffer()
-          console.log(`[WebDAV] 视频文件大小: ${videoBuffer.byteLength} bytes`)
-          uploadBody = videoBuffer
-          contentLength = String(videoBuffer.byteLength)
+        let contentLength: string | null = null
+        let contentTypeHeader = 'application/octet-stream'
+
+        try {
+          const payload = await downloadForUpload({
+            url: downloadUrl,
+            headers,
+            timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS
+          })
+          uploadBody = payload.body
+          contentLength = payload.contentLength
+          contentTypeHeader = payload.contentType
+        } catch (downloadError: any) {
+          lastError = downloadError
+          const status = Number(downloadError?.status)
+          const hasStatus = Number.isFinite(status)
+
+          if (
+            canRefreshDouyin &&
+            !hasRefreshed &&
+            (status === 403 || status === 401)
+          ) {
+            try {
+              console.warn('[WebDAV] 下载返回 403/401，尝试刷新抖音直链后重试下载')
+              downloadUrl = await refreshDouyinDirectVideoUrl(normalizedSourceUrl, request.url)
+              hasRefreshed = true
+              await sleep(300)
+              continue
+            } catch (refreshError) {
+              console.warn('[WebDAV] 刷新抖音直链失败，继续按原逻辑重试/返回错误:', refreshError)
+            }
+          }
+
+          // 对于权限错误(403/401)、服务器错误(5xx)和临时错误(408, 429)，进行重试
+          const shouldRetry =
+            hasStatus &&
+            (status === 403 || status === 401 || status === 408 || status === 429 || status >= 500) &&
+            attempt < maxRetries
+
+          if (shouldRetry) {
+            const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000) // 最大等待10秒
+            console.log(`[WebDAV] 等待 ${waitTime / 1000} 秒后重试...`)
+            await sleep(waitTime)
+            continue
+          }
+
+          const errorMessage = downloadError instanceof Error ? downloadError.message : String(downloadError)
+          let finalErrorMessage = errorMessage || '下载视频失败'
+          if (hasStatus && status === 403) {
+            finalErrorMessage += '。可能是视频链接已过期或需要登录，请尝试重新解析或换一个视频链接。'
+          } else if (hasStatus && status === 401) {
+            finalErrorMessage += '。认证失败，请检查视频链接是否正确。'
+          }
+
+          return NextResponse.json(
+            { success: false, error: finalErrorMessage },
+            { status: hasStatus ? status : 502 }
+          )
         }
+
+        // 构建认证头
+        const auth = buildBasicAuth(webdavConfig)
 
         // 构建WebDAV上传路径
         const uploadPath = buildWebDAVPath(webdavConfig, folderPath, fileName)
         console.log(`[WebDAV] 完整上传路径: ${uploadPath}`)
 
-        // 构建认证头
-        const auth = buildBasicAuth(webdavConfig)
-        const uploadHeaders: Record<string, string> = {
-          'Authorization': `Basic ${auth}`,
-          'Content-Type': contentTypeHeader,
+        // 确保目标目录存在（避免 404 / 409）
+        const dirUrl = getWebDAVDirUrl(uploadPath)
+        const dirOk = await ensureWebDAVFolderExists(dirUrl, auth)
+        if (!dirOk) {
+          return NextResponse.json({
+            success: false,
+            error: `创建上传目录失败: ${dirUrl}`
+          }, { status: 500 })
         }
-        if (contentLength) {
-          uploadHeaders['Content-Length'] = contentLength
-        }
+
         console.log(`[WebDAV] 认证信息: 用户名=${webdavConfig.username}, 密码长度=${webdavConfig.password.length}`)
 
-        // 上传到WebDAV服务器
-        const uploadResponse = await fetch(uploadPath, {
-          method: 'PUT',
-          headers: uploadHeaders,
-          body: uploadBody
+        // 上传到WebDAV服务器（支持流式 body）
+        let uploadResponse = await putWebDAV({
+          url: uploadPath,
+          auth,
+          body: uploadBody,
+          contentType: contentTypeHeader,
+          contentLength
         })
+
+        // Some servers require Content-Length. Retry once with buffered body.
+        if (uploadResponse.status === 411) {
+          console.warn('[WebDAV] 411 Length Required，尝试使用缓冲下载后重试上传')
+          const payload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS, preferBuffer: true })
+          uploadResponse = await putWebDAV({
+            url: uploadPath,
+            auth,
+            body: payload.body,
+            contentType: payload.contentType,
+            contentLength: payload.contentLength
+          })
+        }
 
         if (!uploadResponse.ok) {
           console.error(`[WebDAV] 上传失败: ${uploadResponse.status} ${uploadResponse.statusText}`)
@@ -475,11 +713,38 @@ export async function POST(request: NextRequest) {
                 const retryFileName = `${baseName}_retry${retryIndex}_${Date.now()}.${extension}`
                 const retryUploadPath = buildWebDAVPath(webdavConfig, folderPath, retryFileName)
 
-                const retryResponse = await fetch(retryUploadPath, {
-                  method: 'PUT',
-                  headers: uploadHeaders,
-                  body: videoBuffer
+                const retryDirOk = await ensureWebDAVFolderExists(getWebDAVDirUrl(retryUploadPath), auth)
+                if (!retryDirOk) {
+                  retryDetails.push(`第${retryIndex}次: 创建目录失败`)
+                  break
+                }
+
+                let retryPayload: DownloadPayload
+                try {
+                  retryPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS })
+                } catch (downloadError) {
+                  retryDetails.push(`第${retryIndex}次: ${downloadError instanceof Error ? downloadError.message : String(downloadError)}`)
+                  break
+                }
+
+                let retryResponse = await putWebDAV({
+                  url: retryUploadPath,
+                  auth,
+                  body: retryPayload.body,
+                  contentType: retryPayload.contentType,
+                  contentLength: retryPayload.contentLength
                 })
+
+                if (retryResponse.status === 411) {
+                  retryPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS, preferBuffer: true })
+                  retryResponse = await putWebDAV({
+                    url: retryUploadPath,
+                    auth,
+                    body: retryPayload.body,
+                    contentType: retryPayload.contentType,
+                    contentLength: retryPayload.contentLength
+                  })
+                }
 
                 if (retryResponse.ok) {
                   console.log(`[WebDAV] 423 回退上传成功: ${retryUploadPath}`)
@@ -509,11 +774,30 @@ export async function POST(request: NextRequest) {
               const fallbackFileName = generateRandomFileName(getFileExtension(fileName, 'mp4'))
               const fallbackUploadPath = buildWebDAVPath(webdavConfig, folderPath, fallbackFileName)
 
-              const fallbackResponse = await fetch(fallbackUploadPath, {
-                method: 'PUT',
-                headers: uploadHeaders,
-                body: videoBuffer
+              const fallbackDirOk = await ensureWebDAVFolderExists(getWebDAVDirUrl(fallbackUploadPath), auth)
+              if (!fallbackDirOk) {
+                throw new Error('创建回退上传目录失败')
+              }
+
+              let fallbackPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS })
+              let fallbackResponse = await putWebDAV({
+                url: fallbackUploadPath,
+                auth,
+                body: fallbackPayload.body,
+                contentType: fallbackPayload.contentType,
+                contentLength: fallbackPayload.contentLength
               })
+
+              if (fallbackResponse.status === 411) {
+                fallbackPayload = await downloadForUpload({ url: downloadUrl, headers, timeoutMs: VIDEO_DOWNLOAD_TIMEOUT_MS, preferBuffer: true })
+                fallbackResponse = await putWebDAV({
+                  url: fallbackUploadPath,
+                  auth,
+                  body: fallbackPayload.body,
+                  contentType: fallbackPayload.contentType,
+                  contentLength: fallbackPayload.contentLength
+                })
+              }
 
               if (fallbackResponse.ok) {
                 console.log(`[WebDAV] 回退文件名上传成功: ${fallbackUploadPath}`)

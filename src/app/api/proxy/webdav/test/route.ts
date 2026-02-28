@@ -1,6 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVConfig } from '@/types'
 
+function base64Encode(value: string): string {
+  const source = String(value ?? '')
+
+  // Edge runtime: prefer btoa + TextEncoder.
+  if (typeof btoa === 'function' && typeof TextEncoder !== 'undefined') {
+    const bytes = new TextEncoder().encode(source)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode(...Array.from(chunk))
+    }
+    return btoa(binary)
+  }
+
+  // Node runtime fallback.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const maybeBuffer: any = (globalThis as any).Buffer
+  if (maybeBuffer && typeof maybeBuffer.from === 'function') {
+    return maybeBuffer.from(source).toString('base64')
+  }
+
+  throw new Error('无法生成Basic认证信息：运行环境缺少 base64 编码能力')
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { webdavConfig } = await request.json()
@@ -27,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 测试WebDAV连接 - 使用PROPFIND方法
-    const auth = Buffer.from(`${webdavConfig.username}:${webdavConfig.password}`).toString('base64')
+    const auth = base64Encode(`${webdavConfig.username}:${webdavConfig.password}`)
     const testResponse = await fetch(testUrl, {
       method: 'PROPFIND',
       headers: {
