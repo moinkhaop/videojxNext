@@ -82,9 +82,11 @@ function normalizeRemoteHistory(rows: RemoteHistoryRow[]) {
   return rows
     .map((row) => {
       const createdAt = toDate(row.createdAt) ?? new Date()
+      const type = row.type === 'batch' ? 'batch' : 'single'
       return {
         ...row,
         id: row.id,
+        type,
         createdAt,
         task: row.task
           ? {
