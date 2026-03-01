@@ -1,5 +1,10 @@
 import { NextRequest } from 'next/server'
-import { extensionJson, extensionOptionsResponse } from '../_shared'
+import {
+  ensureSupabaseEnabled,
+  extensionJson,
+  extensionOptionsResponse,
+  requireExtensionAuth,
+} from '../_shared'
 
 export const runtime = 'nodejs'
 
@@ -8,8 +13,19 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: NextRequest) {
+  const unavailable = ensureSupabaseEnabled()
+  if (unavailable) {
+    return unavailable
+  }
+
+  const auth = await requireExtensionAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const rawBody = await request.text()
+    const authorization = request.headers.get('authorization') || request.headers.get('Authorization') || ''
     let body: any = null
     try {
       body = rawBody ? JSON.parse(rawBody) : null
@@ -46,7 +62,10 @@ export async function POST(request: NextRequest) {
 
         resp = await fetch(target.toString(), {
           method: 'GET',
-          headers: { 'Accept': 'application/json' },
+          headers: {
+            'Accept': 'application/json',
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
         })
       } else {
         const payload = {
@@ -58,6 +77,7 @@ export async function POST(request: NextRequest) {
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
+            ...(authorization ? { Authorization: authorization } : {}),
           },
           body: JSON.stringify(payload),
         })
@@ -80,6 +100,7 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(authorization ? { Authorization: authorization } : {}),
       },
       body: rawBody,
     })

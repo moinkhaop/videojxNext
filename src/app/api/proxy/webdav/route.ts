@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVUploadResponse, ImageInfo, WebDAVConfig } from '@/types'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 // Force Node runtime: Edge environments on some platforms (EdgeOne) can return 545
 // ("Error return from script") for long-running streaming proxy requests.
@@ -475,6 +476,11 @@ async function uploadImageFile(imageUrl: string, uploadPath: string, auth: strin
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const { videoUrl, sourceUrl, images, webdavConfig, fileName, folderPath = '' } = await request.json()
 
@@ -661,8 +667,6 @@ export async function POST(request: NextRequest) {
             error: `创建上传目录失败: ${dirUrl}`
           }, { status: 500 })
         }
-
-        console.log(`[WebDAV] 认证信息: 用户名=${webdavConfig.username}, 密码长度=${webdavConfig.password.length}`)
 
         // 上传到WebDAV服务器（支持流式 body）
         let uploadResponse = await putWebDAV({
@@ -912,62 +916,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// 测试WebDAV连接
-export async function GET(request: NextRequest) {
-  try {
-    const searchParams = request.nextUrl.searchParams
-    const serverUrl = searchParams.get('serverUrl')
-    const username = searchParams.get('username')
-    const password = searchParams.get('password')
-
-    if (!serverUrl || !username || !password) {
-      return NextResponse.json({
-        success: false,
-        error: '缺少WebDAV连接参数'
-      }, { status: 400 })
-    }
-
-    // 解码可能被编码的参数
-    const decodedUrl = decodeURIComponent(serverUrl)
-    const decodedUsername = decodeURIComponent(username)
-    const decodedPassword = decodeURIComponent(password)
-
-    console.log(`[WebDAV] 测试连接到: ${decodedUrl}`)
-    
-    // 测试WebDAV连接
-    const auth = base64Encode(`${decodedUsername}:${decodedPassword}`)
-    const testResponse = await fetch(decodedUrl, {
-      method: 'PROPFIND',
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Depth': '0',
-        'Content-Type': 'application/xml'
-      },
-      body: `<?xml version="1.0" encoding="utf-8" ?>
-        <D:propfind xmlns:D="DAV:">
-          <D:prop>
-            <D:resourcetype/>
-          </D:prop>
-        </D:propfind>`
-    })
-
-    if (testResponse.ok || testResponse.status === 207) {
-      return NextResponse.json({
-        success: true,
-        message: 'WebDAV连接测试成功'
-      })
-    } else {
-      return NextResponse.json({
-        success: false,
-        error: `WebDAV连接失败: ${testResponse.status}`
-      }, { status: testResponse.status })
-    }
-
-  } catch (error) {
-    console.error('[WebDAV] 连接测试错误:', error)
-    return NextResponse.json({
+// 禁用 GET 查询参数测试入口，避免通过 URL 传递凭证。
+export async function GET() {
+  return NextResponse.json(
+    {
       success: false,
-      error: error instanceof Error ? error.message : 'WebDAV连接测试失败'
-    }, { status: 500 })
-  }
+      error: '请改用 POST /api/proxy/webdav/test，并通过请求体传递 WebDAV 参数',
+    },
+    { status: 405 }
+  )
 }

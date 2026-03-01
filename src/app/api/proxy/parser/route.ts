@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { VideoParseResponse, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 import { extractFirstUrlFromText } from '@/lib/url/extract'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 export const runtime = 'nodejs'
 
@@ -8,6 +9,11 @@ const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   let cleanedVideoUrl = ''
   let extractedUrl = ''
   let normalizedVideoUrl = ''
@@ -60,16 +66,6 @@ export async function POST(request: NextRequest) {
     const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
     normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
 
-    console.log(`[API] 解析视频链接: ${cleanedVideoUrl}`)
-    if (extractedUrl && extractedUrl !== cleanedVideoUrl) {
-      console.log(`[API] 从文本提取URL: ${extractedUrl}`)
-    }
-    if (resolvedUrl && resolvedUrl !== initialNormalizedUrl) {
-      console.log(`[API] 解析短链重定向: ${resolvedUrl}`)
-    }
-    if (normalizedVideoUrl && normalizedVideoUrl !== extractedUrl) {
-      console.log(`[API] 归一化链接: ${normalizedVideoUrl}`)
-    }
     console.log(`[API] 使用解析器: ${parserName}`)
 
     const headers: Record<string, string> = {
@@ -124,7 +120,6 @@ export async function POST(request: NextRequest) {
         upstreamUrl.searchParams.set(key, value)
       })
 
-      console.log(`[API] 使用GET请求: ${upstreamUrl.toString()}`)
     }
 
     let requestBody: string | undefined
@@ -139,7 +134,6 @@ export async function POST(request: NextRequest) {
       }
 
       requestBody = JSON.stringify(bodyPayload)
-      console.log(`[API] 使用POST请求: ${upstreamUrl.toString()}`)
     }
 
     const finalApiUrl = upstreamUrl.toString()
@@ -150,7 +144,6 @@ export async function POST(request: NextRequest) {
       ...(method === 'POST' && requestBody ? { body: requestBody } : {})
     }
 
-    console.log(`[API] 最终请求URL: ${finalApiUrl.substring(0, 100)}${finalApiUrl.length > 100 ? '...' : ''}`)
     console.log(`[API] 请求方法: ${method}`)
     // 添加超时控制
     const controller = new AbortController();
@@ -425,6 +418,11 @@ export async function POST(request: NextRequest) {
 
 // 支持GET请求用于测试
 export async function GET(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   const searchParams = request.nextUrl.searchParams
   const videoUrl = searchParams.get('url')
   const testMode = searchParams.get('test') === 'true'
@@ -436,7 +434,7 @@ export async function GET(request: NextRequest) {
     }, { status: 400 })
   }
   
-  console.log(`[API] GET 请求测试模式: ${testMode}, URL: ${videoUrl}`)
+  console.log(`[API] GET 请求测试模式: ${testMode}`)
 
   // 用于模拟和测试的视频信息
   let title = '测试视频标题'

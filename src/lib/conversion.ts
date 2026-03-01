@@ -13,13 +13,24 @@ import {
   ExtendedBatchTask, 
   DouyinUserParseRequest,
   ParserCapability,
-  SupportedPlatform
+  SupportedPlatform,
+  ParserAttemptResult,
+  ParseExecutionTrace
 } from '@/types'
 import { CleanupService } from './cleanup'
 import { FilenameSanitizer } from './filename-sanitizer'
 import { parserRouter } from './parser-router'
 import { apiCapabilityDetector } from './capability-detector'
 import { extractFirstUrlFromText } from './url/extract'
+import { ConfigManager } from './storage'
+import {
+  classifyParserFailure,
+  getParserHealthSnapshot,
+  isParserCoolingDown,
+  recordParserAttempt,
+  scoreParserHealth,
+} from './parser-health'
+import { getWebdavProxyEndpoint } from './runtime-endpoints'
 
 export type BatchPoolStage = 'normal_batch' | 'douyin_upload'
 
@@ -255,73 +266,164 @@ export class ConversionService {
   static async parseDouyinUser(
     userUrl: string, 
     limit: number = 20,
-    parsers?: EnhancedVideoParserConfig[]
+    parsers?: EnhancedVideoParserConfig[],
+    preferredParserId?: string
   ): Promise<ParsedVideoInfo[]> {
+    const traceId = this.generateTaskId()
     try {
       console.log(`[抖音用户解析] 开始解析用户主页: ${userUrl}, 限制: ${limit}`)
-      
-      // 如果提供了解析器列表，使用智能路由系统
-      if (parsers && parsers.length > 0) {
-        const routeResult = parserRouter.selectBestParser(
-          BatchInputMode.DOUYIN_USER,
-          SupportedPlatform.DOUYIN,
-          parsers
-        );
-        
-        if (routeResult.primary) {
+
+      let resolvedParsers = parsers
+      if (!resolvedParsers || resolvedParsers.length === 0) {
+        const localParsers = typeof window !== 'undefined' ? ConfigManager.getParsers() : []
+        if (localParsers.length > 0) {
           try {
-            console.log(`[抖音用户解析] 使用解析器: ${routeResult.primary.name}`)
-            return await parserRouter.executeParseRequest(
-              routeResult.primary,
-              userUrl,
-              ParserCapability.USER_PAGE,
-              limit
-            );
-          } catch (error) {
-            console.error(`[抖音用户解析] 主解析器失败: ${error}`)
-            
-            // 尝试备用解析器
-            for (const fallback of routeResult.fallbacks) {
-              try {
-                console.log(`[抖音用户解析] 尝试备用解析器: ${fallback.name}`)
-                // 备用解析器通常是单视频解析，需要先获取用户视频列表
-                throw new Error('需要实现单视频降级逻辑')
-              } catch (fallbackError) {
-                console.error(`[抖音用户解析] 备用解析器失败: ${fallbackError}`)
-                continue;
-              }
-            }
-            
-            throw error; // 所有解析器都失败
+            resolvedParsers = await this.enhanceParserConfigs(localParsers)
+          } catch {
+            resolvedParsers = []
           }
-        } else {
-          throw new Error('没有找到支持用户主页解析的API')
         }
       }
-      
-      // 兼容模式：使用原有的固定API端点
-      const request: DouyinUserParseRequest = {
-        url: userUrl,
-        limit: limit
+
+      const routeResult = resolvedParsers && resolvedParsers.length > 0
+        ? parserRouter.selectBestParser(
+            BatchInputMode.DOUYIN_USER,
+            SupportedPlatform.DOUYIN,
+            resolvedParsers
+          )
+        : { primary: null, fallbacks: [] as EnhancedVideoParserConfig[] }
+
+      const allUserParsers = (resolvedParsers ?? [])
+        .filter(parser => parser.capabilities?.includes(ParserCapability.USER_PAGE))
+      const preferredParser = preferredParserId
+        ? allUserParsers.find(parser => parser.id === preferredParserId) || null
+        : null
+      const routedPrimary = routeResult.primary
+        && routeResult.primary.capabilities?.includes(ParserCapability.USER_PAGE)
+        ? routeResult.primary
+        : null
+      const primaryUserParser = preferredParser || routedPrimary
+      const backupUserParser = allUserParsers
+        .filter(parser => !primaryUserParser || parser.id !== primaryUserParser.id)
+        .sort((a, b) => {
+          const snapshotA = getParserHealthSnapshot(a.id)
+          const snapshotB = getParserHealthSnapshot(b.id)
+          return scoreParserHealth(snapshotB) - scoreParserHealth(snapshotA)
+        })[0] || null
+      const userCapableParsers = [primaryUserParser, backupUserParser]
+        .filter((parser): parser is EnhancedVideoParserConfig => Boolean(parser))
+      const primaryParserKey = primaryUserParser?.id || ''
+
+      const attempts: ParserAttemptResult[] = []
+
+      for (const parser of userCapableParsers) {
+        if (primaryParserKey && parser.id !== primaryParserKey && isParserCoolingDown(parser.id)) {
+          continue
+        }
+
+        const started = Date.now()
+        try {
+          console.log(`[抖音用户解析] 使用解析器: ${parser.name}`)
+          const videos = await parserRouter.executeParseRequest(
+            parser,
+            userUrl,
+            ParserCapability.USER_PAGE,
+            limit
+          )
+
+          const successAttempt: ParserAttemptResult = {
+            parserId: parser.id,
+            parserName: parser.name,
+            parserUrl: parser.apiUrl,
+            success: true,
+            latencyMs: Date.now() - started,
+            checkedAt: new Date().toISOString(),
+            traceId,
+          }
+          attempts.push(successAttempt)
+          recordParserAttempt(successAttempt)
+          return videos
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          const failedAttempt: ParserAttemptResult = {
+            parserId: parser.id,
+            parserName: parser.name,
+            parserUrl: parser.apiUrl,
+            success: false,
+            latencyMs: Date.now() - started,
+            errorClass: classifyParserFailure({ error, message: errorMessage }),
+            errorMessage,
+            checkedAt: new Date().toISOString(),
+            traceId,
+          }
+          attempts.push(failedAttempt)
+          recordParserAttempt(failedAttempt)
+          console.error(`[抖音用户解析] ${parser.name} 失败: ${errorMessage}`)
+        }
       }
-      
+
+      const builtinStarted = Date.now()
       const response = await fetch('/api/douyin/user', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(request)
+        body: JSON.stringify({
+          url: userUrl,
+          limit,
+        } satisfies DouyinUserParseRequest)
       })
       
       if (!response.ok) {
-        throw new Error(`抖音用户解析API请求失败: ${response.status}`)
+        const errorMessage = `抖音用户解析API请求失败: ${response.status}`
+        const failedAttempt: ParserAttemptResult = {
+          parserId: 'builtin_douyin_user_route',
+          parserName: '内置抖音用户解析接口',
+          parserUrl: '/api/douyin/user',
+          success: false,
+          latencyMs: Date.now() - builtinStarted,
+          status: response.status,
+          errorClass: classifyParserFailure({ status: response.status, message: errorMessage }),
+          errorMessage,
+          checkedAt: new Date().toISOString(),
+          traceId,
+        }
+        attempts.push(failedAttempt)
+        recordParserAttempt(failedAttempt)
+        throw new Error(this.buildFallbackFailureMessage(attempts))
       }
       
       const result = await response.json()
       
       if (!result.success) {
-        throw new Error(result.error || '抖音用户解析失败')
+        const errorMessage = result.error || '抖音用户解析失败'
+        const failedAttempt: ParserAttemptResult = {
+          parserId: 'builtin_douyin_user_route',
+          parserName: '内置抖音用户解析接口',
+          parserUrl: '/api/douyin/user',
+          success: false,
+          latencyMs: Date.now() - builtinStarted,
+          errorClass: classifyParserFailure({ message: errorMessage }),
+          errorMessage,
+          checkedAt: new Date().toISOString(),
+          traceId,
+        }
+        attempts.push(failedAttempt)
+        recordParserAttempt(failedAttempt)
+        throw new Error(this.buildFallbackFailureMessage(attempts))
       }
+
+      const successAttempt: ParserAttemptResult = {
+        parserId: 'builtin_douyin_user_route',
+        parserName: '内置抖音用户解析接口',
+        parserUrl: '/api/douyin/user',
+        success: true,
+        latencyMs: Date.now() - builtinStarted,
+        checkedAt: new Date().toISOString(),
+        traceId,
+      }
+      attempts.push(successAttempt)
+      recordParserAttempt(successAttempt)
       
       console.log(`[抖音用户解析] 解析成功，获取到 ${result.data.videos.length} 个视频`)
       return result.data.videos
@@ -399,7 +501,12 @@ export class ConversionService {
       
       // 根据任务数量确定解析限制
       const limit = batchTask.totalTasks || 20
-      const userVideos = await this.parseDouyinUser(batchTask.sourceUrl, limit)
+      const userVideos = await this.parseDouyinUser(
+        batchTask.sourceUrl,
+        limit,
+        undefined,
+        batchTask.parserConfig?.id
+      )
       
       // 更新批量任务信息
       batchTask.totalSourceVideos = userVideos.length
@@ -771,7 +878,7 @@ export class ConversionService {
         
         let response: Response
         try {
-          response = await fetch('/api/proxy/webdav', {
+          response = await fetch(getWebdavProxyEndpoint(), {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1032,6 +1139,199 @@ export class ConversionService {
     return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath, onProgress, sourceUrl)
   }
 
+  private static buildParserFallbackChain(
+    selectedParser: VideoParserConfig,
+    extractedUrl: string,
+    capability: ParserCapability
+  ): VideoParserConfig[] {
+    const chain: VideoParserConfig[] = []
+    const seen = new Set<string>()
+    const push = (parser: VideoParserConfig | null | undefined) => {
+      if (!parser || !parser.id || seen.has(parser.id)) return
+      seen.add(parser.id)
+      chain.push(parser)
+    }
+
+    push(selectedParser)
+
+    if (typeof window === 'undefined') {
+      return chain
+    }
+
+    const platform = this.inferPlatformFromUrl(extractedUrl)
+    const allParsers = ConfigManager.getParsers()
+      .filter(parser => parser?.id && parser.apiUrl && !parser.disabled)
+      .filter(parser => {
+        if (capability === ParserCapability.USER_PAGE) {
+          return parser.capabilities?.includes(ParserCapability.USER_PAGE)
+        }
+        const capabilityOk = !parser.capabilities
+          || parser.capabilities.length === 0
+          || parser.capabilities.includes(ParserCapability.SINGLE_VIDEO)
+        const platformOk = !parser.supportedPlatforms
+          || parser.supportedPlatforms.length === 0
+          || parser.supportedPlatforms.includes(SupportedPlatform.UNIVERSAL)
+          || parser.supportedPlatforms.includes(platform)
+        return capabilityOk && platformOk
+      })
+      .sort((a, b) => {
+        const snapshotA = getParserHealthSnapshot(a.id)
+        const snapshotB = getParserHealthSnapshot(b.id)
+        const scoreA = scoreParserHealth(snapshotA) + (a.isDefault ? 15 : 0)
+        const scoreB = scoreParserHealth(snapshotB) + (b.isDefault ? 15 : 0)
+        return scoreB - scoreA
+      })
+
+    for (const parser of allParsers) {
+      push(parser)
+    }
+
+    return chain
+  }
+
+  private static inferPlatformFromUrl(url: string): SupportedPlatform {
+    const source = String(url || '').toLowerCase()
+    if (/bilibili\.com|b23\.tv|\/bv[0-9a-z]+/i.test(source)) {
+      return SupportedPlatform.BILIBILI
+    }
+    if (/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(source)) {
+      return SupportedPlatform.DOUYIN
+    }
+    return SupportedPlatform.UNIVERSAL
+  }
+
+  private static async requestParseWithParser(
+    sourceInput: string,
+    extractedUrl: string,
+    parserConfig: VideoParserConfig
+  ): Promise<{ parsedInfo: ParsedVideoInfo; status: number }> {
+    console.log(`[转存] 使用解析器尝试: ${parserConfig.name} (${parserConfig.apiUrl})`)
+
+    const apiUrl = String(parserConfig.apiUrl || '').trim()
+    const isLocalParserEndpoint = /^\/api\//i.test(apiUrl)
+    const endpoint = isLocalParserEndpoint ? apiUrl : '/api/proxy/parser'
+    const payload = isLocalParserEndpoint
+      ? { url: extractedUrl, videoUrl: extractedUrl, text: sourceInput }
+      : { videoUrl: extractedUrl, parserConfig }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const responseText = await response.text()
+    if (!responseText.trim()) {
+      throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
+    }
+
+    if (!response.ok) {
+      const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
+      throw new Error(upstreamError
+        ? `解析接口调用失败 (${response.status}): ${upstreamError}`
+        : `解析接口调用失败 (HTTP ${response.status})`)
+    }
+
+    const parsedInfo = this.handleParseResponseText(responseText)
+    return {
+      parsedInfo,
+      status: response.status,
+    }
+  }
+
+  private static async parseWithFallbackChain(
+    sourceInput: string,
+    extractedUrl: string,
+    parserConfig: VideoParserConfig
+  ): Promise<{
+    parsedInfo: ParsedVideoInfo
+    usedParser: VideoParserConfig
+    trace: ParseExecutionTrace
+  }> {
+    const parserChain = this.buildParserFallbackChain(
+      parserConfig,
+      extractedUrl,
+      ParserCapability.SINGLE_VIDEO
+    )
+    const traceId = this.generateTaskId()
+    const trace: ParseExecutionTrace = {
+      traceId,
+      input: sourceInput,
+      capability: ParserCapability.SINGLE_VIDEO,
+      selectedParserId: parserConfig.id,
+      attempts: [],
+      startedAt: new Date().toISOString(),
+      success: false,
+    }
+
+    for (const parser of parserChain) {
+      if (parser.id !== parserConfig.id && isParserCoolingDown(parser.id)) {
+        continue
+      }
+
+      const started = Date.now()
+      try {
+        const { parsedInfo, status } = await this.requestParseWithParser(sourceInput, extractedUrl, parser)
+        const attempt: ParserAttemptResult = {
+          parserId: parser.id,
+          parserName: parser.name,
+          parserUrl: parser.apiUrl,
+          success: true,
+          latencyMs: Date.now() - started,
+          status,
+          checkedAt: new Date().toISOString(),
+          traceId,
+        }
+        trace.attempts.push(attempt)
+        recordParserAttempt(attempt)
+        trace.success = true
+        trace.finishedAt = new Date().toISOString()
+        return { parsedInfo, usedParser: parser, trace }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const attempt: ParserAttemptResult = {
+          parserId: parser.id,
+          parserName: parser.name,
+          parserUrl: parser.apiUrl,
+          success: false,
+          latencyMs: Date.now() - started,
+          errorClass: classifyParserFailure({ error, message }),
+          errorMessage: message,
+          checkedAt: new Date().toISOString(),
+          traceId,
+        }
+        trace.attempts.push(attempt)
+        recordParserAttempt(attempt)
+        console.error(`[转存] 解析器失败: ${parser.name} -> ${message}`)
+      }
+    }
+
+    trace.finishedAt = new Date().toISOString()
+    throw new Error(this.buildFallbackFailureMessage(trace.attempts))
+  }
+
+  private static buildFallbackFailureMessage(attempts: ParserAttemptResult[]): string {
+    if (!attempts.length) {
+      return '解析失败：没有可用解析器'
+    }
+
+    const details = attempts
+      .filter(item => !item.success)
+      .slice(0, 3)
+      .map(item => {
+        const cls = item.errorClass ? `/${item.errorClass}` : ''
+        return `${item.parserName || item.parserId}${cls}: ${item.errorMessage || '未知错误'}`
+      })
+
+    if (!details.length) {
+      return '解析失败：所有解析器不可用'
+    }
+
+    return `解析失败，已尝试 ${attempts.length} 个解析器。${details.join(' | ')}`
+  }
+
   // 解析视频链接
   static async parseVideo(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
     if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
@@ -1057,47 +1357,15 @@ export class ConversionService {
     }
 
     const parsePromise = (async () => {
-      try {
-        console.log(`[转存] 提取到URL: ${extractedUrl}`)
-        console.log(`[转存] 发送解析请求，URL: ${extractedUrl.substring(0, 50)}...`)
+      const { parsedInfo, usedParser } = await this.parseWithFallbackChain(videoUrl, extractedUrl, parserConfig)
+      this.setParseCache(cacheKey, parsedInfo)
 
-        const apiUrl = String(parserConfig.apiUrl || '').trim()
-        const isLocalParserEndpoint = /^\/api\//i.test(apiUrl)
-        const endpoint = isLocalParserEndpoint ? apiUrl : '/api/proxy/parser'
-        const payload = isLocalParserEndpoint
-          ? { url: extractedUrl, videoUrl: extractedUrl, text: videoUrl }
-          : { videoUrl: extractedUrl, parserConfig }
-
-        let response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload)
-        })
-
-        const responseText = await response.text()
-        console.log(`[转存] 解析API响应状态: ${response.status}, 内容长度: ${responseText.length}`)
-
-        if (!responseText.trim()) {
-          throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
-        }
-
-        if (!response.ok) {
-          const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
-          throw new Error(upstreamError
-            ? `解析接口调用失败 (${response.status}): ${upstreamError}`
-            : `解析接口调用失败 (HTTP ${response.status})`)
-        }
-
-        const parsedInfo = this.handleParseResponseText(responseText)
-        this.setParseCache(cacheKey, parsedInfo)
-        console.log(`[转存] 解析成功，获取到${parsedInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${parsedInfo.title}`)
-        return this.cloneParsedInfo(parsedInfo)
-      } catch (error) {
-        console.error('[转存] 视频解析错误:', error)
-        throw error
+      if (usedParser.id !== parserConfig.id) {
+        this.setParseCache(this.buildParseCacheKey(extractedUrl, usedParser), parsedInfo)
       }
+
+      console.log(`[转存] 解析成功，获取到${parsedInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}: ${parsedInfo.title}`)
+      return this.cloneParsedInfo(parsedInfo)
     })()
 
     this.parseInFlight.set(cacheKey, parsePromise)

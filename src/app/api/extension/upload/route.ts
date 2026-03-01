@@ -1,5 +1,10 @@
 import { NextRequest } from 'next/server'
-import { extensionJson, extensionOptionsResponse } from '../_shared'
+import {
+  ensureSupabaseEnabled,
+  extensionJson,
+  extensionOptionsResponse,
+  requireExtensionAuth,
+} from '../_shared'
 
 export const runtime = 'nodejs'
 
@@ -8,14 +13,26 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: NextRequest) {
+  const unavailable = ensureSupabaseEnabled()
+  if (unavailable) {
+    return unavailable
+  }
+
+  const auth = await requireExtensionAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const rawBody = await request.text()
+    const authorization = request.headers.get('authorization') || request.headers.get('Authorization') || ''
     const upstreamUrl = new URL('/api/proxy/webdav', request.url)
 
     const response = await fetch(upstreamUrl.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(authorization ? { Authorization: authorization } : {}),
       },
       body: rawBody,
     })

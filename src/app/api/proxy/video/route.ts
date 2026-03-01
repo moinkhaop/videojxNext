@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 /**
  * 视频代理API - 解决直链访问问题
  * 用于代理外部视频链接，添加必要的请求头以绕过某些限制
  */
 export async function GET(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const videoUrl = searchParams.get('url')
@@ -25,8 +31,6 @@ export async function GET(request: NextRequest) {
         error: '无效的视频URL'
       }, { status: 400 })
     }
-
-    console.log(`[视频代理] 开始代理视频: ${videoUrl.substring(0, 50)}...`)
 
     // 发送请求获取视频
     const videoResponse = await fetch(videoUrl, {
@@ -112,6 +116,11 @@ export async function GET(request: NextRequest) {
 
 // 处理HEAD请求（用于检查视频可用性）
 export async function HEAD(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const videoUrl = searchParams.get('url')
@@ -126,8 +135,6 @@ export async function HEAD(request: NextRequest) {
     } catch {
       return new NextResponse(null, { status: 400 })
     }
-
-    console.log(`[视频代理] 检查视频: ${videoUrl.substring(0, 50)}...`)
 
     // 发送HEAD请求检查视频可用性
     const videoResponse = await fetch(videoUrl, {

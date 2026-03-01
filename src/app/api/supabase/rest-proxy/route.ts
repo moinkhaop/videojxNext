@@ -1,3 +1,6 @@
+import { NextRequest } from 'next/server'
+import { requireRouteAuth } from '@/lib/api/route-auth'
+
 export const runtime = 'nodejs'
 
 type LegacyProxyRequest = {
@@ -76,7 +79,12 @@ const resolveMethod = (payload: ProxyRequest) => {
   return ALLOWED_METHODS.has(method) ? method : null
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   const env = getEnv()
   if (!env) {
     return makeError(500, { error: 'Missing Supabase envs' })

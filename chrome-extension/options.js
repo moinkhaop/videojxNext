@@ -39,10 +39,18 @@
     btnLogin: document.getElementById('btn-login'),
     btnRegister: document.getElementById('btn-register'),
     btnLogout: document.getElementById('btn-logout'),
+    accountConfigSyncMeta: document.getElementById('account-config-sync-meta'),
+    accountHistorySyncMeta: document.getElementById('account-history-sync-meta'),
 
     settingApiBaseUrl: document.getElementById('setting-api-base-url'),
     settingBatchConcurrency: document.getElementById('setting-batch-concurrency'),
+    settingBatchRetryCount: document.getElementById('setting-batch-retry-count'),
     settingHistoryLimit: document.getElementById('setting-history-limit'),
+    settingUploadFolderTemplate: document.getElementById('setting-upload-folder-template'),
+    settingUploadFileTemplate: document.getElementById('setting-upload-file-template'),
+    settingAdaptiveConcurrency: document.getElementById('setting-adaptive-concurrency'),
+    settingAutoResumeTasks: document.getElementById('setting-auto-resume-tasks'),
+    settingDedupeCloud: document.getElementById('setting-dedupe-cloud'),
     settingAutoSyncHistory: document.getElementById('setting-auto-sync-history'),
     btnSaveSettings: document.getElementById('btn-save-settings'),
 
@@ -68,13 +76,22 @@
     batchLimit: document.getElementById('batch-limit'),
     batchParser: document.getElementById('batch-parser'),
     batchWebdav: document.getElementById('batch-webdav'),
+    batchFilterMediaType: document.getElementById('batch-filter-media-type'),
+    batchFilterMinDuration: document.getElementById('batch-filter-min-duration'),
+    batchFilterStartDate: document.getElementById('batch-filter-start-date'),
+    batchFilterEndDate: document.getElementById('batch-filter-end-date'),
+    batchFilterExcludePinned: document.getElementById('batch-filter-exclude-pinned'),
     btnBatchStart: document.getElementById('btn-batch-start'),
+    btnBatchResume: document.getElementById('btn-batch-resume'),
     btnBatchRefresh: document.getElementById('btn-batch-refresh'),
     batchTaskList: document.getElementById('batch-task-list'),
 
     btnHistoryRefresh: document.getElementById('btn-history-refresh'),
     btnHistorySync: document.getElementById('btn-history-sync'),
+    btnHistoryExportJson: document.getElementById('btn-history-export-json'),
+    btnHistoryExportCsv: document.getElementById('btn-history-export-csv'),
     btnHistoryClear: document.getElementById('btn-history-clear'),
+    historyMetrics: document.getElementById('history-metrics'),
     historyList: document.getElementById('history-list')
   };
 
@@ -83,7 +100,20 @@
       apiBaseUrl: 'https://dyjx.ehhx.qzz.io',
       autoSyncHistory: true,
       batchConcurrency: 2,
-      historyLimit: 500
+      adaptiveConcurrency: true,
+      autoResumeTasks: true,
+      dedupeWithCloud: true,
+      batchRetryCount: 2,
+      historyLimit: 500,
+      uploadFolderTemplate: '{author}',
+      uploadFileTemplate: '{awemeId}_{title}',
+      batchFilters: {
+        mediaType: 'all',
+        minDurationSec: 0,
+        startDate: '',
+        endDate: '',
+        excludePinned: false
+      }
     },
     parsers: [],
     webdavServers: [],
@@ -134,6 +164,18 @@
     return (pageState.webdavServers || []).find((item) => item.id === id);
   }
 
+  function normalizeBatchFilters(input) {
+    const source = input && typeof input === 'object' ? input : {};
+    const mediaType = String(source.mediaType || 'all');
+    return {
+      mediaType: mediaType === 'video' || mediaType === 'image_album' ? mediaType : 'all',
+      minDurationSec: Math.max(0, Math.trunc(Number(source.minDurationSec || 0))),
+      startDate: /^\d{4}-\d{2}-\d{2}$/.test(String(source.startDate || '')) ? String(source.startDate) : '',
+      endDate: /^\d{4}-\d{2}-\d{2}$/.test(String(source.endDate || '')) ? String(source.endDate) : '',
+      excludePinned: Boolean(source.excludePinned)
+    };
+  }
+
   function switchTab(tab) {
     el.tabButtons.forEach((button) => {
       if (button.dataset.tab === tab) {
@@ -153,6 +195,19 @@
   }
 
   function renderAccount() {
+    const configTs = pageState && pageState.settings ? Number(pageState.settings.lastConfigSyncAt || 0) : 0;
+    if (el.accountConfigSyncMeta) {
+      el.accountConfigSyncMeta.textContent = `配置同步：${configTs ? formatDate(configTs) : '从未'}`;
+    }
+
+    const historyTs = pageState && pageState.settings ? Number(pageState.settings.lastHistorySyncAt || 0) : 0;
+    const historyOk = pageState && pageState.settings ? Number(pageState.settings.lastHistorySyncSuccess || 0) : 0;
+    const historyFail = pageState && pageState.settings ? Number(pageState.settings.lastHistorySyncFailed || 0) : 0;
+    if (el.accountHistorySyncMeta) {
+      const suffix = historyTs ? `（成功 ${historyOk} / 失败 ${historyFail}）` : '';
+      el.accountHistorySyncMeta.textContent = `历史同步：${historyTs ? formatDate(historyTs) : '从未'}${suffix}`;
+    }
+
     if (!pageState.auth.loggedIn) {
       el.accountStatus.className = 'notice';
       el.accountStatus.textContent = '未登录。登录后可同步历史记录到云端。';
@@ -167,7 +222,25 @@
   function renderSettings() {
     el.settingApiBaseUrl.value = pageState.settings.apiBaseUrl || '';
     el.settingBatchConcurrency.value = String(pageState.settings.batchConcurrency || 2);
+    if (el.settingBatchRetryCount) {
+      el.settingBatchRetryCount.value = String(pageState.settings.batchRetryCount || 2);
+    }
     el.settingHistoryLimit.value = String(pageState.settings.historyLimit || 500);
+    if (el.settingUploadFolderTemplate) {
+      el.settingUploadFolderTemplate.value = String(pageState.settings.uploadFolderTemplate || '{author}');
+    }
+    if (el.settingUploadFileTemplate) {
+      el.settingUploadFileTemplate.value = String(pageState.settings.uploadFileTemplate || '{awemeId}_{title}');
+    }
+    if (el.settingAdaptiveConcurrency) {
+      el.settingAdaptiveConcurrency.checked = pageState.settings.adaptiveConcurrency !== false;
+    }
+    if (el.settingAutoResumeTasks) {
+      el.settingAutoResumeTasks.checked = pageState.settings.autoResumeTasks !== false;
+    }
+    if (el.settingDedupeCloud) {
+      el.settingDedupeCloud.checked = pageState.settings.dedupeWithCloud !== false;
+    }
     el.settingAutoSyncHistory.checked = pageState.settings.autoSyncHistory !== false;
   }
 
@@ -334,6 +407,23 @@
       }
       el.batchWebdav.appendChild(option);
     });
+
+    const filters = normalizeBatchFilters(pageState.settings.batchFilters || {});
+    if (el.batchFilterMediaType) {
+      el.batchFilterMediaType.value = filters.mediaType;
+    }
+    if (el.batchFilterMinDuration) {
+      el.batchFilterMinDuration.value = String(filters.minDurationSec || 0);
+    }
+    if (el.batchFilterStartDate) {
+      el.batchFilterStartDate.value = filters.startDate || '';
+    }
+    if (el.batchFilterEndDate) {
+      el.batchFilterEndDate.value = filters.endDate || '';
+    }
+    if (el.batchFilterExcludePinned) {
+      el.batchFilterExcludePinned.checked = filters.excludePinned === true;
+    }
   }
 
   async function renderTasks() {
@@ -356,7 +446,9 @@
 
       const meta = document.createElement('div');
       meta.className = 'list-item-meta';
-      meta.textContent = `进度 ${task.progress || 0}% | 成功 ${task.success || 0} / 失败 ${task.failed || 0} / 总数 ${task.total || 0}`;
+      const skipped = Number(task.skipped || 0);
+      const skippedLabel = skipped > 0 ? ` / 跳过 ${skipped}` : '';
+      meta.textContent = `进度 ${task.progress || 0}% | 成功 ${task.success || 0} / 失败 ${task.failed || 0}${skippedLabel} / 总数 ${task.total || 0}`;
 
       const progress = document.createElement('div');
       progress.className = 'progress';
@@ -381,7 +473,7 @@
       const btnDelete = document.createElement('button');
       btnDelete.className = 'ghost';
       btnDelete.textContent = '移除任务';
-      btnDelete.disabled = task.status !== 'completed' && task.status !== 'failed';
+      btnDelete.disabled = task.status !== 'completed' && task.status !== 'failed' && task.status !== 'canceled';
       btnDelete.addEventListener('click', async () => {
         await send('TASK_DELETE', { id: task.id });
         await renderTasks();
@@ -398,8 +490,109 @@
     });
   }
 
+  function parseFailureReason(record) {
+    const detail = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+    const fields = [detail.error, detail.reason, detail.message, detail.detail];
+    for (const item of fields) {
+      const text = String(item || '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function renderHistoryMetrics(history) {
+    if (!el.historyMetrics) return;
+    const list = Array.isArray(history) ? history : [];
+    const total = list.length;
+    let success = 0;
+    let failed = 0;
+    let partial = 0;
+    const parserStats = new Map();
+    const reasonStats = new Map();
+
+    for (const record of list) {
+      const status = String(record && record.status ? record.status : '');
+      if (status === 'success') success += 1;
+      if (status === 'failed') failed += 1;
+      if (status === 'partial') partial += 1;
+
+      const detail = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+      const parser = String(detail.parserName || '-');
+      if (!parserStats.has(parser)) {
+        parserStats.set(parser, { total: 0, success: 0, failed: 0 });
+      }
+      const parserItem = parserStats.get(parser);
+      parserItem.total += 1;
+      if (status === 'success') parserItem.success += 1;
+      if (status === 'failed') parserItem.failed += 1;
+
+      if (status === 'failed') {
+        const reason = parseFailureReason(record);
+        const key = reason || '未知失败原因';
+        reasonStats.set(key, (reasonStats.get(key) || 0) + 1);
+      }
+    }
+
+    const parserLines = Array.from(parserStats.entries())
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 3)
+      .map(([name, data]) => {
+        const rate = data.total > 0 ? Math.round((data.success / data.total) * 100) : 0;
+        return `${name}: ${rate}% (${data.success}/${data.total})`;
+      });
+
+    const reasonLines = Array.from(reasonStats.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([name, count]) => `${name} (${count})`);
+
+    const parserText = parserLines.length > 0 ? parserLines.join(' ｜ ') : '暂无';
+    const reasonText = reasonLines.length > 0 ? reasonLines.join(' ｜ ') : '暂无';
+    el.historyMetrics.textContent = `总记录 ${total}｜成功 ${success}｜失败 ${failed}｜部分成功 ${partial}｜解析器成功率Top: ${parserText}｜失败原因Top: ${reasonText}`;
+  }
+
+  function toCsvValue(value) {
+    const text = String(value == null ? '' : value);
+    const escaped = text.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
+  function historyToCsv(history) {
+    const list = Array.isArray(history) ? history : [];
+    const header = ['id', 'type', 'title', 'status', 'createdAt', 'updatedAt', 'parserName', 'awemeId', 'sourceUrl', 'filePath', 'error'];
+    const rows = [header.join(',')];
+    for (const record of list) {
+      const detail = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+      rows.push([
+        toCsvValue(record.id || ''),
+        toCsvValue(record.type || ''),
+        toCsvValue(record.title || ''),
+        toCsvValue(record.status || ''),
+        toCsvValue(record.createdAt || ''),
+        toCsvValue(record.updatedAt || ''),
+        toCsvValue(detail.parserName || ''),
+        toCsvValue(detail.awemeId || ''),
+        toCsvValue(detail.sourceUrl || ''),
+        toCsvValue(detail.filePath || ''),
+        toCsvValue(detail.error || '')
+      ].join(','));
+    }
+    return rows.join('\n');
+  }
+
+  function downloadTextFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function renderHistory() {
     const history = await send('HISTORY_LIST');
+    renderHistoryMetrics(history);
 
     if (!history || history.length === 0) {
       el.historyList.innerHTML = '<div class="muted">暂无历史记录</div>';
@@ -594,8 +787,19 @@
       try {
         pageState.settings.apiBaseUrl = normalizeBaseUrl(el.settingApiBaseUrl.value);
         pageState.settings.batchConcurrency = Math.max(1, Math.min(5, Number(el.settingBatchConcurrency.value || 2)));
+        pageState.settings.batchRetryCount = Math.max(0, Math.min(5, Number(el.settingBatchRetryCount ? el.settingBatchRetryCount.value : 2)));
         pageState.settings.historyLimit = Math.max(100, Math.min(1000, Number(el.settingHistoryLimit.value || 500)));
+        pageState.settings.uploadFolderTemplate = el.settingUploadFolderTemplate
+          ? String(el.settingUploadFolderTemplate.value || '').trim() || '{author}'
+          : '{author}';
+        pageState.settings.uploadFileTemplate = el.settingUploadFileTemplate
+          ? String(el.settingUploadFileTemplate.value || '').trim() || '{awemeId}_{title}'
+          : '{awemeId}_{title}';
+        pageState.settings.adaptiveConcurrency = Boolean(el.settingAdaptiveConcurrency && el.settingAdaptiveConcurrency.checked);
+        pageState.settings.autoResumeTasks = Boolean(el.settingAutoResumeTasks && el.settingAutoResumeTasks.checked);
+        pageState.settings.dedupeWithCloud = Boolean(el.settingDedupeCloud && el.settingDedupeCloud.checked);
         pageState.settings.autoSyncHistory = Boolean(el.settingAutoSyncHistory.checked);
+        pageState.settings.batchFilters = normalizeBatchFilters(pageState.settings.batchFilters || {});
 
         await persistConfig('设置已保存');
       } catch (error) {
@@ -742,12 +946,19 @@
   }
 
   function bindBatchActions() {
-    el.btnBatchStart.addEventListener('click', async () => {
+      el.btnBatchStart.addEventListener('click', async () => {
       try {
         const userUrl = el.batchUserUrl.value.trim();
-        const limit = Math.max(1, Math.min(200, Number(el.batchLimit.value || 20)));
+        const limit = Math.max(0, Math.min(5000, Number(el.batchLimit.value || 20)));
         const parserId = el.batchParser.value;
         const webdavId = el.batchWebdav.value;
+        const filters = normalizeBatchFilters({
+          mediaType: el.batchFilterMediaType ? el.batchFilterMediaType.value : 'all',
+          minDurationSec: el.batchFilterMinDuration ? Number(el.batchFilterMinDuration.value || 0) : 0,
+          startDate: el.batchFilterStartDate ? el.batchFilterStartDate.value : '',
+          endDate: el.batchFilterEndDate ? el.batchFilterEndDate.value : '',
+          excludePinned: Boolean(el.batchFilterExcludePinned && el.batchFilterExcludePinned.checked)
+        });
 
         if (!userUrl) {
           throw new Error('请输入用户主页链接');
@@ -761,7 +972,15 @@
           userUrl,
           limit,
           parserId,
-          webdavId
+          webdavId,
+          filters
+        });
+
+        pageState.settings.batchFilters = filters;
+        await send('CONFIG_SAVE', {
+          settings: {
+            batchFilters: filters
+          }
         });
 
         setNotice(`批量任务已启动：${result.taskId}`, 'success');
@@ -778,6 +997,18 @@
         setNotice(error.message, 'error');
       }
     });
+
+    if (el.btnBatchResume) {
+      el.btnBatchResume.addEventListener('click', async () => {
+        try {
+          const result = await send('TASKS_RESUME');
+          await renderTasks();
+          setNotice(`已触发恢复，恢复任务数：${result.resumed || 0}`, 'success');
+        } catch (error) {
+          setNotice(error.message, 'error');
+        }
+      });
+    }
   }
 
   function bindHistoryActions() {
@@ -792,12 +1023,42 @@
     el.btnHistorySync.addEventListener('click', async () => {
       try {
         const result = await send('HISTORY_SYNC_ALL');
+        await loadState();
         await renderHistory();
-        setNotice(`同步完成：成功 ${result.success} 条，失败 ${result.failed} 条`, 'success');
+        setNotice(`云端历史同步完成：成功 ${result.success} 条，失败 ${result.failed} 条`, 'success');
       } catch (error) {
         setNotice(error.message, 'error');
       }
     });
+
+    if (el.btnHistoryExportJson) {
+      el.btnHistoryExportJson.addEventListener('click', async () => {
+        try {
+          const history = await send('HISTORY_LIST');
+          const now = new Date();
+          const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+          downloadTextFile(`videojx_history_${ts}.json`, JSON.stringify(history || [], null, 2), 'application/json');
+          setNotice('历史记录 JSON 导出成功', 'success');
+        } catch (error) {
+          setNotice(error.message, 'error');
+        }
+      });
+    }
+
+    if (el.btnHistoryExportCsv) {
+      el.btnHistoryExportCsv.addEventListener('click', async () => {
+        try {
+          const history = await send('HISTORY_LIST');
+          const csv = historyToCsv(history || []);
+          const now = new Date();
+          const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+          downloadTextFile(`videojx_history_${ts}.csv`, csv, 'text/csv;charset=utf-8');
+          setNotice('历史记录 CSV 导出成功', 'success');
+        } catch (error) {
+          setNotice(error.message, 'error');
+        }
+      });
+    }
 
     el.btnHistoryClear.addEventListener('click', async () => {
       try {

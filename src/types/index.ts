@@ -14,6 +14,51 @@ export enum SupportedPlatform {
   UNIVERSAL = 'universal'
 }
 
+export type ParserErrorClass =
+  | 'timeout'
+  | 'network'
+  | 'http4xx'
+  | 'http5xx'
+  | 'invalid_payload'
+  | 'unknown'
+
+export interface ParserAttemptResult {
+  parserId: string
+  parserName?: string
+  parserUrl?: string
+  success: boolean
+  latencyMs: number
+  status?: number
+  errorClass?: ParserErrorClass
+  errorMessage?: string
+  checkedAt: string
+  traceId?: string
+}
+
+export interface ParserHealthSnapshot {
+  parserId: string
+  parserName?: string
+  parserUrl?: string
+  successRate24h: number
+  recentAttempts: number
+  consecutiveFailures: number
+  cooldownUntil?: string
+  lastLatencyMs?: number
+  lastError?: string
+  updatedAt: string
+}
+
+export interface ParseExecutionTrace {
+  traceId: string
+  input: string
+  capability?: ParserCapability
+  selectedParserId?: string
+  attempts: ParserAttemptResult[]
+  startedAt: string
+  finishedAt?: string
+  success: boolean
+}
+
 // 视频解析API配置类型
 export interface VideoParserConfig {
   id: string;

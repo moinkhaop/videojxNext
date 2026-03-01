@@ -6,9 +6,25 @@
       apiBaseUrl: 'https://dyjx.ehhx.qzz.io',
       autoSyncHistory: true,
       batchConcurrency: 2,
+      adaptiveConcurrency: true,
+      autoResumeTasks: true,
+      dedupeWithCloud: true,
+      batchRetryCount: 2,
       historyLimit: 500,
+      uploadFolderTemplate: '{author}',
+      uploadFileTemplate: '{awemeId}_{title}',
+      batchFilters: {
+        mediaType: 'all',
+        minDurationSec: 0,
+        startDate: '',
+        endDate: '',
+        excludePinned: false
+      },
       configUpdatedAt: 0,
-      lastConfigSyncAt: 0
+      lastConfigSyncAt: 0,
+      lastHistorySyncAt: 0,
+      lastHistorySyncSuccess: 0,
+      lastHistorySyncFailed: 0
     },
     parsers: [
       {

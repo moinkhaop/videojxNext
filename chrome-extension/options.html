@@ -57,6 +57,10 @@
           <div class="row wrap">
             <button id="btn-config-sync" class="secondary">同步配置</button>
           </div>
+          <div class="col" style="gap: 6px; margin-top: 8px;">
+            <div id="account-config-sync-meta" class="muted">配置同步：-</div>
+            <div id="account-history-sync-meta" class="muted">历史同步：-</div>
+          </div>
         </div>
       </section>
 
@@ -76,14 +80,42 @@
               <input id="setting-batch-concurrency" type="number" min="1" max="5" />
             </div>
             <div class="col" style="flex: 1;">
+              <label class="small">失败重试次数 (0-5)</label>
+              <input id="setting-batch-retry-count" type="number" min="0" max="5" />
+            </div>
+            <div class="col" style="flex: 1;">
               <label class="small">历史记录上限 (100-1000)</label>
               <input id="setting-history-limit" type="number" min="100" max="1000" />
             </div>
           </div>
 
+          <div class="col">
+            <label class="small">上传目录模板</label>
+            <input id="setting-upload-folder-template" type="text" placeholder="{author}" />
+            <div class="muted">支持变量：{author} {date} {awemeId} {mediaType} {title}</div>
+          </div>
+
+          <div class="col">
+            <label class="small">上传文件名模板</label>
+            <input id="setting-upload-file-template" type="text" placeholder="{awemeId}_{title}" />
+            <div class="muted">图片为文件夹名，视频自动补扩展名。</div>
+          </div>
+
           <label class="row" style="gap: 8px;">
             <input id="setting-auto-sync-history" type="checkbox" style="width: auto;" />
             <span>登录后自动同步历史到云端</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-adaptive-concurrency" type="checkbox" style="width: auto;" />
+            <span>批量任务启用并发自适应</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-auto-resume-tasks" type="checkbox" style="width: auto;" />
+            <span>浏览器重启后自动恢复未完成任务</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-dedupe-cloud" type="checkbox" style="width: auto;" />
+            <span>批量任务启用云端历史去重（跨设备）</span>
           </label>
 
           <div class="row wrap">
@@ -182,8 +214,8 @@
 
           <div class="row" style="gap: 12px;">
             <div class="col" style="flex: 1;">
-              <label class="small">解析数量上限</label>
-              <input id="batch-limit" type="number" value="20" min="1" max="200" />
+              <label class="small">解析数量上限 (0=全部)</label>
+              <input id="batch-limit" type="number" value="20" min="0" max="5000" />
             </div>
             <div class="col" style="flex: 1;">
               <label class="small">解析器</label>
@@ -195,8 +227,40 @@
             </div>
           </div>
 
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">媒体类型过滤</label>
+              <select id="batch-filter-media-type">
+                <option value="all">全部</option>
+                <option value="video">仅视频</option>
+                <option value="image_album">仅图集</option>
+              </select>
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">最小时长(秒)</label>
+              <input id="batch-filter-min-duration" type="number" min="0" value="0" />
+            </div>
+          </div>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">开始日期</label>
+              <input id="batch-filter-start-date" type="date" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">结束日期</label>
+              <input id="batch-filter-end-date" type="date" />
+            </div>
+          </div>
+
+          <label class="row" style="gap: 8px;">
+            <input id="batch-filter-exclude-pinned" type="checkbox" style="width: auto;" />
+            <span>排除置顶内容</span>
+          </label>
+
           <div class="row wrap">
             <button id="btn-batch-start" class="primary">开始批量上传</button>
+            <button id="btn-batch-resume" class="secondary">恢复未完成任务</button>
             <button id="btn-batch-refresh" class="ghost">刷新任务列表</button>
           </div>
 
@@ -211,9 +275,12 @@
           <div class="row wrap">
             <button id="btn-history-refresh" class="ghost">刷新</button>
             <button id="btn-history-sync" class="secondary">同步到云端</button>
+            <button id="btn-history-export-json" class="secondary">导出JSON</button>
+            <button id="btn-history-export-csv" class="secondary">导出CSV</button>
             <button id="btn-history-clear" class="danger">清空本地历史</button>
           </div>
 
+          <div id="history-metrics" class="notice">统计加载中...</div>
           <div id="history-list" class="list"></div>
         </div>
       </section>

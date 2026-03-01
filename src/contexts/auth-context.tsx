@@ -6,6 +6,23 @@ import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supa
 import { assertSupabaseEnabled, SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { createClient as createSupabaseClient } from '@/lib/supabase/client'
 
+const ACTIVE_USER_STORAGE_KEY = 'dyjx_active_user_id'
+
+const setActiveUserStorageScope = (userId: string | null) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    if (userId) {
+      window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, userId)
+      return
+    }
+    window.localStorage.removeItem(ACTIVE_USER_STORAGE_KEY)
+  } catch {
+  }
+}
+
 const clearLegacySupabaseCookies = () => {
   if (typeof document === 'undefined') {
     return
@@ -63,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setUser(currentUser)
         setSession(currentSession)
+        setActiveUserStorageScope(currentUser?.id ?? null)
       } catch (error) {
         console.error('初始化认证状态失败:', error)
       } finally {
@@ -80,9 +98,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const currentUser = await getCurrentUser()
         setUser(currentUser)
         setSession(session)
+        setActiveUserStorageScope(currentUser?.id ?? null)
       } else if (event === 'SIGNED_OUT') {
         setUser(null)
         setSession(null)
+        setActiveUserStorageScope(null)
       }
     })
 
@@ -90,6 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription?.unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    if (!SUPABASE_ENABLED || loading) {
+      return
+    }
+    setActiveUserStorageScope(user?.id ?? null)
+  }, [loading, user?.id])
 
   const handleSignIn = async (email: string, password: string) => {
     assertSupabaseEnabled()
@@ -104,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(data.user)
       setSession(data.session)
+      setActiveUserStorageScope(data.user?.id ?? null)
     } catch (error) {
       console.error('登录失败:', error)
       throw error
@@ -135,6 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setUser(null)
       setSession(null)
+      setActiveUserStorageScope(null)
 
       const supabase = createSupabaseClient()
       const { error } = await supabase.auth.signOut()
@@ -159,6 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const currentUser = await getCurrentUser()
       setUser(currentUser)
+      setActiveUserStorageScope(currentUser?.id ?? null)
     } catch (error) {
       console.error('刷新用户信息失败:', error)
     }

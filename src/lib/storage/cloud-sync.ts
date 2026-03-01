@@ -57,21 +57,6 @@ export async function hydrateFromSupabase() {
       }
     })
 
-    // Seed remote config when the remote is empty but local has data (first-time sync on a new Supabase project).
-    const hasAnyRemote =
-      typeof (remoteConfig as any).theme !== 'undefined' ||
-      Array.isArray((remoteConfig as any).parsers) ||
-      Array.isArray((remoteConfig as any).webdavServers)
-
-    if (!hasAnyRemote) {
-      const current = ConfigManager.getAppConfig()
-      const payload = {
-        ...current,
-        parsers: ConfigManager.getParsers(),
-        webdavServers: ConfigManager.getWebDAVServers(),
-      }
-      await safeCall(() => remote.updateUserConfig(payload))
-    }
   }
 
   if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {

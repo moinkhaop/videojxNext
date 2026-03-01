@@ -14,6 +14,7 @@
           <div class="col" style="gap: 2px;">
             <div class="popup-title">VideoJX</div>
             <div id="auth-status" class="muted">登录状态检查中...</div>
+            <div id="sync-status" class="muted">同步状态加载中...</div>
           </div>
         </div>
         <button id="open-options" class="ghost icon-btn" title="设置">设置</button>
@@ -23,17 +24,18 @@
         <h3>快速操作</h3>
 
         <div class="grid-actions">
-          <button id="btn-get-share" class="primary">获取链接并复制</button>
+          <button id="btn-smart-upload" class="primary">智能上传</button>
+          <button id="btn-get-share" class="primary">取链并复制</button>
           <button id="btn-fill-active" class="ghost">读取地址栏</button>
           <button id="btn-paste-clipboard" class="ghost">粘贴剪贴板</button>
           <button id="btn-check-session" class="ghost">刷新登录态</button>
         </div>
 
-        <div class="muted">推荐页优先用“获取链接并复制”，不依赖抖音弹窗复制。</div>
+        <div id="page-kind" class="muted">页面：-</div>
 
         <div class="col">
           <label class="small">视频链接</label>
-          <textarea id="video-url" wrap="soft" spellcheck="false" placeholder="可粘贴分享文案/链接，或直接用上方按钮自动获取。"></textarea>
+          <textarea id="video-url" wrap="soft" spellcheck="false" placeholder="粘贴分享文案或链接"></textarea>
         </div>
 
         <div id="share-meta" class="share-meta hidden">
@@ -77,13 +79,22 @@
         </div>
 
         <div class="row wrap" style="justify-content: space-between;">
-          <button id="btn-parse" class="secondary" style="flex: 1;">解析预览</button>
+          <button id="btn-parse" class="secondary" style="flex: 1;">解析并全屏预览</button>
           <button id="btn-upload" class="primary" style="flex: 1;">直接上传</button>
         </div>
       </div>
 
-      <div class="card col">
-        <h3>结果</h3>
+      <div class="card col preview-card">
+        <h3>预览与结果</h3>
+        <div id="preview-empty" class="muted">点击“解析并全屏预览”后，会在当前页面展示全屏预览。</div>
+        <div id="preview-panel" class="preview-panel hidden">
+          <div class="preview-media-wrap">
+            <video id="preview-video" class="preview-video hidden" controls preload="metadata" playsinline muted></video>
+            <img id="preview-image" class="preview-image hidden" alt="预览图" />
+          </div>
+          <div id="preview-info" class="preview-info"></div>
+          <a id="preview-open-link" class="preview-open-link hidden" target="_blank" rel="noreferrer">新窗口打开原始链接</a>
+        </div>
         <div id="result-box" class="notice">尚未执行任务</div>
       </div>
     </div>

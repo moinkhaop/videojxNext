@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -33,11 +33,13 @@ import {
   BatchInputMode,
   ExtendedBatchTask,
   ParserCapability,
-  SupportedPlatform
+  SupportedPlatform,
+  ParserErrorClass
 } from '@/types'
 import { ConfigManager, HistoryManager } from '@/lib/storage'
 import { BatchPoolState, ConversionService } from '@/lib/conversion'
 import { ClipboardDetector } from '@/lib/clipboard'
+import { classifyParserFailure } from '@/lib/parser-health'
 import Link from 'next/link'
 
 export default function BatchPage() {
@@ -220,6 +222,31 @@ export default function BatchPage() {
     setVideoUrls('')
   }
 
+  const parsedInputUrls = useMemo(
+    () => ConversionService.parseVideoUrls(videoUrls.trim()),
+    [videoUrls]
+  )
+  const uniqueInputUrls = useMemo(
+    () => Array.from(new Set(parsedInputUrls)),
+    [parsedInputUrls]
+  )
+  const urlCount = parsedInputUrls.length
+  const dedupedUrlCount = uniqueInputUrls.length
+  const duplicateUrlCount = Math.max(0, urlCount - dedupedUrlCount)
+
+  const failedTaskCount = currentBatch?.tasks.filter(t => t.status === TaskStatus.FAILED).length ?? 0
+  const failureAggregation = useMemo(() => {
+    const result: Partial<Record<ParserErrorClass, number>> = {}
+    if (!currentBatch) return result
+
+    for (const task of currentBatch.tasks) {
+      if (task.status !== TaskStatus.FAILED || !task.error) continue
+      const errorClass = classifyParserFailure({ message: task.error })
+      result[errorClass] = (result[errorClass] ?? 0) + 1
+    }
+    return result
+  }, [currentBatch])
+
   const handleStartBatch = async () => {
     if (!videoUrls.trim()) {
       alert('请输入视频链接或抖音用户主页链接')
@@ -271,19 +298,23 @@ export default function BatchPage() {
     } else {
       // 普通批量模式
       const urls = ConversionService.parseVideoUrls(videoUrls.trim())
+      const uniqueUrls = Array.from(new Set(urls))
       if (urls.length === 0) {
         alert('没有找到有效的视频链接')
         setIsProcessing(false)
         return
+      }
+      if (uniqueUrls.length < urls.length) {
+        setPoolHint(`已自动去重：输入 ${urls.length} 条，实际执行 ${uniqueUrls.length} 条`)
       }
 
       batchTask = {
         id: ConversionService.generateBatchId(),
         name: `批量转存任务 - ${new Date().toLocaleString()}`,
         status: TaskStatus.PENDING,
-        totalTasks: urls.length,
+        totalTasks: uniqueUrls.length,
         completedTasks: 0,
-        tasks: urls.map(url => ({
+        tasks: uniqueUrls.map(url => ({
           id: ConversionService.generateTaskId(),
           videoUrl: url,
           status: TaskStatus.PENDING,
@@ -361,6 +392,96 @@ export default function BatchPage() {
     }
   }
 
+  const handleRetryFailedTasks = async () => {
+    if (!currentBatch) return
+    if (isProcessing) return
+
+    const failedTasks = currentBatch.tasks.filter(task => task.status === TaskStatus.FAILED)
+    if (failedTasks.length === 0) {
+      alert('当前没有失败任务可重试')
+      return
+    }
+
+    setIsProcessing(true)
+    setIsPaused(false)
+    setOverallProgress(0)
+    setPoolHint(`正在重试失败任务（${failedTasks.length} 条）`)
+
+    const retryBatch: ExtendedBatchTask = {
+      ...currentBatch,
+      id: ConversionService.generateBatchId(),
+      name: `${currentBatch.name} - 失败重试`,
+      status: TaskStatus.PENDING,
+      totalTasks: failedTasks.length,
+      completedTasks: 0,
+      completedAt: undefined,
+      inputMode: BatchInputMode.NORMAL,
+      tasks: failedTasks.map(task => ({
+        ...task,
+        status: TaskStatus.PENDING,
+        error: undefined,
+        completedAt: undefined,
+        uploadResult: undefined,
+      })),
+    }
+
+    try {
+      const retryResult = await ConversionService.convertExtendedBatch(
+        retryBatch,
+        (progress, currentTask) => {
+          setOverallProgress(progress)
+          if (!currentTask) return
+          setCurrentBatch(prev => {
+            if (!prev) return null
+            const updatedTasks = prev.tasks.map(task => task.id === currentTask.id ? currentTask : task)
+            return {
+              ...prev,
+              tasks: updatedTasks,
+              completedTasks: updatedTasks.filter(task => task.status === TaskStatus.SUCCESS).length,
+            }
+          })
+        },
+        {
+          onPoolState: (state) => {
+            setPoolState(state)
+            if (state.event === 'scale_down') {
+              setPoolHint(`重试中自动降并发到 ${state.currentConcurrency}`)
+            } else if (state.event === 'scale_up') {
+              setPoolHint(`重试中自动恢复并发到 ${state.currentConcurrency}`)
+            }
+          },
+        }
+      )
+
+      const retryMap = new Map(retryResult.tasks.map(task => [task.id, task]))
+      setCurrentBatch(prev => {
+        if (!prev) return null
+        const mergedTasks = prev.tasks.map(task => retryMap.get(task.id) || task)
+        const completed = mergedTasks.filter(task => task.status === TaskStatus.SUCCESS).length
+        const failed = mergedTasks.filter(task => task.status === TaskStatus.FAILED).length
+        return {
+          ...prev,
+          tasks: mergedTasks,
+          completedTasks: completed,
+          completedAt: new Date(),
+          status: failed > 0 ? TaskStatus.FAILED : TaskStatus.SUCCESS,
+        }
+      })
+
+      HistoryManager.addRecord({
+        id: ConversionService.generateTaskId(),
+        type: 'batch',
+        task: retryResult,
+        createdAt: new Date(),
+      })
+    } catch (error) {
+      console.error('重试失败任务时出错:', error)
+      alert(`重试失败任务出错: ${error instanceof Error ? error.message : '未知错误'}`)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   const resetBatch = () => {
     setVideoUrls('')
     setCurrentBatch(null)
@@ -419,7 +540,22 @@ export default function BatchPage() {
     }
   }
 
-  const urlCount = ConversionService.parseVideoUrls(videoUrls.trim()).length
+  const getErrorClassLabel = (errorClass: ParserErrorClass) => {
+    switch (errorClass) {
+      case 'timeout':
+        return '超时'
+      case 'network':
+        return '网络'
+      case 'http4xx':
+        return '上游4xx'
+      case 'http5xx':
+        return '上游5xx'
+      case 'invalid_payload':
+        return '响应异常'
+      default:
+        return '未知'
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
@@ -460,7 +596,9 @@ export default function BatchPage() {
               <label className="text-sm font-medium mb-2 block">
                 输入内容 {urlCount > 0 && (
                   <span className="text-muted-foreground">
-                    ({urlCount} 个视频)
+                    ({dedupedUrlCount} 个有效链接
+                    {duplicateUrlCount > 0 ? `，${duplicateUrlCount} 个重复` : ''}
+                    )
                     {inputMode === BatchInputMode.DOUYIN_USER && (
                       <Badge variant="secondary" className="ml-2 text-xs">
                         抖音用户模式
@@ -623,14 +761,14 @@ https://www.douyin.com/user/MS4w...
               {!isProcessing ? (
                 <Button
                   onClick={handleStartBatch}
-                  disabled={urlCount === 0 || !selectedParser || !selectedWebDAV}
+                  disabled={dedupedUrlCount === 0 || !selectedParser || !selectedWebDAV}
                   className="w-full h-12 text-base font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all"
                   size="lg"
                 >
                   <Play className="w-5 h-5 mr-2" />
                   {inputMode === BatchInputMode.DOUYIN_USER
                     ? `解析抖音用户并批量转存 (${videoLimit}个视频)`
-                    : `开始批量转存 (${urlCount}个链接)`
+                    : `开始批量转存 (${dedupedUrlCount}个链接)`
                   }
                 </Button>
               ) : (
@@ -722,6 +860,33 @@ https://www.douyin.com/user/MS4w...
                 </Card>
               </div>
 
+              {failedTaskCount > 0 && (
+                <Card className="border-none shadow-md bg-gradient-to-r from-rose-500/10 to-orange-500/10">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900 dark:text-white">失败归因</div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                          共 {failedTaskCount} 个失败任务，按错误类型统计
+                        </div>
+                      </div>
+                      {!isProcessing && (
+                        <Button size="sm" onClick={handleRetryFailedTasks}>
+                          重试失败任务 ({failedTaskCount})
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {Object.entries(failureAggregation).map(([errorClass, count]) => (
+                        <Badge key={errorClass} variant="outline">
+                          {getErrorClassLabel(errorClass as ParserErrorClass)}: {count}
+                        </Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {poolState && (
                 <Card className="border-none shadow-md bg-gradient-to-r from-indigo-500/10 to-cyan-500/10">
                   <CardContent className="p-4">
@@ -759,9 +924,16 @@ https://www.douyin.com/user/MS4w...
                         </CardDescription>
                       </div>
                     </div>
-                    <Badge variant="outline" className="text-xs">
-                      {isProcessing ? '处理中' : '已完成'}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      {!isProcessing && failedTaskCount > 0 && (
+                        <Button size="sm" variant="outline" onClick={handleRetryFailedTasks}>
+                          重试失败 ({failedTaskCount})
+                        </Button>
+                      )}
+                      <Badge variant="outline" className="text-xs">
+                        {isProcessing ? '处理中' : '已完成'}
+                      </Badge>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>

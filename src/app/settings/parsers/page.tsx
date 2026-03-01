@@ -22,9 +22,10 @@ import {
   Settings,
   TestTube
 } from 'lucide-react'
-import { VideoParserConfig, ParserCapability } from '@/types'
+import { VideoParserConfig, ParserCapability, ParserHealthSnapshot } from '@/types'
 import { ConfigManager } from '@/lib/storage'
 import { apiCapabilityDetector } from '@/lib/capability-detector'
+import { getAllParserHealthSnapshots, recordParserAttempt } from '@/lib/parser-health'
 
 export default function ParsersConfigPage() {
   const [configs, setConfigs] = useState<VideoParserConfig[]>([])
@@ -32,7 +33,9 @@ export default function ParsersConfigPage() {
   const [isNewConfig, setIsNewConfig] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [healthCheckingId, setHealthCheckingId] = useState<string | null>(null)
+  const [matrixChecking, setMatrixChecking] = useState(false)
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({})
+  const [healthSnapshots, setHealthSnapshots] = useState<Record<string, ParserHealthSnapshot>>({})
   const [formData, setFormData] = useState({
     name: '',
     apiUrl: '',
@@ -52,6 +55,7 @@ export default function ParsersConfigPage() {
   const loadConfigs = () => {
     const parsers = ConfigManager.getParsers()
     setConfigs(parsers)
+    setHealthSnapshots(getAllParserHealthSnapshots())
   }
 
   const handleNewConfig = () => {
@@ -277,6 +281,7 @@ export default function ParsersConfigPage() {
     setHealthCheckingId(config.id)
 
     try {
+      const started = Date.now()
       const response = await fetch('/api/health/parser', {
         method: 'POST',
         headers: {
@@ -292,17 +297,44 @@ export default function ParsersConfigPage() {
 
       if (!result?.success || !result?.data) {
         alert(`连通性检测失败：${result?.error || '未知错误'}`)
+        recordParserAttempt({
+          parserId: config.id,
+          parserName: config.name,
+          parserUrl: config.apiUrl,
+          success: false,
+          status: response.status,
+          latencyMs: Date.now() - started,
+          checkedAt: new Date().toISOString(),
+          errorClass: 'unknown',
+          errorMessage: result?.error || '未知错误',
+        })
+        setHealthSnapshots(getAllParserHealthSnapshots())
         return
       }
 
       const health = result.data
+      recordParserAttempt({
+        parserId: config.id,
+        parserName: config.name,
+        parserUrl: config.apiUrl,
+        success: Boolean(health.healthy),
+        status: Number(health.status),
+        latencyMs: Number(health.latencyMs) || (Date.now() - started),
+        checkedAt: new Date().toISOString(),
+        errorClass: health.errorClass,
+        errorMessage: health.healthy ? undefined : (health.normalizedMessage || health.message),
+        traceId: health.traceId,
+      })
+      setHealthSnapshots(getAllParserHealthSnapshots())
+
       const summary = [
         `检测结果：${health.healthy ? '健康' : '异常'}`,
         `HTTP状态：${health.status}`,
         `延迟：${health.latencyMs}ms`,
         `连通性：${health.reachable ? '可达' : '不可达'}`,
         `逻辑成功：${health.logicalSuccess ? '是' : '否'}`,
-        `说明：${health.message}`
+        `错误类型：${health.errorClass || '无'}`,
+        `说明：${health.normalizedMessage || health.message}`
       ].join('\n')
 
       alert(summary)
@@ -311,6 +343,66 @@ export default function ParsersConfigPage() {
     } finally {
       setHealthCheckingId(null)
     }
+  }
+
+  const handleRefreshHealthMatrix = async () => {
+    if (configs.length === 0) {
+      alert('没有可检测的解析器')
+      return
+    }
+
+    setMatrixChecking(true)
+    try {
+      const response = await fetch('/api/health/parser/matrix', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          parserConfigs: configs,
+          sampleUrl: 'https://www.douyin.com/video/0',
+        }),
+      })
+
+      const result = await response.json()
+      if (!result?.success || !result?.data?.items) {
+        alert(`批量健康检测失败：${result?.error || '未知错误'}`)
+        return
+      }
+
+      const items = result.data.items as Array<any>
+      for (const item of items) {
+        if (!item?.parserId) continue
+        recordParserAttempt({
+          parserId: item.parserId,
+          parserName: item.parserName,
+          parserUrl: item.parserUrl,
+          success: Boolean(item.healthy),
+          status: Number(item.status),
+          latencyMs: Number(item.latencyMs) || 0,
+          checkedAt: item.checkedAt || new Date().toISOString(),
+          errorClass: item.errorClass,
+          errorMessage: item.healthy ? undefined : (item.normalizedMessage || item.message),
+          traceId: item.traceId,
+        })
+      }
+      setHealthSnapshots(getAllParserHealthSnapshots())
+
+      const healthyCount = items.filter(item => item.healthy).length
+      alert(`批量健康检测完成：${healthyCount}/${items.length} 个解析器健康`)
+    } catch (error) {
+      alert(`批量健康检测出错：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setMatrixChecking(false)
+    }
+  }
+
+  const getHealthTone = (snapshot?: ParserHealthSnapshot) => {
+    if (!snapshot) return 'text-gray-500'
+    if (snapshot.cooldownUntil && new Date(snapshot.cooldownUntil).getTime() > Date.now()) return 'text-red-600'
+    if (snapshot.successRate24h >= 0.8) return 'text-emerald-600'
+    if (snapshot.successRate24h >= 0.5) return 'text-amber-600'
+    return 'text-red-600'
   }
 
   const toggleApiKeyVisibility = (id: string) => {
@@ -359,6 +451,63 @@ export default function ParsersConfigPage() {
             )}
           </div>
         </div>
+
+        <Card className="mb-6 border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-lg font-bold">解析器健康状态</CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  成功率基于最近 24 小时解析尝试，连续失败会触发冷却
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefreshHealthMatrix}
+                disabled={matrixChecking || configs.length === 0}
+              >
+                {matrixChecking ? (
+                  <><Settings className="w-4 h-4 mr-2 animate-spin" />检测中</>
+                ) : (
+                  <><CheckCircle className="w-4 h-4 mr-2" />批量刷新</>
+                )}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {configs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">暂无解析器配置</p>
+            ) : (
+              <div className="space-y-2">
+                {configs.map(config => {
+                  const snapshot = healthSnapshots[config.id]
+                  const cooldownLeftMs = snapshot?.cooldownUntil
+                    ? Math.max(0, new Date(snapshot.cooldownUntil).getTime() - Date.now())
+                    : 0
+                  const cooldownMinutes = Math.ceil(cooldownLeftMs / 60000)
+                  return (
+                    <div key={`health-${config.id}`} className="flex items-center justify-between p-3 rounded-lg border bg-background/40">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate">{config.name}</div>
+                        <div className={`text-xs ${getHealthTone(snapshot)}`}>
+                          {snapshot
+                            ? `成功率 ${(snapshot.successRate24h * 100).toFixed(0)}% · 连续失败 ${snapshot.consecutiveFailures} · 最近延迟 ${snapshot.lastLatencyMs ?? 0}ms`
+                            : '暂无健康数据'}
+                        </div>
+                      </div>
+                      {cooldownLeftMs > 0 && (
+                        <Badge variant="outline" className="text-red-600 border-red-300">
+                          冷却中 {cooldownMinutes} 分钟
+                        </Badge>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* 新建/编辑配置表单 */}
         {(isNewConfig || editingConfig) && (
@@ -574,6 +723,10 @@ export default function ParsersConfigPage() {
               <div className="space-y-2">
                 {configs.map((config) => {
                   const isBuiltin = ConfigManager.isBuiltinParser(config.id)
+                  const snapshot = healthSnapshots[config.id]
+                  const isCoolingDown = Boolean(
+                    snapshot?.cooldownUntil && new Date(snapshot.cooldownUntil).getTime() > Date.now()
+                  )
                   return (
                     <div
                       key={config.id}
@@ -611,11 +764,29 @@ export default function ParsersConfigPage() {
                                 批量处理
                               </Badge>
                             )}
+                            {snapshot && (
+                              <Badge
+                                variant="outline"
+                                className={`h-5 px-1.5 text-xs ${
+                                  isCoolingDown
+                                    ? 'bg-red-50 text-red-600 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800'
+                                    : 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800'
+                                }`}
+                              >
+                                成功率 {(snapshot.successRate24h * 100).toFixed(0)}%
+                              </Badge>
+                            )}
                           </div>
                           {!isBuiltin && (
                             <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                               <p className="truncate">{config.apiUrl}</p>
                               <p>API密钥: {config.apiKey ? '已配置' : '未设置'}</p>
+                              {snapshot && (
+                                <p>
+                                  连续失败: {snapshot.consecutiveFailures}
+                                  {isCoolingDown ? '（冷却中）' : ''}
+                                </p>
+                              )}
                             </div>
                           )}
                           {/* {isBuiltin && (

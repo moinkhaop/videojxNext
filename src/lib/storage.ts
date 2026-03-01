@@ -17,6 +17,8 @@ export function runWithCloudSyncSuppressed<T>(fn: () => T): T {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
 const builtinEdgeOneParserUrl = process.env.NEXT_PUBLIC_EDGEONE_PARSER_API_URL?.trim() || ''
+const ACTIVE_USER_STORAGE_KEY = 'dyjx_active_user_id'
+const GUEST_STORAGE_SCOPE = 'guest'
 
 const createUuid = (): string => {
   const uuid = (globalThis as any)?.crypto?.randomUUID
@@ -29,6 +31,71 @@ const createUuid = (): string => {
   bytes[8] = (bytes[8] & 0x3f) | 0x80
   const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function resolveStorageScope() {
+  if (typeof window === 'undefined') {
+    return GUEST_STORAGE_SCOPE
+  }
+
+  try {
+    const activeUserId = window.localStorage.getItem(ACTIVE_USER_STORAGE_KEY)
+    if (isUuid(activeUserId)) {
+      return `user:${activeUserId}`
+    }
+  } catch {
+  }
+
+  return GUEST_STORAGE_SCOPE
+}
+
+function getScopedStorageKey(baseKey: string, scope = resolveStorageScope()) {
+  return `${baseKey}::${scope}`
+}
+
+function getScopedStorageItem(baseKey: string): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const scope = resolveStorageScope()
+  const scopedKey = getScopedStorageKey(baseKey, scope)
+
+  const scopedValue = window.localStorage.getItem(scopedKey)
+  if (scopedValue !== null) {
+    return scopedValue
+  }
+
+  // 兼容旧版本未分桶数据，仅在游客桶下读取一次。
+  if (scope === GUEST_STORAGE_SCOPE) {
+    return window.localStorage.getItem(baseKey)
+  }
+
+  return null
+}
+
+function setScopedStorageItem(baseKey: string, value: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const scope = resolveStorageScope()
+  const scopedKey = getScopedStorageKey(baseKey, scope)
+  window.localStorage.setItem(scopedKey, value)
+}
+
+function removeScopedStorageItem(baseKey: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const scope = resolveStorageScope()
+  const scopedKey = getScopedStorageKey(baseKey, scope)
+  window.localStorage.removeItem(scopedKey)
+
+  if (scope === GUEST_STORAGE_SCOPE) {
+    window.localStorage.removeItem(baseKey)
+  }
 }
 
 const scheduleConfigSyncToSupabase = () => {
@@ -161,7 +228,7 @@ export class ConfigManager {
     }
 
     try {
-      const stored = localStorage.getItem(this.CONFIG_KEY)
+      const stored = getScopedStorageItem(this.CONFIG_KEY)
       if (stored) {
         return { ...defaultConfig, ...JSON.parse(stored) }
       }
@@ -175,7 +242,7 @@ export class ConfigManager {
   // 保存应用配置
   static saveAppConfig(config: AppConfig): void {
     try {
-      localStorage.setItem(this.CONFIG_KEY, JSON.stringify(config))
+      setScopedStorageItem(this.CONFIG_KEY, JSON.stringify(config))
     } catch (error) {
       console.error('保存应用配置失败:', error)
     }
@@ -188,7 +255,7 @@ export class ConfigManager {
     const builtinParsers = this.getDefaultParsers()
 
     try {
-      const stored = localStorage.getItem(this.PARSERS_KEY)
+      const stored = getScopedStorageItem(this.PARSERS_KEY)
       if (stored) {
         const userParsers = JSON.parse(stored)
         // 解密敏感信息
@@ -384,7 +451,7 @@ export class ConfigManager {
         ...parser,
         apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
       }))
-      localStorage.setItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
+      setScopedStorageItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
     } catch (error) {
       console.error('保存解析器配置失败:', error)
     }
@@ -397,7 +464,7 @@ export class ConfigManager {
     const builtinServers = this.getDefaultWebDAVServers()
 
     try {
-      const stored = localStorage.getItem(this.WEBDAV_KEY)
+      const stored = getScopedStorageItem(this.WEBDAV_KEY)
       if (stored) {
         const userServers = JSON.parse(stored)
         // 解密敏感信息
@@ -456,7 +523,7 @@ export class ConfigManager {
         ...server,
         password: StorageEncryption.encrypt(server.password)
       }))
-      localStorage.setItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
+      setScopedStorageItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
     } catch (error) {
       console.error('保存WebDAV配置失败:', error)
     }
@@ -517,7 +584,7 @@ export class ConfigManager {
   // 获取仅用户添加的解析器配置（不包括内置配置）
   private static getUserParsers(): VideoParserConfig[] {
     try {
-      const stored = localStorage.getItem(this.PARSERS_KEY)
+      const stored = getScopedStorageItem(this.PARSERS_KEY)
       if (stored) {
         const parsers = JSON.parse(stored)
         return parsers.map((parser: VideoParserConfig) => ({
@@ -538,7 +605,7 @@ export class ConfigManager {
         ...parser,
         apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
       }))
-      localStorage.setItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
+      setScopedStorageItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
     } catch (error) {
       console.error('保存用户解析器配置失败:', error)
     }
@@ -612,7 +679,7 @@ export class ConfigManager {
   // 获取仅用户添加的WebDAV服务器配置（不包括内置配置）
   private static getUserWebDAVServers(): WebDAVConfig[] {
     try {
-      const stored = localStorage.getItem(this.WEBDAV_KEY)
+      const stored = getScopedStorageItem(this.WEBDAV_KEY)
       if (stored) {
         const servers = JSON.parse(stored)
         return servers.map((server: WebDAVConfig) => ({
@@ -633,7 +700,7 @@ export class ConfigManager {
         ...server,
         password: StorageEncryption.encrypt(server.password)
       }))
-      localStorage.setItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
+      setScopedStorageItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
     } catch (error) {
       console.error('保存用户WebDAV配置失败:', error)
     }
@@ -692,7 +759,7 @@ export class CleanupConfigManager {
     }
 
     try {
-      const stored = localStorage.getItem(this.CLEANUP_CONFIG_KEY)
+      const stored = getScopedStorageItem(this.CLEANUP_CONFIG_KEY)
       if (stored) {
         return { ...defaultConfig, ...JSON.parse(stored) }
       }
@@ -706,7 +773,7 @@ export class CleanupConfigManager {
   // 保存清理配置
   static saveCleanupConfig(config: CleanupConfig): void {
     try {
-      localStorage.setItem(this.CLEANUP_CONFIG_KEY, JSON.stringify(config))
+      setScopedStorageItem(this.CLEANUP_CONFIG_KEY, JSON.stringify(config))
     } catch (error) {
       console.error('保存清理配置失败:', error)
     }
@@ -727,7 +794,7 @@ export class CleanupLogManager {
   // 获取清理日志
   static getCleanupLogs(): CleanupLogEntry[] {
     try {
-      const stored = localStorage.getItem(this.CLEANUP_LOGS_KEY)
+      const stored = getScopedStorageItem(this.CLEANUP_LOGS_KEY)
       if (stored) {
         const logs = JSON.parse(stored)
         // 转换时间戳为Date对象
@@ -754,7 +821,7 @@ export class CleanupLogManager {
         logs.splice(maxLogs)
       }
       
-      localStorage.setItem(this.CLEANUP_LOGS_KEY, JSON.stringify(logs))
+      setScopedStorageItem(this.CLEANUP_LOGS_KEY, JSON.stringify(logs))
     } catch (error) {
       console.error('保存清理日志失败:', error)
     }
@@ -763,7 +830,7 @@ export class CleanupLogManager {
   // 清空清理日志
   static clearCleanupLogs(): void {
     try {
-      localStorage.removeItem(this.CLEANUP_LOGS_KEY)
+      removeScopedStorageItem(this.CLEANUP_LOGS_KEY)
     } catch (error) {
       console.error('清空清理日志失败:', error)
     }
@@ -805,7 +872,7 @@ export class HistoryManager {
   // 获取历史记录
   static getHistory(): HistoryRecord[] {
     try {
-      const stored = localStorage.getItem(this.HISTORY_KEY)
+      const stored = getScopedStorageItem(this.HISTORY_KEY)
       if (stored) {
         const records = JSON.parse(stored)
         if (!Array.isArray(records)) {
@@ -834,7 +901,7 @@ export class HistoryManager {
   // 保存历史记录
   static saveHistory(records: HistoryRecord[]): void {
     try {
-      localStorage.setItem(this.HISTORY_KEY, JSON.stringify(records))
+      setScopedStorageItem(this.HISTORY_KEY, JSON.stringify(records))
     } catch (error) {
       console.error('保存历史记录失败:', error)
     }
@@ -865,7 +932,7 @@ export class HistoryManager {
   static clearHistory(): void {
     const records = this.getHistory()
     try {
-      localStorage.removeItem(this.HISTORY_KEY)
+      removeScopedStorageItem(this.HISTORY_KEY)
       this.lastViewedSyncMap.clear()
       records.forEach(record => {
         scheduleHistoryDeleteToSupabase(record.id)
@@ -1119,7 +1186,7 @@ export class TagManager {
   // 获取所有标签
   static getTags(): Tag[] {
     try {
-      const stored = localStorage.getItem(this.TAGS_KEY)
+      const stored = getScopedStorageItem(this.TAGS_KEY)
       if (stored) {
         const raw = JSON.parse(stored)
         const idMap = new Map<string, string>()
@@ -1206,7 +1273,7 @@ export class TagManager {
   // 保存标签
   static saveTags(tags: Tag[]): void {
     try {
-      localStorage.setItem(this.TAGS_KEY, JSON.stringify(tags))
+      setScopedStorageItem(this.TAGS_KEY, JSON.stringify(tags))
     } catch (error) {
       console.error('保存标签失败:', error)
     }

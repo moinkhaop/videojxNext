@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { VideoParserConfig } from '@/types'
+import { ParserErrorClass, VideoParserConfig } from '@/types'
+import { classifyParserFailure } from '@/lib/parser-health'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 const DEFAULT_HEALTH_SAMPLE_URL = 'https://www.douyin.com/video/0'
 
@@ -13,11 +15,20 @@ type HealthResponseData = {
   status: number
   latencyMs: number
   message: string
+  normalizedMessage: string
+  traceId: string
+  errorClass?: ParserErrorClass
   checkedAt: string
   responsePreview: string
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
+  const traceId = createTraceId()
   try {
     const body = await request.json()
     const parserConfig = (body?.parserConfig || null) as Partial<VideoParserConfig> | null
@@ -62,9 +73,13 @@ export async function POST(request: NextRequest) {
       })
     } catch (error) {
       clearTimeout(timeout)
+      const message = `解析器不可达: ${error instanceof Error ? error.message : '网络错误'}`
       return NextResponse.json({
         success: false,
-        error: `解析器不可达: ${error instanceof Error ? error.message : '网络错误'}`
+        error: message,
+        traceId,
+        errorClass: classifyParserFailure({ error, message }),
+        normalizedMessage: message,
       }, { status: 502 })
     }
 
@@ -75,6 +90,10 @@ export async function POST(request: NextRequest) {
     const parsedBody = safeParseJsonBody(rawBody)
     const logicalSuccess = evaluateLogicalSuccess(parsedBody)
     const healthy = response.ok && (logicalSuccess || parsedBody !== null)
+    const normalizedMessage = buildHealthMessage(response.status, healthy, logicalSuccess)
+    const errorClass = healthy
+      ? undefined
+      : classifyParserFailure({ status: response.status, message: normalizedMessage })
 
     const data: HealthResponseData = {
       parserName,
@@ -85,7 +104,10 @@ export async function POST(request: NextRequest) {
       logicalSuccess,
       status: response.status,
       latencyMs,
-      message: buildHealthMessage(response.status, healthy, logicalSuccess),
+      message: normalizedMessage,
+      normalizedMessage,
+      traceId,
+      errorClass,
       checkedAt: new Date().toISOString(),
       responsePreview: buildResponsePreview(parsedBody, rawBody)
     }
@@ -95,10 +117,22 @@ export async function POST(request: NextRequest) {
       data
     })
   } catch (error) {
+    const message = error instanceof Error ? error.message : '健康检查接口执行失败'
     return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : '健康检查接口执行失败'
+      error: message,
+      traceId,
+      errorClass: classifyParserFailure({ error, message }),
+      normalizedMessage: message,
     }, { status: 500 })
+  }
+}
+
+function createTraceId() {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   }
 }
 

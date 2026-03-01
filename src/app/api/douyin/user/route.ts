@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DouyinUserApiResponse, DouyinUserParseRequest, DouyinVideoItem, ParsedVideoInfo, MediaType } from '@/types';
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const body: DouyinUserParseRequest = await request.json();
-    const { url, limit = 20 } = body;
+    const { url } = body;
+    const requestedLimit = typeof body.limit === 'number' ? body.limit : Number(body.limit ?? 20);
+    const MAX_LIMIT = 5000;
+    let limit = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 20;
+    if (limit < 0) {
+      limit = 20;
+    }
+    limit = Math.max(0, Math.min(MAX_LIMIT, limit));
     
     if (!url) {
       return NextResponse.json(
@@ -79,7 +92,8 @@ export async function POST(request: NextRequest) {
     };
 
     // 应用限制并转换数据
-    const limitedData = limit ? apiResponseData.data.slice(0, limit) : apiResponseData.data;
+    // limit=0 表示不限制（全量）；limit>0 则 slice；limit<0 已归一化为默认 20
+    const limitedData = limit === 0 ? apiResponseData.data : apiResponseData.data.slice(0, limit);
     const convertedVideos = limitedData.map(convertDouyinToStandard);
 
     return NextResponse.json({
@@ -89,6 +103,7 @@ export async function POST(request: NextRequest) {
         totalCount: apiResponseData.data.length,
         limitApplied: limit,
         actualCount: convertedVideos.length,
+        maxLimit: MAX_LIMIT,
         userInfo: {
           nickname: apiResponseData.data[0]?.nickname,
           avatar: apiResponseData.data[0]?.avatar,

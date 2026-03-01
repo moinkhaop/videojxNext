@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { WebDAVConfig } from '@/types'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 export const runtime = 'nodejs'
 
@@ -29,6 +30,11 @@ function base64Encode(value: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const { webdavConfig } = await request.json()
 

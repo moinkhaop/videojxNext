@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { PreviewParseResponse, VideoParserConfig, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 import { extractFirstUrlFromText } from '@/lib/url/extract'
+import { requireRouteAuth } from '@/lib/api/route-auth'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
   try {
     const { videoUrl, parserConfig } = await request.json()
 
@@ -91,13 +97,7 @@ export async function POST(request: NextRequest) {
       })
     };
 
-    // {{ AURA: Add - 添加请求日志 }}
-    console.log('[预览解析] 发送请求到第三方API:', {
-      url: finalApiUrl,
-      method: method,
-      headers: Object.keys(headers),
-      videoUrl: normalizedVideoUrl.substring(0, 50) + '...'
-    });
+    console.log('[预览解析] 发送第三方解析请求')
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -109,21 +109,11 @@ export async function POST(request: NextRequest) {
         signal: controller.signal
       });
       
-      console.log('[预览解析] 收到API响应:', {
-        status: response.status,
-        statusText: response.statusText,
-        contentType: response.headers.get('content-type')
-      });
+      console.log(`[预览解析] 收到第三方响应: ${response.status}`)
       clearTimeout(timeoutId);
       if (!response.ok) {
         const errorText = await response.text().catch(() => '无法获取错误内容');
-        console.error('[预览解析] API请求失败:', {
-          status: response.status,
-          statusText: response.statusText,
-          url: finalApiUrl,
-          method: method,
-          errorText: errorText.substring(0, 500)
-        });
+        console.error(`[预览解析] API请求失败: ${response.status} ${response.statusText}`)
         
         return NextResponse.json({
           success: false,
@@ -160,8 +150,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // {{ AURA: Add - 添加完整的API响应日志 }}
-    console.log('[预览解析] 第三方API响应JSON:', JSON.stringify(data, null, 2));
+    console.log('[预览解析] 第三方响应解析成功')
 
     let parsedInfo: ParsedVideoInfo
     

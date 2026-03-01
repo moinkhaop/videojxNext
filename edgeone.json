@@ -1,0 +1,8 @@
+{
+  "node-functions": {
+    "directory": "node-functions"
+  },
+  "nodeFunctionsConfig": {
+    "maxDuration": 120
+  }
+}

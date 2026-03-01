@@ -21,21 +21,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    console.log('[API] 收到登录请求')
     const { email, password } = await request.json()
-    console.log('[API] 登录邮箱:', email)
 
     if (!email || !password) {
-      console.error('[API] 参数不完整')
       return respond(
         { error: '邮箱和密码不能为空' },
         { status: 400 }
       )
     }
 
-    console.log('[API] 调用 Supabase 登录...')
     const data = await signIn(email, password, request, cookieStore)
-    console.log('[API] 登录成功，用户ID:', data.user?.id)
 
     return respond({
       success: true,
