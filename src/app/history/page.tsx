@@ -33,6 +33,8 @@ import { HistoryManager, TagManager } from '@/lib/storage'
 import { useRouter } from 'next/navigation'
 import { VideoPreview } from '@/components/preview/VideoPreview'
 import { ImageCarousel } from '@/components/preview/ImageCarousel'
+import { useAuth } from '@/contexts/auth-context'
+import { CLOUD_STORAGE_SYNC_EVENT, hydrateFromSupabase } from '@/lib/storage/cloud-sync'
 
 // 标签颜色映射
 const TAG_COLORS = {
@@ -52,6 +54,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\
 
 export default function HistoryPage() {
   const router = useRouter()
+  const { user, loading: authLoading } = useAuth()
 
   // 基础状态
   const [records, setRecords] = useState<HistoryRecord[]>([])
@@ -79,6 +82,7 @@ export default function HistoryPage() {
   const [newTagColor, setNewTagColor] = useState('blue')
   const [batchSelectMode, setBatchSelectMode] = useState(false)
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([])
+  const [refreshingCloud, setRefreshingCloud] = useState(false)
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
@@ -112,6 +116,17 @@ export default function HistoryPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  useEffect(() => {
+    const handleCloudSynced = () => {
+      loadData(selectedRecord?.id ?? undefined)
+    }
+
+    window.addEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSynced as EventListener)
+    return () => {
+      window.removeEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSynced as EventListener)
+    }
+  }, [loadData, selectedRecord?.id])
 
   // 筛选和排序逻辑
   const filteredAndSortedRecords = useMemo(() => {
@@ -209,6 +224,21 @@ export default function HistoryPage() {
       setSelectedRecordIds([])
     }
   }, [batchSelectMode])
+
+  const handleRefresh = useCallback(async () => {
+    try {
+      if (!authLoading && user?.id) {
+        setRefreshingCloud(true)
+        await hydrateFromSupabase()
+      }
+      loadData(selectedRecord?.id ?? undefined)
+    } catch (error) {
+      console.error('从云端刷新历史失败:', error)
+      alert('从云端刷新历史失败，请稍后重试')
+    } finally {
+      setRefreshingCloud(false)
+    }
+  }, [authLoading, loadData, selectedRecord?.id, user?.id])
 
   // 操作处理函数
   const handleDeleteRecord = (id: string) => {
@@ -1218,9 +1248,14 @@ export default function HistoryPage() {
                   <Download className="w-4 h-4 mr-1" />
                   JSON
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => loadData(selectedRecord?.id ?? undefined)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRefresh}
+                  disabled={refreshingCloud || authLoading}
+                >
                   <RefreshCw className="w-4 h-4 mr-1" />
-                  刷新
+                  {refreshingCloud ? '云端同步中...' : '刷新'}
                 </Button>
                 {records.length > 0 && (
                   <Button variant="destructive" size="sm" onClick={handleClearHistory}>

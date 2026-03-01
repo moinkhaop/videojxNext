@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,20 +22,32 @@ import {
 import { VideoParserConfig, WebDAVConfig } from '@/types'
 import { ConfigManager, DataManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
+import { CLOUD_STORAGE_SYNC_EVENT } from '@/lib/storage/cloud-sync'
 
 export default function SettingsPage() {
   const [parsers, setParsers] = useState<VideoParserConfig[]>([])
   const [webdavServers, setWebdavServers] = useState<WebDAVConfig[]>([])
   const [testingWebDAV, setTestingWebDAV] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadConfigs()
-  }, [])
-
-  const loadConfigs = () => {
+  const loadConfigs = useCallback(() => {
     setParsers(ConfigManager.getParsers())
     setWebdavServers(ConfigManager.getWebDAVServers())
-  }
+  }, [])
+
+  useEffect(() => {
+    loadConfigs()
+  }, [loadConfigs])
+
+  useEffect(() => {
+    const handleCloudSync = () => {
+      loadConfigs()
+    }
+
+    window.addEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    return () => {
+      window.removeEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    }
+  }, [loadConfigs])
 
   // 获取要显示的WebDAV服务器列表（仅显示默认）
   const displayedWebDAVServers = webdavServers.filter(server => server.isDefault)

@@ -46,8 +46,8 @@ export async function GET(request: NextRequest) {
     return auth.response
   }
 
-  const limit = normalizePositiveInt(request.nextUrl.searchParams.get('limit'), 100, 500)
-  const offset = normalizePositiveInt(request.nextUrl.searchParams.get('offset'), 0, 5000)
+  const limit = normalizePositiveInt(request.nextUrl.searchParams.get('limit'), 200, 1000)
+  const offset = normalizePositiveInt(request.nextUrl.searchParams.get('offset'), 0, 20000)
   const rangeTo = Math.max(offset, offset + Math.max(0, limit) - 1)
 
   const { client, userId } = auth.context

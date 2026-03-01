@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,6 +23,7 @@ import {
 import { WebDAVConfig } from '@/types'
 import { ConfigManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
+import { CLOUD_STORAGE_SYNC_EVENT } from '@/lib/storage/cloud-sync'
 
 export default function WebDAVConfigPage() {
   const [configs, setConfigs] = useState<WebDAVConfig[]>([])
@@ -38,14 +39,25 @@ export default function WebDAVConfigPage() {
     basePath: ''
   })
 
-  useEffect(() => {
-    loadConfigs()
-  }, [])
-
-  const loadConfigs = () => {
+  const loadConfigs = useCallback(() => {
     const webdavConfigs = ConfigManager.getWebDAVConfigs()
     setConfigs(webdavConfigs)
-  }
+  }, [])
+
+  useEffect(() => {
+    loadConfigs()
+  }, [loadConfigs])
+
+  useEffect(() => {
+    const handleCloudSync = () => {
+      loadConfigs()
+    }
+
+    window.addEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    return () => {
+      window.removeEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    }
+  }, [loadConfigs])
 
   const handleNewConfig = () => {
     setFormData({

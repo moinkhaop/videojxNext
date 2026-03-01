@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,7 @@ import { VideoParserConfig, ParserCapability, ParserHealthSnapshot } from '@/typ
 import { ConfigManager } from '@/lib/storage'
 import { apiCapabilityDetector } from '@/lib/capability-detector'
 import { getAllParserHealthSnapshots, recordParserAttempt } from '@/lib/parser-health'
+import { CLOUD_STORAGE_SYNC_EVENT } from '@/lib/storage/cloud-sync'
 
 export default function ParsersConfigPage() {
   const [configs, setConfigs] = useState<VideoParserConfig[]>([])
@@ -48,15 +49,26 @@ export default function ParsersConfigPage() {
     capabilities: [] as ParserCapability[]
   })
 
-  useEffect(() => {
-    loadConfigs()
-  }, [])
-
-  const loadConfigs = () => {
+  const loadConfigs = useCallback(() => {
     const parsers = ConfigManager.getParsers()
     setConfigs(parsers)
     setHealthSnapshots(getAllParserHealthSnapshots())
-  }
+  }, [])
+
+  useEffect(() => {
+    loadConfigs()
+  }, [loadConfigs])
+
+  useEffect(() => {
+    const handleCloudSync = () => {
+      loadConfigs()
+    }
+
+    window.addEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    return () => {
+      window.removeEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    }
+  }, [loadConfigs])
 
   const handleNewConfig = () => {
     setFormData({

@@ -1129,6 +1129,19 @@
     bindTaskEvents();
 
     await loadState();
+    if (pageState.auth && pageState.auth.loggedIn) {
+      try {
+        await send('CONFIG_SYNC_AUTO');
+      } catch (error) {
+      }
+
+      try {
+        await send('HISTORY_PULL_REMOTE');
+      } catch (error) {
+      }
+
+      await loadState();
+    }
     await renderTasks();
     await renderHistory();
   }

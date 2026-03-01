@@ -1183,6 +1183,33 @@ async function saveHistoryRecord(record, options) {
   return resultRecord;
 }
 
+const CLOUD_HISTORY_PAGE_SIZE = 500;
+const CLOUD_HISTORY_MAX_PAGES = 40;
+
+async function fetchCloudHistoryAll() {
+  const all = [];
+
+  for (let page = 0; page < CLOUD_HISTORY_MAX_PAGES; page += 1) {
+    const offset = page * CLOUD_HISTORY_PAGE_SIZE;
+    const response = await apiRequest(
+      `/api/extension/history?limit=${CLOUD_HISTORY_PAGE_SIZE}&offset=${offset}`,
+      {
+        method: 'GET',
+        useAuth: true
+      }
+    );
+
+    const rows = Array.isArray(response && response.data) ? response.data : [];
+    all.push(...rows);
+
+    if (rows.length < CLOUD_HISTORY_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return all;
+}
+
 async function syncAllHistoryToCloud() {
   const state = await readState();
 
@@ -1208,13 +1235,10 @@ async function syncAllHistoryToCloud() {
     }
   }
 
-  const cloudList = await apiRequest('/api/extension/history?limit=500&offset=0', {
-    method: 'GET',
-    useAuth: true
-  });
+  const cloudHistory = await fetchCloudHistoryAll();
 
   await mutateState((next) => {
-    next.history = Array.isArray(cloudList.data) ? cloudList.data : next.history;
+    next.history = cloudHistory;
     if (!next.settings || typeof next.settings !== 'object') {
       next.settings = {};
     }
@@ -1233,11 +1257,7 @@ async function pullHistoryFromCloud() {
     throw new Error('请先登录再刷新云端历史记录');
   }
 
-  const cloudList = await apiRequest('/api/extension/history?limit=500&offset=0', {
-    method: 'GET',
-    useAuth: true
-  });
-  const cloudHistory = Array.isArray(cloudList.data) ? cloudList.data : [];
+  const cloudHistory = await fetchCloudHistoryAll();
 
   await mutateState((next) => {
     next.history = cloudHistory;

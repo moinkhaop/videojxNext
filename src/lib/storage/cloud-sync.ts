@@ -1,6 +1,8 @@
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { ConfigManager, HistoryManager, TagManager, CleanupConfigManager, runWithCloudSyncSuppressed } from '@/lib/storage'
 
+export const CLOUD_STORAGE_SYNC_EVENT = 'dyjx:cloud-storage-sync'
+
 type RemoteHistoryRow = {
   id: string
   createdAt?: string | Date
@@ -61,6 +63,46 @@ function safeCall<T>(fn: () => Promise<T>): Promise<T | null> {
   return fn().catch(() => null)
 }
 
+function emitCloudStorageSync(detail: Record<string, unknown>) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent(CLOUD_STORAGE_SYNC_EVENT, {
+        detail,
+      })
+    )
+  } catch {
+  }
+}
+
+function normalizeRemoteHistory(rows: RemoteHistoryRow[]) {
+  return rows
+    .map((row) => {
+      const createdAt = toDate(row.createdAt) ?? new Date()
+      return {
+        ...row,
+        id: row.id,
+        createdAt,
+        task: row.task
+          ? {
+              ...row.task,
+              createdAt: toDate(row.task.createdAt) ?? createdAt,
+              completedAt: toDate(row.task.completedAt),
+            }
+          : row.task,
+        lastViewedAt: toDate((row as any).lastViewedAt),
+      }
+    })
+    .sort((a, b) => {
+      const aTime = toDate(a.createdAt)?.getTime() ?? 0
+      const bTime = toDate(b.createdAt)?.getTime() ?? 0
+      return bTime - aTime
+    })
+}
+
 export async function hydrateFromSupabase() {
   if (!SUPABASE_ENABLED || typeof window === 'undefined') {
     return
@@ -71,6 +113,13 @@ export async function hydrateFromSupabase() {
   const remote = await safeCall(() => import('@/lib/supabase/database'))
   if (!remote) {
     return
+  }
+
+  const syncSummary: Record<string, unknown> = {
+    config: 'noop',
+    history: 'noop',
+    tags: 'noop',
+    cleanup: 'noop',
   }
 
   const [remoteConfig, remoteHistory, remoteTags, remoteCleanup] = await Promise.all([
@@ -109,46 +158,22 @@ export async function hydrateFromSupabase() {
         ConfigManager.saveWebDAVServers(webdavServers)
       }
     })
+    syncSummary.config = 'pulled'
   } else if (hasLocalConfig) {
     await safeCall(() => remote.updateUserConfig(localConfigPayload))
     markSyncOk('config')
+    syncSummary.config = 'pushed'
   }
 
   if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {
-    const local = HistoryManager.getHistory()
-    const byId = new Map<string, any>()
-
-    for (const record of local) {
-      byId.set(record.id, record)
-    }
-
-    for (const row of remoteHistory as RemoteHistoryRow[]) {
-      const createdAt = toDate(row.createdAt) ?? new Date()
-      const merged = {
-        ...row,
-        id: row.id,
-        createdAt,
-        task: row.task
-          ? {
-              ...row.task,
-              createdAt: toDate(row.task.createdAt) ?? createdAt,
-              completedAt: toDate(row.task.completedAt),
-            }
-          : row.task,
-        lastViewedAt: toDate((row as any).lastViewedAt),
-      }
-      byId.set(row.id, merged)
-    }
-
-    const merged = Array.from(byId.values()).sort((a, b) => {
-      const aTime = toDate(a.createdAt)?.getTime() ?? 0
-      const bTime = toDate(b.createdAt)?.getTime() ?? 0
-      return bTime - aTime
-    })
+    const normalizedRemoteHistory = normalizeRemoteHistory(remoteHistory as RemoteHistoryRow[])
 
     runWithCloudSyncSuppressed(() => {
-      HistoryManager.saveHistory(merged)
+      // 登录用户下，以云端历史为准，避免本地遗留数据导致网站与插件展示不一致。
+      HistoryManager.saveHistory(normalizedRemoteHistory)
     })
+    syncSummary.history = 'pulled'
+    syncSummary.historyCount = normalizedRemoteHistory.length
   }
 
   // Seed remote history when it is empty but local already has records.
@@ -158,6 +183,8 @@ export async function hydrateFromSupabase() {
       for (const record of local.slice(0, 1000)) {
         await safeCall(() => remote.addHistoryRecord(record))
       }
+      syncSummary.history = 'pushed'
+      syncSummary.historyCount = local.length
     }
   }
 
@@ -208,6 +235,8 @@ export async function hydrateFromSupabase() {
     runWithCloudSyncSuppressed(() => {
       TagManager.saveTags(Array.from(byId.values()))
     })
+    syncSummary.tags = 'pulled'
+    syncSummary.tagsCount = byId.size
   }
 
   // Seed remote tags when it is empty but local already has tags (including defaults).
@@ -217,6 +246,8 @@ export async function hydrateFromSupabase() {
       for (const tag of local) {
         await safeCall(() => remote.addTag(tag))
       }
+      syncSummary.tags = 'pushed'
+      syncSummary.tagsCount = local.length
     }
   }
 
@@ -225,7 +256,9 @@ export async function hydrateFromSupabase() {
       const current = CleanupConfigManager.getCleanupConfig()
       CleanupConfigManager.saveCleanupConfig({ ...current, ...(remoteCleanup as any) })
     })
+    syncSummary.cleanup = 'pulled'
   }
 
   markSyncOk('hydrate')
+  emitCloudStorageSync(syncSummary)
 }

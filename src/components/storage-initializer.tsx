@@ -23,9 +23,38 @@ export function StorageInitializer({ children }: { children: React.ReactNode }) 
       return
     }
 
-    void hydrateFromSupabase().then(() => {
-      console.log('[StorageInitializer] 云端同步完成')
-    })
+    let active = true
+    let syncing = false
+
+    const runHydrate = async () => {
+      if (!active || syncing) {
+        return
+      }
+      syncing = true
+      try {
+        await hydrateFromSupabase()
+        console.log('[StorageInitializer] 云端同步完成')
+      } finally {
+        syncing = false
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+      void runHydrate()
+    }
+
+    void runHydrate()
+    window.addEventListener('focus', runHydrate)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      active = false
+      window.removeEventListener('focus', runHydrate)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [loading, user?.id])
 
   return <>{children}</>
