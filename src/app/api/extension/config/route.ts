@@ -33,6 +33,30 @@ function normalizeConfig(value: unknown) {
   }
 }
 
+function toTimestampMs(value: unknown): number {
+  const direct = Number(value)
+  if (Number.isFinite(direct) && direct > 0) {
+    return Math.floor(direct)
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed)
+    }
+  }
+
+  return 0
+}
+
+function hasConfigContent(config: ReturnType<typeof normalizeConfig>): boolean {
+  if (config.parsers.length > 0) return true
+  if (config.webdavServers.length > 0) return true
+  if (Object.keys(config.settings).length > 0) return true
+  if (Object.keys(config.defaults).length > 0) return true
+  return false
+}
+
 function toJson(value: unknown): Json {
   // Supabase jsonb expects Json (no undefined / functions / symbols). Stringify/parse
   // is a pragmatic way to enforce this at the edge of the API.
@@ -77,8 +101,17 @@ export async function GET(request: NextRequest) {
   const rawConfigData = data?.config_data ?? {}
   const configData = asRecord(rawConfigData)
   const extensionNode = asRecord(configData.extension)
-  const updatedAt = Number(extensionNode.updatedAt || 0)
-  const config = normalizeConfig(extensionNode.config)
+  const extensionConfig = normalizeConfig(extensionNode.config)
+  const legacyConfig = normalizeConfig(configData)
+
+  const hasExtensionConfig = hasConfigContent(extensionConfig)
+  const hasLegacyConfig = hasConfigContent(legacyConfig)
+  const hasRemoteConfig = hasExtensionConfig || hasLegacyConfig
+
+  const config = hasExtensionConfig ? extensionConfig : legacyConfig
+  const extensionUpdatedAt = toTimestampMs(extensionNode.updatedAt)
+  const rowUpdatedAt = toTimestampMs(data?.updated_at)
+  const updatedAt = hasRemoteConfig ? (extensionUpdatedAt || rowUpdatedAt) : 0
 
   return extensionJson({
     success: true,

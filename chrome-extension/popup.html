@@ -8,95 +8,109 @@
   </head>
   <body class="popup">
     <div class="container popup-shell">
-      <div class="popup-top">
-        <div class="popup-brand">
-          <div class="popup-mark">VJ</div>
-          <div class="col" style="gap: 2px;">
-            <div class="popup-title">VideoJX</div>
-            <div id="auth-status" class="muted">登录状态检查中...</div>
-            <div id="sync-status" class="muted">同步状态加载中...</div>
+      <section id="home-view" class="popup-view popup-home-view">
+        <div class="popup-top">
+          <div class="popup-brand">
+            <div class="popup-mark">VJ</div>
+            <div class="col" style="gap: 2px;">
+              <div class="popup-title">VideoJX</div>
+              <div id="auth-status" class="muted">登录状态检查中...</div>
+              <div id="sync-status" class="muted">同步状态加载中...</div>
+            </div>
           </div>
-        </div>
-        <button id="open-options" class="ghost icon-btn" title="设置">设置</button>
-      </div>
-
-      <div class="card col">
-        <h3>快速操作</h3>
-
-        <div class="grid-actions">
-          <button id="btn-smart-upload" class="primary">智能上传</button>
-          <button id="btn-get-share" class="primary">取链并复制</button>
-          <button id="btn-fill-active" class="ghost">读取地址栏</button>
-          <button id="btn-paste-clipboard" class="ghost">粘贴剪贴板</button>
-          <button id="btn-check-session" class="ghost">刷新登录态</button>
+          <button id="open-options" class="ghost icon-btn" title="设置">设置</button>
         </div>
 
-        <div id="page-kind" class="muted">页面：-</div>
+        <div class="popup-home-scroll">
+          <div class="card col">
+            <h3>快速操作</h3>
 
-        <div class="col">
-          <label class="small">视频链接</label>
-          <textarea id="video-url" wrap="soft" spellcheck="false" placeholder="粘贴分享文案或链接"></textarea>
-        </div>
+            <div class="grid-actions">
+              <button id="btn-smart-upload" class="primary">智能上传</button>
+              <button id="btn-get-share" class="primary">取链并复制</button>
+              <button id="btn-fill-active" class="ghost">读取地址栏</button>
+              <button id="btn-paste-clipboard" class="ghost">粘贴剪贴板</button>
+              <button id="btn-check-session" class="ghost">刷新登录态</button>
+            </div>
 
-        <div id="share-meta" class="share-meta hidden">
-          <div class="meta-item">
-            <div class="meta-item-head">
-              <div class="meta-label">短链</div>
-              <div class="meta-actions">
-                <button id="btn-copy-short" class="chip">复制</button>
-                <button id="btn-use-short" class="chip">使用</button>
+            <div id="page-kind" class="muted">页面：-</div>
+
+            <div class="col">
+              <label class="small">视频链接</label>
+              <textarea id="video-url" wrap="soft" spellcheck="false" placeholder="粘贴分享文案或链接"></textarea>
+            </div>
+
+            <div id="share-meta" class="share-meta hidden">
+              <div class="meta-item">
+                <div class="meta-item-head">
+                  <div class="meta-label">短链</div>
+                  <div class="meta-actions">
+                    <button id="btn-copy-short" class="chip">复制</button>
+                    <button id="btn-use-short" class="chip">使用</button>
+                  </div>
+                </div>
+                <code id="meta-short" class="meta-value"></code>
+              </div>
+
+              <div class="meta-item">
+                <div class="meta-item-head">
+                  <div class="meta-label">长链</div>
+                  <div class="meta-actions">
+                    <button id="btn-copy-long" class="chip">复制</button>
+                    <button id="btn-use-long" class="chip">使用</button>
+                  </div>
+                </div>
+                <code id="meta-long" class="meta-value"></code>
+              </div>
+
+              <div class="meta-foot muted">
+                <span>awemeId: </span><code id="meta-aweme"></code>
+                <span style="margin-left: 10px;">来源: </span><code id="meta-source"></code>
               </div>
             </div>
-            <code id="meta-short" class="meta-value"></code>
-          </div>
 
-          <div class="meta-item">
-            <div class="meta-item-head">
-              <div class="meta-label">长链</div>
-              <div class="meta-actions">
-                <button id="btn-copy-long" class="chip">复制</button>
-                <button id="btn-use-long" class="chip">使用</button>
+            <div class="row" style="align-items: flex-end;">
+              <div class="col" style="flex: 1;">
+                <label class="small">解析器</label>
+                <select id="parser-select"></select>
+              </div>
+              <div class="col" style="flex: 1;">
+                <label class="small">WebDAV</label>
+                <select id="webdav-select"></select>
               </div>
             </div>
-            <code id="meta-long" class="meta-value"></code>
-          </div>
 
-          <div class="meta-foot muted">
-            <span>awemeId: </span><code id="meta-aweme"></code>
-            <span style="margin-left: 10px;">来源: </span><code id="meta-source"></code>
+            <div class="row wrap" style="justify-content: space-between;">
+              <button id="btn-parse" class="secondary" style="flex: 1;">解析并进入结果页</button>
+              <button id="btn-upload" class="primary" style="flex: 1;">直接上传</button>
+              <button id="btn-open-preview" class="ghost" style="flex: 1;">打开预览/结果页</button>
+            </div>
+
+            <div id="result-box-home" class="notice">尚未执行任务</div>
           </div>
         </div>
+      </section>
 
-        <div class="row" style="align-items: flex-end;">
-          <div class="col" style="flex: 1;">
-            <label class="small">解析器</label>
-            <select id="parser-select"></select>
-          </div>
-          <div class="col" style="flex: 1;">
-            <label class="small">WebDAV</label>
-            <select id="webdav-select"></select>
-          </div>
+      <section id="preview-view" class="popup-view popup-result-view hidden">
+        <div class="result-view-header">
+          <button id="btn-preview-back" class="ghost result-back-btn">返回</button>
+          <div class="result-view-title">预览与结果</div>
         </div>
 
-        <div class="row wrap" style="justify-content: space-between;">
-          <button id="btn-parse" class="secondary" style="flex: 1;">解析并全屏预览</button>
-          <button id="btn-upload" class="primary" style="flex: 1;">直接上传</button>
-        </div>
-      </div>
-
-      <div class="card col preview-card">
-        <h3>预览与结果</h3>
-        <div id="preview-empty" class="muted">点击“解析并全屏预览”后，会在当前页面展示全屏预览。</div>
-        <div id="preview-panel" class="preview-panel hidden">
-          <div class="preview-media-wrap">
-            <video id="preview-video" class="preview-video hidden" controls preload="metadata" playsinline muted></video>
-            <img id="preview-image" class="preview-image hidden" alt="预览图" />
+        <div class="result-view-body">
+          <div id="preview-empty" class="muted">点击“解析并进入结果页”后，会在当前插件页面展示完整预览。</div>
+          <div id="preview-panel" class="preview-panel hidden">
+            <div class="preview-media-wrap">
+              <video id="preview-video" class="preview-video hidden" controls preload="metadata" playsinline muted></video>
+              <img id="preview-image" class="preview-image hidden" alt="预览图" />
+            </div>
+            <div id="preview-album-grid" class="preview-album-grid hidden"></div>
+            <div id="preview-info" class="preview-info"></div>
+            <a id="preview-open-link" class="preview-open-link hidden" target="_blank" rel="noreferrer">新窗口打开原始链接</a>
           </div>
-          <div id="preview-info" class="preview-info"></div>
-          <a id="preview-open-link" class="preview-open-link hidden" target="_blank" rel="noreferrer">新窗口打开原始链接</a>
+          <div id="result-box" class="notice">尚未执行任务</div>
         </div>
-        <div id="result-box" class="notice">尚未执行任务</div>
-      </div>
+      </section>
     </div>
 
     <script src="shared.js"></script>

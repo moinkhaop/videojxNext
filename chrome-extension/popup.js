@@ -29,12 +29,16 @@
     authStatus: document.getElementById('auth-status'),
     syncStatus: document.getElementById('sync-status'),
     openOptions: document.getElementById('open-options'),
+    homeView: document.getElementById('home-view'),
+    previewView: document.getElementById('preview-view'),
     pageKind: document.getElementById('page-kind'),
     btnSmartUpload: document.getElementById('btn-smart-upload'),
     btnGetShare: document.getElementById('btn-get-share'),
     btnFillActive: document.getElementById('btn-fill-active'),
     btnPasteClipboard: document.getElementById('btn-paste-clipboard'),
     btnCheckSession: document.getElementById('btn-check-session'),
+    btnOpenPreview: document.getElementById('btn-open-preview'),
+    btnPreviewBack: document.getElementById('btn-preview-back'),
     videoUrl: document.getElementById('video-url'),
     shareMeta: document.getElementById('share-meta'),
     metaShort: document.getElementById('meta-short'),
@@ -49,11 +53,13 @@
     webdavSelect: document.getElementById('webdav-select'),
     btnParse: document.getElementById('btn-parse'),
     btnUpload: document.getElementById('btn-upload'),
+    resultBoxHome: document.getElementById('result-box-home'),
     resultBox: document.getElementById('result-box'),
     previewEmpty: document.getElementById('preview-empty'),
     previewPanel: document.getElementById('preview-panel'),
     previewVideo: document.getElementById('preview-video'),
     previewImage: document.getElementById('preview-image'),
+    previewAlbumGrid: document.getElementById('preview-album-grid'),
     previewInfo: document.getElementById('preview-info'),
     previewOpenLink: document.getElementById('preview-open-link')
   };
@@ -66,6 +72,16 @@
   };
 
   let lastShareMeta = null;
+
+  function switchToView(view) {
+    const showPreview = view === 'preview';
+    if (el.homeView) {
+      el.homeView.classList.toggle('hidden', showPreview);
+    }
+    if (el.previewView) {
+      el.previewView.classList.toggle('hidden', !showPreview);
+    }
+  }
 
   function renderShareMeta() {
     if (!el.shareMeta) return;
@@ -92,16 +108,19 @@
   }
 
   function setResult(message, type) {
-    el.resultBox.className = 'notice';
-    if (type === 'error') {
-      el.resultBox.classList.add('error');
-    } else if (type === 'success') {
-      el.resultBox.classList.add('success');
-    }
-    el.resultBox.textContent = message;
+    [el.resultBox, el.resultBoxHome].forEach((box) => {
+      if (!box) return;
+      box.className = 'notice';
+      if (type === 'error') {
+        box.classList.add('error');
+      } else if (type === 'success') {
+        box.classList.add('success');
+      }
+      box.textContent = message;
+    });
   }
 
-  function clearPreview(message) {
+  function resetPreviewMedia() {
     if (el.previewVideo) {
       try {
         el.previewVideo.pause();
@@ -115,6 +134,10 @@
       el.previewImage.removeAttribute('src');
       el.previewImage.classList.add('hidden');
     }
+  }
+
+  function clearPreview(message) {
+    resetPreviewMedia();
 
     if (el.previewInfo) {
       el.previewInfo.textContent = '';
@@ -129,8 +152,13 @@
       el.previewPanel.classList.add('hidden');
     }
 
+    if (el.previewAlbumGrid) {
+      el.previewAlbumGrid.innerHTML = '';
+      el.previewAlbumGrid.classList.add('hidden');
+    }
+
     if (el.previewEmpty) {
-      el.previewEmpty.textContent = message || '点击“解析并全屏预览”后，会在当前页面展示全屏预览。';
+      el.previewEmpty.textContent = message || '点击“解析并进入结果页”后，会在当前插件页面展示完整预览。';
       el.previewEmpty.classList.remove('hidden');
     }
   }
@@ -141,7 +169,8 @@
       return;
     }
 
-    const mediaType = parsed.mediaType === 'image_album' ? '图集' : '视频';
+    const isAlbum = parsed.mediaType === 'image_album';
+    const mediaType = isAlbum ? '图集' : '视频';
     const title = parsed.title ? String(parsed.title) : '未命名';
     const author = parsed.author ? String(parsed.author) : '未知';
     const lines = [
@@ -154,6 +183,11 @@
     }
 
     const videoUrl = extractFirstUrl(parsed.url || '');
+    const allImages = Array.isArray(parsed.images)
+      ? parsed.images
+          .map((item) => extractFirstUrl(item && item.url ? item.url : ''))
+          .filter(Boolean)
+      : [];
     const firstImage = Array.isArray(parsed.images) && parsed.images[0]
       ? extractFirstUrl(parsed.images[0].url || '')
       : '';
@@ -171,14 +205,32 @@
       el.previewOpenLink.classList.add('hidden');
     }
 
-    if (parsed.mediaType === 'image_album') {
+    resetPreviewMedia();
+
+    if (isAlbum) {
       const imageSrc = firstImage || thumbnail;
       if (imageSrc && el.previewImage) {
         el.previewImage.src = imageSrc;
         el.previewImage.classList.remove('hidden');
       }
-      if (el.previewVideo) {
-        el.previewVideo.classList.add('hidden');
+      if (el.previewAlbumGrid && allImages.length > 0) {
+        el.previewAlbumGrid.innerHTML = '';
+        allImages.forEach((src, index) => {
+          const item = document.createElement('a');
+          item.className = 'preview-album-item';
+          item.href = src;
+          item.target = '_blank';
+          item.rel = 'noreferrer';
+
+          const img = document.createElement('img');
+          img.src = src;
+          img.alt = `图集图片 ${index + 1}`;
+          img.loading = 'lazy';
+          item.appendChild(img);
+
+          el.previewAlbumGrid.appendChild(item);
+        });
+        el.previewAlbumGrid.classList.remove('hidden');
       }
     } else {
       if (videoUrl && el.previewVideo) {
@@ -196,9 +248,6 @@
         el.previewImage.src = firstImage;
         el.previewImage.classList.remove('hidden');
       }
-      if (el.previewVideo && !videoUrl) {
-        el.previewVideo.classList.add('hidden');
-      }
     }
 
     if (el.previewPanel) {
@@ -210,7 +259,7 @@
   }
 
   function setLoading(loading) {
-    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnCheckSession].forEach((button) => {
+    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnCheckSession, el.btnOpenPreview, el.btnPreviewBack].forEach((button) => {
       if (!button) return;
       button.disabled = loading;
     });
@@ -268,7 +317,7 @@
       el.videoUrl.value = url;
       lastShareMeta = null;
       renderShareMeta();
-      clearPreview('链接已更新，请重新点击“解析并全屏预览”。');
+      clearPreview('链接已更新，请重新点击“解析并进入结果页”。');
       setResult('已从剪贴板粘贴链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -377,7 +426,7 @@
         source: 'active_context'
       };
       renderShareMeta();
-      clearPreview('链接已更新，请重新点击“解析并全屏预览”。');
+      clearPreview('链接已更新，请重新点击“解析并进入结果页”。');
       setResult('已读取地址栏链接。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
@@ -406,7 +455,7 @@
         source: result && result.source ? String(result.source || '') : ''
       };
       renderShareMeta();
-      clearPreview('链接元信息已更新，请重新点击“解析并全屏预览”。');
+      clearPreview('链接元信息已更新，请重新点击“解析并进入结果页”。');
 
       const finalLink = shortLink || direct || longLink;
       if (finalLink) {
@@ -428,7 +477,7 @@
           const url = await readClipboardUrl();
           el.videoUrl.value = url;
           lastShareMeta = null;
-          clearPreview('链接已更新，请重新点击“解析并全屏预览”。');
+          clearPreview('链接已更新，请重新点击“解析并进入结果页”。');
           setResult('已获取分享链接并填入。', 'success');
           return;
         } catch (error) {
@@ -467,6 +516,7 @@
 
       if (result && result.parsed) {
         renderParsedPreview(result.parsed, '');
+        switchToView('preview');
       }
       const title = result && result.parsed && result.parsed.title ? String(result.parsed.title) : '未命名';
       const path = result && result.filePath ? String(result.filePath) : '';
@@ -555,15 +605,8 @@
 
       const parsed = result.parsed || {};
       renderParsedPreview(parsed, result.parserName || '');
-      try {
-        await send('PREVIEW_SHOW_ACTIVE', {
-          parsed,
-          sourceUrl: videoUrl
-        });
-        setResult('解析成功，已在当前页面全屏展示预览（关闭弹窗即可查看）。', 'success');
-      } catch (error) {
-        setResult(`解析成功，但页面预览展示失败：${error.message}`, 'success');
-      }
+      switchToView('preview');
+      setResult('解析成功，结果已在插件内展示。', 'success');
     } catch (error) {
       setResult(error.message, 'error');
     } finally {
@@ -603,6 +646,7 @@
       const title = result.parsed && result.parsed.title ? result.parsed.title : '未命名';
       if (result && result.parsed) {
         renderParsedPreview(result.parsed, '');
+        switchToView('preview');
       }
       setResult(`上传成功\n标题：${title}\n路径：${result.filePath}`, 'success');
     } catch (error) {
@@ -624,6 +668,8 @@
     el.btnCheckSession.addEventListener('click', refreshSession);
     el.btnParse.addEventListener('click', parsePreview);
     el.btnUpload.addEventListener('click', directUpload);
+    if (el.btnOpenPreview) el.btnOpenPreview.addEventListener('click', () => switchToView('preview'));
+    if (el.btnPreviewBack) el.btnPreviewBack.addEventListener('click', () => switchToView('home'));
 
     if (el.btnCopyShort) el.btnCopyShort.addEventListener('click', () => copyMetaLink('short'));
     if (el.btnCopyLong) el.btnCopyLong.addEventListener('click', () => copyMetaLink('long'));
@@ -634,7 +680,7 @@
       el.videoUrl.addEventListener('input', () => {
         // If the user manually edits the field, the stored meta may no longer match.
         // Keep meta visible (for quick switching) but avoid using stale meta elsewhere.
-        clearPreview('链接已手动修改，请重新点击“解析并全屏预览”。');
+        clearPreview('链接已手动修改，请重新点击“解析并进入结果页”。');
       });
     }
   }
@@ -645,6 +691,7 @@
     await loadActiveContext();
     renderShareMeta();
     clearPreview();
+    switchToView('home');
   }
 
   bootstrap().catch((error) => {
