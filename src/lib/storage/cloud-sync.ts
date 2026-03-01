@@ -1,5 +1,6 @@
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { ConfigManager, HistoryManager, TagManager, CleanupConfigManager, runWithCloudSyncSuppressed } from '@/lib/storage'
+import type { HistoryRecord } from '@/types'
 
 export const CLOUD_STORAGE_SYNC_EVENT = 'dyjx:cloud-storage-sync'
 
@@ -78,23 +79,23 @@ function emitCloudStorageSync(detail: Record<string, unknown>) {
   }
 }
 
-function normalizeRemoteHistory(rows: RemoteHistoryRow[]) {
+function normalizeRemoteHistory(rows: RemoteHistoryRow[]): HistoryRecord[] {
   return rows
-    .map((row) => {
+    .map((row): HistoryRecord => {
       const createdAt = toDate(row.createdAt) ?? new Date()
-      const type = row.type === 'batch' ? 'batch' : 'single'
+      const type: HistoryRecord['type'] = row.type === 'batch' ? 'batch' : 'single'
+      const rawTask = row.task && typeof row.task === 'object' ? row.task : {}
+      const taskCreatedAt = toDate(rawTask.createdAt) ?? createdAt
       return {
         ...row,
         id: row.id,
         type,
         createdAt,
-        task: row.task
-          ? {
-              ...row.task,
-              createdAt: toDate(row.task.createdAt) ?? createdAt,
-              completedAt: toDate(row.task.completedAt),
-            }
-          : row.task,
+        task: {
+          ...rawTask,
+          createdAt: taskCreatedAt,
+          completedAt: toDate(rawTask.completedAt),
+        } as any,
         lastViewedAt: toDate((row as any).lastViewedAt),
       }
     })
