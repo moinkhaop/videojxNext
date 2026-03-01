@@ -712,8 +712,17 @@
         if (data.loggedIn) {
           try {
             const result = await send('CONFIG_SYNC_AUTO');
+            let pulled = null;
+            try {
+              const historySync = await send('HISTORY_PULL_REMOTE');
+              pulled = Math.max(0, Number(historySync && historySync.pulled ? historySync.pulled : 0));
+            } catch (error) {
+            }
             await loadState();
-            setNotice(result && result.message ? result.message : '已同步云端配置', 'success');
+            await renderHistory();
+            const configMessage = result && result.message ? result.message : '已同步云端配置';
+            const historyMessage = pulled == null ? '' : `；历史已从云端刷新 ${pulled} 条`;
+            setNotice(`${configMessage}${historyMessage}`, 'success');
             return;
           } catch (error) {
             // If cloud sync fails, still keep session status.
@@ -746,6 +755,7 @@
 
         // Best-effort auto sync config right after login so WebDAV/parsers appear immediately.
         let syncMessage = '';
+        let historyMessage = '';
         try {
           const syncResult = await send('CONFIG_SYNC_AUTO');
           syncMessage = syncResult && syncResult.message ? `（${syncResult.message}）` : '';
@@ -753,8 +763,17 @@
           syncMessage = '';
         }
 
+        try {
+          const historySync = await send('HISTORY_PULL_REMOTE');
+          const pulled = Math.max(0, Number(historySync && historySync.pulled ? historySync.pulled : 0));
+          historyMessage = `，历史已刷新 ${pulled} 条`;
+        } catch (error) {
+          historyMessage = '';
+        }
+
         await loadState();
-        setNotice(`登录成功：${result.user && result.user.email ? result.user.email : '用户'}${syncMessage}`, 'success');
+        await renderHistory();
+        setNotice(`登录成功：${result.user && result.user.email ? result.user.email : '用户'}${syncMessage}${historyMessage}`, 'success');
       } catch (error) {
         setNotice(error.message, 'error');
       }
@@ -1014,7 +1033,17 @@
   function bindHistoryActions() {
     el.btnHistoryRefresh.addEventListener('click', async () => {
       try {
+        if (pageState.auth && pageState.auth.loggedIn) {
+          const result = await send('HISTORY_PULL_REMOTE');
+          const pulled = Math.max(0, Number(result && result.pulled ? result.pulled : 0));
+          await loadState();
+          await renderHistory();
+          setNotice(`已从云端刷新历史：${pulled} 条`, 'success');
+          return;
+        }
+
         await renderHistory();
+        setNotice('未登录，仅刷新本地历史', '');
       } catch (error) {
         setNotice(error.message, 'error');
       }

@@ -1196,6 +1196,33 @@ async function syncAllHistoryToCloud() {
   return { success, failed };
 }
 
+async function pullHistoryFromCloud() {
+  const state = await readState();
+
+  if (!state.auth || !state.auth.accessToken) {
+    throw new Error('请先登录再刷新云端历史记录');
+  }
+
+  const cloudList = await apiRequest('/api/extension/history?limit=500&offset=0', {
+    method: 'GET',
+    useAuth: true
+  });
+  const cloudHistory = Array.isArray(cloudList.data) ? cloudList.data : [];
+
+  await mutateState((next) => {
+    const limit = Math.max(100, Math.min(1000, Number(next.settings && next.settings.historyLimit ? next.settings.historyLimit : 500)));
+    next.history = cloudHistory.slice(0, limit);
+    if (!next.settings || typeof next.settings !== 'object') {
+      next.settings = {};
+    }
+    next.settings.lastHistorySyncAt = Date.now();
+    next.settings.lastHistorySyncSuccess = cloudHistory.length;
+    next.settings.lastHistorySyncFailed = 0;
+  });
+
+  return { pulled: cloudHistory.length };
+}
+
 async function parseVideo(videoUrl, parserConfig) {
   if (!videoUrl) {
     throw new Error('缺少视频链接');
@@ -2891,6 +2918,10 @@ const handlers = {
 
   async HISTORY_SYNC_ALL() {
     return syncAllHistoryToCloud();
+  },
+
+  async HISTORY_PULL_REMOTE() {
+    return pullHistoryFromCloud();
   }
 };
 
