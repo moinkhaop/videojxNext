@@ -554,6 +554,78 @@ hr {
   text-decoration: underline;
 }
 
+.queue-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.queue-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 170px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.queue-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.queue-item-title {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.queue-item-tail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.small-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
 #result-box,
 #result-box-home {
   white-space: pre-wrap;
@@ -572,7 +644,17 @@ hr {
 }
 
 .popup-home-scroll::-webkit-scrollbar-track,
-.result-view-body::-webkit-scrollbar-track {
+.result-view-body::-webkit-scrollbar-track,
+.queue-list::-webkit-scrollbar-track {
   background: rgba(226, 232, 240, 0.8);
+  border-radius: 999px;
+}
+
+.queue-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.queue-list::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.7);
   border-radius: 999px;
 }

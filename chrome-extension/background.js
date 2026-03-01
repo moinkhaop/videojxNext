@@ -1790,6 +1790,7 @@ async function removeTask(taskId) {
 }
 
 const runningTaskIds = new Set();
+let singleQueuePumpRunning = false;
 
 function appendTaskLog(logs, message) {
   if (!Array.isArray(logs)) return;
@@ -2182,6 +2183,222 @@ function launchTaskRunner(taskId, runner) {
     .finally(() => {
       runningTaskIds.delete(taskId);
     });
+}
+
+function isSingleQueueTask(task) {
+  if (!task || typeof task !== 'object') return false;
+  return String(task.type || '') === 'single_queue_upload';
+}
+
+function isSingleQueuePendingStatus(status) {
+  return status === 'queued' || status === 'pending' || status === 'resuming' || status === 'running';
+}
+
+function taskTimeMs(task, field) {
+  const raw = task && task[field] ? Date.parse(String(task[field])) : NaN;
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+async function pickNextSingleQueueTask() {
+  const state = await readState();
+  const list = Object.values(state.tasks || {})
+    .filter((task) => isSingleQueueTask(task))
+    .filter((task) => isSingleQueuePendingStatus(String(task.status || '')))
+    .sort((a, b) => {
+      const aCreated = taskTimeMs(a, 'createdAt');
+      const bCreated = taskTimeMs(b, 'createdAt');
+      if (aCreated !== bCreated) return aCreated - bCreated;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+  return list[0] || null;
+}
+
+async function runQueuedSingleUpload(taskId, payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const state = await readState();
+  const selected = pickParserAndWebdav(data, state);
+  const taskSettings = normalizeTaskSettings(state.settings);
+  const inputUrl = extractFirstUrl(data.videoUrl || '');
+  if (!inputUrl) {
+    throw new Error('任务链接无效');
+  }
+
+  const preparedParsed = data.parsed && typeof data.parsed === 'object' ? data.parsed : null;
+  if (!preparedParsed) {
+    // Fallback to direct flow when parsed data is missing.
+    return directUpload(data);
+  }
+
+  const meta = data.meta && typeof data.meta === 'object' ? data.meta : null;
+  const metaShort = meta && meta.shortLink ? extractFirstUrl(meta.shortLink) : '';
+  const metaLong = meta && meta.longLink ? extractFirstUrl(meta.longLink) : '';
+  const metaAwemeId = meta && meta.awemeId ? String(meta.awemeId || '').trim() : '';
+  const awemeId = metaAwemeId || extractAwemeIdFromUrl(inputUrl) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
+  const uploadSourceUrl = metaLong || metaShort || inputUrl || '';
+
+  const naming = buildUploadNaming(taskSettings, preparedParsed, {
+    sourceUrl: uploadSourceUrl,
+    awemeId
+  });
+  const filePath = await uploadParsedMedia(preparedParsed, selected.webdav, naming.folderPath, uploadSourceUrl, {
+    fileName: naming.fileName
+  });
+
+  const history = await createHistoryRecord({
+    type: 'single',
+    title: preparedParsed.title || '队列上传',
+    status: 'success',
+    detail: {
+      inputUrl,
+      shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
+      videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
+      awemeId,
+      parserName: String(data.parserName || selected.parser.name || '未知解析器'),
+      webdavName: selected.webdav.name,
+      filePath,
+      sourceUrl: uploadSourceUrl,
+      queueTaskId: taskId,
+      mediaType: preparedParsed.mediaType || 'video',
+      author: preparedParsed.author || ''
+    }
+  });
+
+  await saveHistoryRecord(history);
+
+  return {
+    parsed: preparedParsed,
+    filePath,
+    history
+  };
+}
+
+async function appendFailedQueueHistory(taskId, payload, errorMessage) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const parsed = data.parsed && typeof data.parsed === 'object' ? data.parsed : null;
+  const title = parsed && parsed.title ? String(parsed.title) : '队列上传';
+  const sourceUrl = extractFirstUrl(data.videoUrl || '');
+
+  const failRecord = await createHistoryRecord({
+    type: 'single',
+    title,
+    status: 'failed',
+    detail: {
+      inputUrl: sourceUrl,
+      sourceUrl,
+      parserName: String(data.parserName || ''),
+      awemeId: String(data && data.meta && data.meta.awemeId ? data.meta.awemeId : ''),
+      error: errorMessage,
+      queueTaskId: taskId
+    }
+  });
+  await saveHistoryRecord(failRecord);
+}
+
+async function pumpSingleUploadQueue() {
+  if (singleQueuePumpRunning) {
+    return;
+  }
+  singleQueuePumpRunning = true;
+  try {
+    while (true) {
+      const nextTask = await pickNextSingleQueueTask();
+      if (!nextTask || !nextTask.id) {
+        break;
+      }
+
+      const taskId = String(nextTask.id);
+      if (runningTaskIds.has(taskId)) {
+        await sleep(150);
+        continue;
+      }
+
+      runningTaskIds.add(taskId);
+      try {
+        await updateTask(taskId, {
+          status: 'running',
+          progress: 15,
+          logs: ['后台任务执行中，请勿重复添加相同链接']
+        });
+
+        const result = await runQueuedSingleUpload(taskId, nextTask.payload || {});
+        await updateTask(taskId, {
+          status: 'completed',
+          progress: 100,
+          filePath: result && result.filePath ? String(result.filePath) : '',
+          title: result && result.parsed && result.parsed.title ? String(result.parsed.title) : String(nextTask.title || ''),
+          finishedAt: new Date().toISOString(),
+          logs: ['任务完成，已写入历史记录']
+        });
+      } catch (error) {
+        const message = toErrorMessage(error);
+        await appendFailedQueueHistory(taskId, nextTask.payload || {}, message).catch(() => {});
+        await updateTask(taskId, {
+          status: 'failed',
+          progress: 100,
+          error: message,
+          finishedAt: new Date().toISOString(),
+          logs: [`任务失败：${message}`]
+        });
+      } finally {
+        runningTaskIds.delete(taskId);
+      }
+    }
+  } finally {
+    singleQueuePumpRunning = false;
+  }
+}
+
+async function enqueueSingleUploadTask(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const inputUrl = extractFirstUrl(data.videoUrl || '');
+  if (!inputUrl) {
+    throw new Error('请输入有效的视频链接');
+  }
+
+  const state = await readState();
+  const selected = pickParserAndWebdav(data, state);
+  const parsed = data.parsed && typeof data.parsed === 'object' ? data.parsed : null;
+  if (!parsed) {
+    throw new Error('请先解析成功后再加入队列');
+  }
+
+  const title = String(parsed.title || '未命名任务');
+  const taskId = createId('queue');
+  const now = new Date().toISOString();
+
+  const pendingCount = Object.values(state.tasks || {}).filter((task) => {
+    if (!isSingleQueueTask(task)) return false;
+    return isSingleQueuePendingStatus(String(task.status || ''));
+  }).length;
+
+  await updateTask(taskId, {
+    id: taskId,
+    type: 'single_queue_upload',
+    status: 'queued',
+    progress: 0,
+    title,
+    parserName: String(data.parserName || selected.parser.name || ''),
+    webdavName: String(selected.webdav.name || ''),
+    sourceUrl: inputUrl,
+    payload: {
+      videoUrl: inputUrl,
+      parserId: data.parserId || selected.parser.id,
+      webdavId: data.webdavId || selected.webdav.id,
+      meta: data.meta && typeof data.meta === 'object' ? data.meta : null,
+      parsed,
+      parserName: String(data.parserName || selected.parser.name || '')
+    },
+    createdAt: now,
+    logs: ['已加入队列，等待后台处理']
+  });
+
+  void pumpSingleUploadQueue();
+
+  return {
+    taskId,
+    title,
+    position: pendingCount + 1
+  };
 }
 
 async function runUserBatchUpload(taskId, payload) {
@@ -2584,8 +2801,8 @@ async function resumePendingTasks() {
     const payload = task.payload && typeof task.payload === 'object' ? task.payload : null;
     if (!payload) return false;
     if (runningTaskIds.has(task.id)) return false;
-    if (type !== 'user_batch_upload' && type !== 'user_page_batch_upload') return false;
-    return status === 'pending' || status === 'collecting' || status === 'parsing_user' || status === 'uploading' || status === 'resuming';
+    if (type !== 'user_batch_upload' && type !== 'user_page_batch_upload' && type !== 'single_queue_upload') return false;
+    return status === 'queued' || status === 'pending' || status === 'collecting' || status === 'parsing_user' || status === 'uploading' || status === 'resuming' || status === 'running';
   });
 
   let resumed = 0;
@@ -2597,7 +2814,13 @@ async function resumePendingTasks() {
       logs: [`检测到未完成任务，自动恢复（${task.type}）`]
     });
 
-    if (task.type === 'user_page_batch_upload') {
+    if (task.type === 'single_queue_upload') {
+      await updateTask(taskId, {
+        status: 'queued',
+        logs: ['检测到未完成任务，已恢复到队列']
+      });
+      void pumpSingleUploadQueue();
+    } else if (task.type === 'user_page_batch_upload') {
       launchTaskRunner(taskId, async () => {
         await runUserPageBatchUpload(taskId, task.payload || {});
       });
@@ -2851,6 +3074,10 @@ const handlers = {
 
   async VIDEO_DIRECT_UPLOAD(payload) {
     return directUpload(payload || {});
+  },
+
+  async QUEUE_ADD_UPLOAD(payload) {
+    return enqueueSingleUploadTask(payload || {});
   },
 
   async SMART_UPLOAD_ACTIVE(payload) {

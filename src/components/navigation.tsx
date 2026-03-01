@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { UserMenu } from '@/components/ui/user-menu'
-import { Video, Home, Settings, History, Plus } from 'lucide-react'
+import { Video, Home, Settings, History, Plus, Puzzle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // 导航项配置
@@ -28,6 +28,11 @@ const navigationItems = [
     href: '/history',
     icon: History,
     label: '历史记录'
+  },
+  {
+    href: '/extension',
+    icon: Puzzle,
+    label: '插件使用'
   },
   {
     href: '/settings',

@@ -83,10 +83,22 @@
             <div class="row wrap" style="justify-content: space-between;">
               <button id="btn-parse" class="secondary" style="flex: 1;">解析并进入结果页</button>
               <button id="btn-upload" class="primary" style="flex: 1;">直接上传</button>
+              <button id="btn-queue-add" class="secondary" style="flex: 1;">加入任务队列</button>
               <button id="btn-open-preview" class="ghost" style="flex: 1;">打开预览/结果页</button>
             </div>
 
             <div id="result-box-home" class="notice">尚未执行任务</div>
+
+            <div class="queue-panel">
+              <div class="queue-panel-head">
+                <div class="queue-panel-title">后台任务队列</div>
+                <button id="btn-queue-refresh" class="ghost small-btn">刷新</button>
+              </div>
+              <div id="queue-summary" class="muted">队列任务：0</div>
+              <div id="queue-list" class="queue-list">
+                <div class="muted">暂无队列任务</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

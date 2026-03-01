@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VideoJX Next 助手",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "在抖音页面快速解析、上传、批量处理并同步历史记录。",
   "permissions": [
     "storage",
@@ -40,6 +40,20 @@
         "content.js"
       ],
       "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bridge.js"
+      ],
+      "matches": [
+        "https://www.douyin.com/*",
+        "https://douyin.com/*",
+        "https://www.iesdouyin.com/*",
+        "https://iesdouyin.com/*",
+        "https://v.douyin.com/*"
+      ]
     }
   ]
 }

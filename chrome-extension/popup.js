@@ -39,6 +39,8 @@
     btnCheckSession: document.getElementById('btn-check-session'),
     btnOpenPreview: document.getElementById('btn-open-preview'),
     btnPreviewBack: document.getElementById('btn-preview-back'),
+    btnQueueAdd: document.getElementById('btn-queue-add'),
+    btnQueueRefresh: document.getElementById('btn-queue-refresh'),
     videoUrl: document.getElementById('video-url'),
     shareMeta: document.getElementById('share-meta'),
     metaShort: document.getElementById('meta-short'),
@@ -61,7 +63,9 @@
     previewImage: document.getElementById('preview-image'),
     previewAlbumGrid: document.getElementById('preview-album-grid'),
     previewInfo: document.getElementById('preview-info'),
-    previewOpenLink: document.getElementById('preview-open-link')
+    previewOpenLink: document.getElementById('preview-open-link'),
+    queueSummary: document.getElementById('queue-summary'),
+    queueList: document.getElementById('queue-list')
   };
 
   let pageState = {
@@ -72,6 +76,7 @@
   };
 
   let lastShareMeta = null;
+  let queuePollTimer = null;
 
   function switchToView(view) {
     const showPreview = view === 'preview';
@@ -259,10 +264,158 @@
   }
 
   function setLoading(loading) {
-    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnCheckSession, el.btnOpenPreview, el.btnPreviewBack].forEach((button) => {
+    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnQueueAdd, el.btnCheckSession, el.btnOpenPreview, el.btnPreviewBack].forEach((button) => {
       if (!button) return;
       button.disabled = loading;
     });
+  }
+
+  function pickMatchedMeta(videoUrl) {
+    const current = extractFirstUrl(videoUrl || '');
+    if (!current) return null;
+    if (!lastShareMeta || typeof lastShareMeta !== 'object') return null;
+    const values = [lastShareMeta.link, lastShareMeta.shortLink, lastShareMeta.longLink]
+      .map((item) => extractFirstUrl(item || ''))
+      .filter(Boolean);
+    return values.includes(current) ? lastShareMeta : null;
+  }
+
+  function queueStatusLabel(status) {
+    const map = {
+      queued: '排队中',
+      pending: '等待中',
+      resuming: '恢复中',
+      running: '处理中',
+      completed: '已完成',
+      failed: '失败'
+    };
+    const key = String(status || '');
+    return map[key] || key || '未知';
+  }
+
+  function queueStatusClass(status) {
+    const key = String(status || '');
+    if (key === 'completed') return 'badge success';
+    if (key === 'failed') return 'badge fail';
+    return 'badge warn';
+  }
+
+  function queueSortWeight(status) {
+    const key = String(status || '');
+    if (key === 'running' || key === 'resuming') return 0;
+    if (key === 'queued' || key === 'pending') return 1;
+    if (key === 'failed') return 2;
+    if (key === 'completed') return 3;
+    return 4;
+  }
+
+  function formatQueueTime(task) {
+    const raw = task && (task.updatedAt || task.createdAt) ? String(task.updatedAt || task.createdAt) : '';
+    if (!raw) return '-';
+    const time = Date.parse(raw);
+    return Number.isFinite(time) ? new Date(time).toLocaleString() : raw;
+  }
+
+  function renderQueueTasks(tasks) {
+    const list = Array.isArray(tasks) ? tasks : [];
+    if (el.queueSummary) {
+      const running = list.filter((item) => ['running', 'resuming'].includes(String(item.status || ''))).length;
+      const waiting = list.filter((item) => ['queued', 'pending'].includes(String(item.status || ''))).length;
+      el.queueSummary.textContent = `队列任务：${list.length}（运行 ${running} / 等待 ${waiting}）`;
+    }
+
+    if (!el.queueList) return;
+    if (list.length === 0) {
+      el.queueList.innerHTML = '<div class="muted">暂无队列任务</div>';
+      return;
+    }
+
+    el.queueList.innerHTML = '';
+    list.forEach((task) => {
+      const item = document.createElement('div');
+      item.className = 'queue-item';
+
+      const title = document.createElement('div');
+      title.className = 'queue-item-title';
+      title.textContent = String(task.title || '未命名任务');
+
+      const meta = document.createElement('div');
+      meta.className = 'queue-item-meta';
+      const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+      meta.textContent = `${queueStatusLabel(task.status)} | 进度 ${progress}% | ${formatQueueTime(task)}`;
+
+      const statusBadge = document.createElement('span');
+      statusBadge.className = queueStatusClass(task.status);
+      statusBadge.textContent = queueStatusLabel(task.status);
+
+      const head = document.createElement('div');
+      head.className = 'queue-item-head';
+      head.appendChild(title);
+      head.appendChild(statusBadge);
+
+      const bar = document.createElement('div');
+      bar.className = 'progress';
+      const fill = document.createElement('span');
+      fill.style.width = `${progress}%`;
+      bar.appendChild(fill);
+
+      const tail = document.createElement('div');
+      tail.className = 'queue-item-tail';
+      if (task.filePath) {
+        const path = document.createElement('div');
+        path.className = 'list-item-meta';
+        path.textContent = String(task.filePath || '');
+        tail.appendChild(path);
+      } else if (task.error) {
+        const err = document.createElement('div');
+        err.className = 'list-item-meta';
+        err.textContent = `失败原因：${String(task.error || '')}`;
+        tail.appendChild(err);
+      }
+
+      const canDelete = ['completed', 'failed'].includes(String(task.status || ''));
+      if (canDelete) {
+        const actions = document.createElement('div');
+        actions.className = 'row wrap';
+        const btnDelete = document.createElement('button');
+        btnDelete.className = 'ghost small-btn';
+        btnDelete.textContent = '移除';
+        btnDelete.addEventListener('click', async () => {
+          try {
+            await send('TASK_DELETE', { id: task.id });
+            await refreshQueueTasks(false);
+          } catch (error) {
+            setResult(error.message, 'error');
+          }
+        });
+        actions.appendChild(btnDelete);
+        tail.appendChild(actions);
+      }
+
+      item.appendChild(head);
+      item.appendChild(meta);
+      item.appendChild(bar);
+      item.appendChild(tail);
+      el.queueList.appendChild(item);
+    });
+  }
+
+  async function refreshQueueTasks(withNotice) {
+    const allTasks = await send('TASKS_LIST');
+    const queueTasks = (Array.isArray(allTasks) ? allTasks : [])
+      .filter((task) => String(task && task.type ? task.type : '') === 'single_queue_upload')
+      .sort((a, b) => {
+        const weight = queueSortWeight(a.status) - queueSortWeight(b.status);
+        if (weight !== 0) return weight;
+        const aTime = Date.parse(String(a && (a.updatedAt || a.createdAt) ? (a.updatedAt || a.createdAt) : '')) || 0;
+        const bTime = Date.parse(String(b && (b.updatedAt || b.createdAt) ? (b.updatedAt || b.createdAt) : '')) || 0;
+        return bTime - aTime;
+      });
+
+    renderQueueTasks(queueTasks);
+    if (withNotice) {
+      setResult(`任务队列已刷新，共 ${queueTasks.length} 条。`, 'success');
+    }
   }
 
   async function writeClipboardText(text) {
@@ -591,11 +744,7 @@
 
     setLoading(true);
     try {
-      const meta = (() => {
-        if (!lastShareMeta || typeof lastShareMeta !== 'object') return null;
-        const values = [lastShareMeta.link, lastShareMeta.shortLink, lastShareMeta.longLink].filter(Boolean);
-        return values.includes(videoUrl) ? lastShareMeta : null;
-      })();
+      const meta = pickMatchedMeta(videoUrl);
 
       const result = await send('VIDEO_PARSE', {
         videoUrl,
@@ -630,11 +779,7 @@
     setResult('处理中，请稍候...', '');
 
     try {
-      const meta = (() => {
-        if (!lastShareMeta || typeof lastShareMeta !== 'object') return null;
-        const values = [lastShareMeta.link, lastShareMeta.shortLink, lastShareMeta.longLink].filter(Boolean);
-        return values.includes(videoUrl) ? lastShareMeta : null;
-      })();
+      const meta = pickMatchedMeta(videoUrl);
 
       const result = await send('VIDEO_DIRECT_UPLOAD', {
         videoUrl,
@@ -656,6 +801,57 @@
     }
   }
 
+  async function enqueueUploadTask() {
+    const videoUrl = extractFirstUrl(el.videoUrl.value);
+    if (!videoUrl) {
+      setResult('请输入有效的视频链接。', 'error');
+      return;
+    }
+
+    if (!el.webdavSelect.value) {
+      setResult('请先在设置页添加并选择 WebDAV。', 'error');
+      return;
+    }
+
+    setLoading(true);
+    setResult('正在解析并加入后台任务队列...', '');
+
+    try {
+      const meta = pickMatchedMeta(videoUrl);
+      const parsedResult = await send('VIDEO_PARSE', {
+        videoUrl,
+        parserId: el.parserSelect.value,
+        meta
+      });
+      const parsed = parsedResult && parsedResult.parsed ? parsedResult.parsed : null;
+      if (!parsed) {
+        throw new Error('解析失败，未返回有效结果');
+      }
+
+      const queueResult = await send('QUEUE_ADD_UPLOAD', {
+        videoUrl,
+        parserId: el.parserSelect.value,
+        webdavId: el.webdavSelect.value,
+        meta,
+        parsed,
+        parserName: parsedResult.parserName || ''
+      });
+
+      renderParsedPreview(parsed, parsedResult.parserName || '');
+      switchToView('preview');
+      await refreshQueueTasks(false);
+
+      const position = Number(queueResult && queueResult.position ? queueResult.position : 0);
+      const title = queueResult && queueResult.title ? String(queueResult.title) : '未命名任务';
+      const posSuffix = position > 0 ? `（队列第 ${position} 位）` : '';
+      setResult(`已加入任务队列${posSuffix}\n标题：${title}`, 'success');
+    } catch (error) {
+      setResult(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function bindEvents() {
     el.openOptions.addEventListener('click', () => {
       chrome.runtime.openOptionsPage();
@@ -668,6 +864,12 @@
     el.btnCheckSession.addEventListener('click', refreshSession);
     el.btnParse.addEventListener('click', parsePreview);
     el.btnUpload.addEventListener('click', directUpload);
+    if (el.btnQueueAdd) el.btnQueueAdd.addEventListener('click', enqueueUploadTask);
+    if (el.btnQueueRefresh) {
+      el.btnQueueRefresh.addEventListener('click', () => {
+        refreshQueueTasks(true).catch((error) => setResult(error.message, 'error'));
+      });
+    }
     if (el.btnOpenPreview) el.btnOpenPreview.addEventListener('click', () => switchToView('preview'));
     if (el.btnPreviewBack) el.btnPreviewBack.addEventListener('click', () => switchToView('home'));
 
@@ -683,12 +885,25 @@
         clearPreview('链接已手动修改，请重新点击“解析并进入结果页”。');
       });
     }
+
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!message || message.type !== 'TASK_UPDATED') return;
+      refreshQueueTasks(false).catch(() => {});
+    });
+
+    if (queuePollTimer) {
+      clearInterval(queuePollTimer);
+    }
+    queuePollTimer = setInterval(() => {
+      refreshQueueTasks(false).catch(() => {});
+    }, 3000);
   }
 
   async function bootstrap() {
     bindEvents();
     await loadState();
     await loadActiveContext();
+    await refreshQueueTasks(false);
     renderShareMeta();
     clearPreview();
     switchToView('home');
