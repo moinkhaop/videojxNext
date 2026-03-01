@@ -2,6 +2,7 @@ const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 const DEFAULT_UPSTREAMS = [
   'jxcxin|https://apis.jxcxin.cn/api/douyin?url={url}',
   'douyin_wtf|https://api.douyin.wtf/api/hybrid/video_data?url={url}',
+  'mmp_dyhome|https://api.mmp.cc/api/dyhome?url={url}',
   'yujn|https://api.yujn.cn/api/dy_jx.php?msg={url}',
   'xzdx|https://xzdx.top/api/duan?url={url}',
   'oick|https://api.oick.cn/douyin/?url={url}',
@@ -419,6 +420,7 @@ function detectVideoUrl(dataSource) {
     dataSource?.video_url,
     dataSource?.videoUrl,
     dataSource?.play_url,
+    getByPath(dataSource, 'video_urls.0'),
     dataSource?.download_url,
     dataSource?.downloadUrl,
     dataSource?.playAddr,

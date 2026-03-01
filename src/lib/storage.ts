@@ -348,6 +348,18 @@ export class ConfigManager {
     })
 
     parsers.push({
+      id: 'builtin_parser_mmp_dyhome',
+      name: 'MMP dyhome（抖音）',
+      apiUrl: 'https://api.mmp.cc/api/dyhome',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    parsers.push({
       id: 'builtin_parser_yujn',
       name: '遇见API（抖音/多平台）',
       apiUrl: 'https://api.yujn.cn/api/dy_jx.php',

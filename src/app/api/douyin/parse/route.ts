@@ -13,6 +13,7 @@ const DEFAULT_USER_AGENT =
 const DEFAULT_UPSTREAMS = [
   'jxcxin|GET https://apis.jxcxin.cn/api/douyin?url={url}',
   'douyin_wtf|GET https://api.douyin.wtf/api/hybrid/video_data?url={url}',
+  'mmp_dyhome|GET https://api.mmp.cc/api/dyhome?url={url}',
   'yujn|GET https://api.yujn.cn/api/dy_jx.php?msg={url}',
   'xzdx|GET https://xzdx.top/api/duan?url={url}',
   'oick|GET https://api.oick.cn/douyin/?url={url}',
@@ -515,6 +516,7 @@ function detectVideoUrl(dataSource: any): string {
     dataSource?.video_url,
     dataSource?.videoUrl,
     dataSource?.play_url,
+    getByPath(dataSource, 'video_urls.0'),
     dataSource?.download_url,
     dataSource?.downloadUrl,
     dataSource?.playAddr,
@@ -580,6 +582,7 @@ function isLikelyUpstreamParserUrl(value: string): boolean {
     if (host.endsWith('yujn.cn')) return true
     if (host.endsWith('xzdx.top')) return true
     if (host.endsWith('douyin.wtf')) return true
+    if (host === 'api.mmp.cc' || host.endsWith('.mmp.cc')) return true
     return false
   } catch {
     return false
