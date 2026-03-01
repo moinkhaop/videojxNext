@@ -4,66 +4,160 @@
   }
   globalThis.__videojxContentLoaded = true;
 
-  // Install a main-world fetch hook early (best-effort) so we can reuse the page's own
-  // signed API responses when our direct request lacks anti-bot params.
-  (function ensureMainWorldFetchHook() {
-    try {
-      const host = String(window.location && window.location.hostname ? window.location.hostname : '').toLowerCase();
-      const isDouyinHost =
-        host === 'douyin.com' ||
-        host === 'www.douyin.com' ||
-        host.endsWith('.douyin.com') ||
-        host === 'iesdouyin.com' ||
-        host === 'www.iesdouyin.com' ||
-        host.endsWith('.iesdouyin.com');
-      if (!isDouyinHost) {
-        return;
-      }
+  const PAGE_BRIDGE_SCRIPT_ID = 'videojx-page-bridge-script';
+  const PAGE_BRIDGE_READY_TIMEOUT_MS = 3000;
+  const PAGE_BRIDGE_REQUEST_TYPE = 'VIDEOJX_PAGE_BRIDGE_REQUEST';
+  const PAGE_BRIDGE_RESPONSE_TYPE = 'VIDEOJX_PAGE_BRIDGE_RESPONSE';
+  const PAGE_BRIDGE_READY_TYPE = 'VIDEOJX_PAGE_BRIDGE_READY';
+  const PAGE_BRIDGE_PING_TYPE = 'VIDEOJX_PAGE_BRIDGE_PING';
 
-      const script = document.createElement('script');
-      script.textContent =
-        `(() => {\n` +
-        `  try {\n` +
-        `    if (window.__VIDEOJX_FETCH_HOOK_INSTALLED) return;\n` +
-        `    window.__VIDEOJX_FETCH_HOOK_INSTALLED = true;\n` +
-        `    window.__VIDEOJX_AWEME_CACHE = window.__VIDEOJX_AWEME_CACHE || Object.create(null);\n` +
-        `    const cache = window.__VIDEOJX_AWEME_CACHE;\n` +
-        `    const origFetch = window.fetch;\n` +
-        `    if (typeof origFetch !== 'function') return;\n` +
-        `    window.fetch = async (...args) => {\n` +
-        `      const res = await origFetch(...args);\n` +
-        `      try {\n` +
-        `        const input = args && args[0] ? args[0] : '';\n` +
-        `        const url = (typeof input === 'string') ? input : (input && input.url ? String(input.url) : '');\n` +
-        `        if (!url || (!url.includes('/aweme/v1/web/') && !url.includes('aweme/v1/web/'))) return res;\n` +
-        `        if (!res || !res.ok) return res;\n` +
-        `        const data = await res.clone().json().catch(() => null);\n` +
-        `        if (!data || typeof data !== 'object') return res;\n` +
-        `        const detail = data.aweme_detail || data.awemeDetail;\n` +
-        `        if (detail && typeof detail === 'object') {\n` +
-        `          const id = String(detail.aweme_id || detail.awemeId || '').trim();\n` +
-        `          if (id) cache[id] = detail;\n` +
-        `          return res;\n` +
-        `        }\n` +
-        `        const list = data.aweme_list || data.awemeList;\n` +
-        `        if (Array.isArray(list)) {\n` +
-        `          for (const item of list) {\n` +
-        `            if (!item || typeof item !== 'object') continue;\n` +
-        `            const id = String(item.aweme_id || item.awemeId || '').trim();\n` +
-        `            if (id) cache[id] = item;\n` +
-        `          }\n` +
-        `        }\n` +
-        `      } catch (e) {}\n` +
-        `      return res;\n` +
-        `    };\n` +
-        `  } catch (e) {}\n` +
-        `})();\n`;
+  let pageBridgeReadyPromise = null;
 
-      (document.documentElement || document.head || document.body).appendChild(script);
-      script.remove();
-    } catch (error) {
+  function isDouyinHost(hostname) {
+    const host = String(hostname || '').toLowerCase();
+    return (
+      host === 'douyin.com' ||
+      host === 'www.douyin.com' ||
+      host.endsWith('.douyin.com') ||
+      host === 'iesdouyin.com' ||
+      host === 'www.iesdouyin.com' ||
+      host.endsWith('.iesdouyin.com')
+    );
+  }
+
+  function ensureMainWorldBridgeReady() {
+    if (pageBridgeReadyPromise) {
+      return pageBridgeReadyPromise;
     }
-  })();
+
+    pageBridgeReadyPromise = new Promise((resolve, reject) => {
+      try {
+        const host = String(window.location && window.location.hostname ? window.location.hostname : '').toLowerCase();
+        if (!isDouyinHost(host)) {
+          reject(new Error('当前页面不是抖音域名'));
+          return;
+        }
+
+        let settled = false;
+        const timeoutId = setTimeout(() => {
+          finish(false, new Error('页面桥接脚本加载超时'));
+        }, PAGE_BRIDGE_READY_TIMEOUT_MS);
+
+        function cleanup() {
+          clearTimeout(timeoutId);
+          window.removeEventListener('message', onMessage);
+        }
+
+        function finish(ok, value) {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          if (ok) {
+            resolve(value);
+          } else {
+            reject(value);
+          }
+        }
+
+        function onMessage(event) {
+          if (event.source !== window) return;
+          const data = event.data;
+          if (!data || data.type !== PAGE_BRIDGE_READY_TYPE) {
+            return;
+          }
+          finish(true);
+        }
+
+        window.addEventListener('message', onMessage);
+
+        let script = document.getElementById(PAGE_BRIDGE_SCRIPT_ID);
+        if (!script) {
+          script = document.createElement('script');
+          script.id = PAGE_BRIDGE_SCRIPT_ID;
+          script.src = chrome.runtime.getURL('page-bridge.js');
+          script.async = false;
+          script.onerror = () => {
+            finish(false, new Error('页面桥接脚本加载失败'));
+          };
+          script.onload = () => {
+            try {
+              window.postMessage({ type: PAGE_BRIDGE_PING_TYPE }, '*');
+            } catch (error) {}
+          };
+          (document.documentElement || document.head || document.body).appendChild(script);
+        } else {
+          try {
+            window.postMessage({ type: PAGE_BRIDGE_PING_TYPE }, '*');
+          } catch (error) {}
+        }
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }).catch((error) => {
+      pageBridgeReadyPromise = null;
+      throw error;
+    });
+
+    return pageBridgeReadyPromise;
+  }
+
+  function requestMainWorldBridge(action, payload, timeoutMs, timeoutMessage) {
+    return new Promise((resolve, reject) => {
+      ensureMainWorldBridgeReady()
+        .then(() => {
+          const requestId = `videojx_bridge_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+          const waitMs = Math.max(500, Number(timeoutMs || 5000));
+          const timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error(timeoutMessage || '主页面脚本响应超时'));
+          }, waitMs);
+
+          function cleanup() {
+            clearTimeout(timeoutId);
+            window.removeEventListener('message', onMessage);
+          }
+
+          function onMessage(event) {
+            if (event.source !== window) return;
+            const data = event.data;
+            if (!data || data.type !== PAGE_BRIDGE_RESPONSE_TYPE || data.requestId !== requestId) {
+              return;
+            }
+            cleanup();
+            if (data.ok === false) {
+              reject(new Error(data.error || '主页面脚本执行失败'));
+              return;
+            }
+            resolve(data.payload);
+          }
+
+          window.addEventListener('message', onMessage);
+
+          try {
+            window.postMessage(
+              {
+                type: PAGE_BRIDGE_REQUEST_TYPE,
+                requestId,
+                action,
+                payload: payload && typeof payload === 'object' ? payload : {}
+              },
+              '*'
+            );
+          } catch (error) {
+            cleanup();
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        })
+        .catch((error) => {
+          reject(error);
+        });
+    });
+  }
+
+  // Best effort: load the in-page bridge early to avoid request-time races.
+  ensureMainWorldBridgeReady().catch(() => {});
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -264,105 +358,27 @@
   }
 
   function readCachedAwemeDetailInMainWorld(awemeId) {
-    return new Promise((resolve) => {
-      const id = String(awemeId || '').trim();
-      if (!/^[0-9]{10,25}$/.test(id)) {
-        resolve(null);
-        return;
-      }
+    const id = String(awemeId || '').trim();
+    if (!/^[0-9]{10,25}$/.test(id)) {
+      return Promise.resolve(null);
+    }
 
-      const requestId = `videojx_cache_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        resolve(null);
-      }, 1200);
-
-      function cleanup() {
-        clearTimeout(timeoutId);
-        window.removeEventListener('message', onMessage);
-      }
-
-      function onMessage(event) {
-        if (event.source !== window) return;
-        const data = event.data;
-        if (!data || data.type !== 'VIDEOJX_AWEME_CACHE_RESULT' || data.requestId !== requestId) {
-          return;
-        }
-        cleanup();
-        resolve(data.payload || null);
-      }
-
-      window.addEventListener('message', onMessage);
-
-      const script = document.createElement('script');
-      script.textContent =
-        `(() => {\n` +
-        `  const requestId = ${JSON.stringify(requestId)};\n` +
-        `  const awemeId = ${JSON.stringify(id)};\n` +
-        `  let payload = null;\n` +
-        `  try {\n` +
-        `    const cache = window.__VIDEOJX_AWEME_CACHE;\n` +
-        `    payload = (cache && cache[awemeId]) ? cache[awemeId] : null;\n` +
-        `  } catch (e) {}\n` +
-        `  try { window.postMessage({ type: 'VIDEOJX_AWEME_CACHE_RESULT', requestId, payload }, '*'); } catch (e) {}\n` +
-        `})();\n`;
-
-      (document.documentElement || document.head || document.body).appendChild(script);
-      script.remove();
-    });
+    return requestMainWorldBridge('READ_AWEME_CACHE', { awemeId: id }, 1200, '读取页面缓存超时')
+      .then((payload) => (payload && typeof payload === 'object' ? payload : null))
+      .catch(() => null);
   }
 
   function fetchAwemeDetailInMainWorld(awemeId) {
-    return new Promise((resolve, reject) => {
-      const id = String(awemeId || '').trim();
-      if (!/^[0-9]{10,25}$/.test(id)) {
-        reject(new Error('aweme_id 无效'));
-        return;
-      }
-
-      const requestId = `videojx_aweme_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error('请求抖音 aweme detail 超时'));
-      }, 12000);
-
-      function cleanup() {
-        clearTimeout(timeoutId);
-        window.removeEventListener('message', onMessage);
-      }
-
-      function onMessage(event) {
-        if (event.source !== window) return;
-        const data = event.data;
-        if (!data || data.type !== 'VIDEOJX_AWEME_DETAIL_RESULT' || data.requestId !== requestId) {
-          return;
-        }
-        cleanup();
-        if (!data.ok) {
-          reject(new Error(data.error || '抖音 aweme detail 请求失败'));
-          return;
-        }
-        resolve(data.payload);
-      }
-
-      window.addEventListener('message', onMessage);
-
-      const script = document.createElement('script');
-      script.textContent = `(() => {\n` +
-        `  const requestId = ${JSON.stringify(requestId)};\n` +
-        `  const awemeId = ${JSON.stringify(id)};\n` +
-        `  const post = (ok, payload, error) => {\n` +
-        `    try { window.postMessage({ type: 'VIDEOJX_AWEME_DETAIL_RESULT', requestId, ok, payload, error }, '*'); } catch (e) {}\n` +
-        `  };\n` +
-        `  fetch('/aweme/v1/web/aweme/detail/?aid=6383&aweme_id=' + encodeURIComponent(awemeId), { credentials: 'include' })\n` +
-        `    .then(r => r.json())\n` +
-        `    .then(j => post(true, j, ''))\n` +
-        `    .catch(e => post(false, null, (e && e.message) ? e.message : String(e)));\n` +
-        `})();\n`;
-
-      (document.documentElement || document.head || document.body).appendChild(script);
-      script.remove();
-    });
+    const id = String(awemeId || '').trim();
+    if (!/^[0-9]{10,25}$/.test(id)) {
+      return Promise.reject(new Error('aweme_id 无效'));
+    }
+    return requestMainWorldBridge(
+      'FETCH_AWEME_DETAIL',
+      { awemeId: id },
+      12000,
+      '请求抖音 aweme detail 超时'
+    );
   }
 
   async function parseAwemeViaWebApi(awemeId) {
@@ -481,57 +497,18 @@
   }
 
   function readUserAwemeIdsInMainWorld(secUid) {
-    return new Promise((resolve) => {
-      const requestId = `videojx_user_aweme_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        resolve([]);
-      }, 1200);
-
-      function cleanup() {
-        clearTimeout(timeoutId);
-        window.removeEventListener('message', onMessage);
-      }
-
-      function onMessage(event) {
-        if (event.source !== window) return;
-        const data = event.data;
-        if (!data || data.type !== 'VIDEOJX_USER_AWEME_IDS_RESULT' || data.requestId !== requestId) {
-          return;
-        }
-        cleanup();
-        const ids = Array.isArray(data.awemeIds) ? data.awemeIds : [];
-        resolve(ids.filter((id) => typeof id === 'string' && /^[0-9]{10,25}$/.test(id)));
-      }
-
-      window.addEventListener('message', onMessage);
-
-      const script = document.createElement('script');
-      script.textContent =
-        `(() => {\n` +
-        `  const requestId = ${JSON.stringify(requestId)};\n` +
-        `  const secUid = ${JSON.stringify(String(secUid || ''))};\n` +
-        `  const out = [];\n` +
-        `  try {\n` +
-        `    const cache = window.__VIDEOJX_AWEME_CACHE || Object.create(null);\n` +
-        `    for (const key of Object.keys(cache)) {\n` +
-        `      const item = cache[key];\n` +
-        `      if (!item || typeof item !== 'object') continue;\n` +
-        `      const author = item.author && typeof item.author === 'object' ? item.author : null;\n` +
-        `      const itemSec = author ? (author.sec_uid || author.secUid || '') : '';\n` +
-        `      if (secUid) {\n` +
-        `        if (!itemSec) continue;\n` +
-        `        if (String(itemSec) !== secUid) continue;\n` +
-        `      }\n` +
-        `      out.push(String(key));\n` +
-        `    }\n` +
-        `  } catch (e) {}\n` +
-        `  try { window.postMessage({ type: 'VIDEOJX_USER_AWEME_IDS_RESULT', requestId, awemeIds: out }, '*'); } catch (e) {}\n` +
-        `})();\n`;
-
-      (document.documentElement || document.head || document.body).appendChild(script);
-      script.remove();
-    });
+    const normalizedSecUid = String(secUid || '');
+    return requestMainWorldBridge(
+      'READ_USER_AWEME_IDS',
+      { secUid: normalizedSecUid },
+      1200,
+      '读取用户视频缓存超时'
+    )
+      .then((payload) => {
+        const ids = payload && Array.isArray(payload.awemeIds) ? payload.awemeIds : [];
+        return ids.filter((id) => typeof id === 'string' && /^[0-9]{10,25}$/.test(id));
+      })
+      .catch(() => []);
   }
 
   function createCollectorOverlay() {
