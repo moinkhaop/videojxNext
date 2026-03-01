@@ -4,6 +4,31 @@ import { assertSupabaseEnabled } from './enabled'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
 
+function asRecord(value: unknown): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, any>
+}
+
+function normalizeExtensionConfig(value: unknown) {
+  const source = asRecord(value)
+  return {
+    settings: asRecord(source.settings),
+    parsers: Array.isArray(source.parsers) ? source.parsers : [],
+    webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
+    defaults: asRecord(source.defaults),
+  }
+}
+
+function toJsonSafe(value: unknown): any {
+  try {
+    return JSON.parse(JSON.stringify(value ?? {}))
+  } catch {
+    return {}
+  }
+}
+
 function getSupabase() {
   return createClient() as any
 }
@@ -58,9 +83,11 @@ export async function updateUserConfig(configData: any): Promise<any> {
   const userId = await requireUserId()
   const supabase = getSupabase()
 
+  const rootConfig = asRecord(configData)
+
   const { data: existing, error: existingError } = await supabase
     .from('user_configs')
-    .select('id')
+    .select('id, config_data')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false })
     .limit(1)
@@ -70,10 +97,22 @@ export async function updateUserConfig(configData: any): Promise<any> {
     throw existingError
   }
 
+  const existingConfigData = asRecord(existing?.config_data)
+  const nextConfigData = toJsonSafe({
+    ...existingConfigData,
+    ...rootConfig,
+    extension: {
+      ...asRecord(existingConfigData.extension),
+      config: normalizeExtensionConfig(rootConfig),
+      updatedAt: Date.now(),
+      syncedAt: new Date().toISOString(),
+    },
+  })
+
   if (existing?.id) {
     const { data, error } = await supabase
       .from('user_configs')
-      .update({ config_data: configData })
+      .update({ config_data: nextConfigData })
       .eq('id', existing.id)
       .select('config_data')
       .single()
@@ -87,7 +126,7 @@ export async function updateUserConfig(configData: any): Promise<any> {
 
   const { data, error } = await supabase
     .from('user_configs')
-    .insert({ user_id: userId, config_data: configData })
+    .insert({ user_id: userId, config_data: nextConfigData })
     .select('config_data')
     .single()
 

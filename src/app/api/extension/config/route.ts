@@ -107,6 +107,7 @@ export async function GET(request: NextRequest) {
   const hasExtensionConfig = hasConfigContent(extensionConfig)
   const hasLegacyConfig = hasConfigContent(legacyConfig)
   const hasRemoteConfig = hasExtensionConfig || hasLegacyConfig
+  const source = hasExtensionConfig ? 'extension' : hasLegacyConfig ? 'legacy' : 'none'
 
   const config = hasExtensionConfig ? extensionConfig : legacyConfig
   const extensionUpdatedAt = toTimestampMs(extensionNode.updatedAt)
@@ -119,6 +120,8 @@ export async function GET(request: NextRequest) {
       config,
       updatedAt,
       rowUpdatedAt: data?.updated_at ?? null,
+      source,
+      hasRemoteConfig,
     },
   })
 }

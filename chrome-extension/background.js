@@ -934,6 +934,20 @@ function pickExtensionConfigSnapshot(state) {
   };
 }
 
+function hasConfigSnapshotContent(snapshot) {
+  const safe = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const settings = safe.settings && typeof safe.settings === 'object' ? safe.settings : {};
+  const parsers = Array.isArray(safe.parsers) ? safe.parsers : [];
+  const webdavServers = Array.isArray(safe.webdavServers) ? safe.webdavServers : [];
+  const defaults = safe.defaults && typeof safe.defaults === 'object' ? safe.defaults : {};
+
+  if (parsers.length > 0) return true;
+  if (webdavServers.length > 0) return true;
+  if (Object.keys(settings).length > 0) return true;
+  if (Object.keys(defaults).length > 0) return true;
+  return false;
+}
+
 async function applyCloudConfig(config, updatedAt) {
   const payload = config && typeof config === 'object' ? config : {};
   await mutateState((state) => {
@@ -1009,6 +1023,22 @@ async function syncConfigAuto() {
   const remoteConfig = remote && remote.data ? remote.data.config : null;
 
   if (!remoteUpdatedAt) {
+    const localHasConfig = hasConfigSnapshotContent(localSnapshot);
+    if (localHasConfig && effectiveLocalUpdatedAt > 0) {
+      await apiRequest('/api/extension/config', {
+        method: 'POST',
+        useAuth: true,
+        body: { config: localSnapshot, updatedAt: effectiveLocalUpdatedAt }
+      });
+
+      await mutateState((next) => {
+        next.settings.lastConfigSyncAt = Date.now();
+        next.settings.configUserId = currentUserId;
+      });
+
+      return { mode: 'push', updatedAt: effectiveLocalUpdatedAt, remoteUpdatedAt, message: '云端暂无配置，已上传本机配置。' };
+    }
+
     await mutateState((next) => {
       next.settings.lastConfigSyncAt = Date.now();
       next.settings.configUserId = currentUserId;
@@ -1210,8 +1240,7 @@ async function pullHistoryFromCloud() {
   const cloudHistory = Array.isArray(cloudList.data) ? cloudList.data : [];
 
   await mutateState((next) => {
-    const limit = Math.max(100, Math.min(1000, Number(next.settings && next.settings.historyLimit ? next.settings.historyLimit : 500)));
-    next.history = cloudHistory.slice(0, limit);
+    next.history = cloudHistory;
     if (!next.settings || typeof next.settings !== 'object') {
       next.settings = {};
     }

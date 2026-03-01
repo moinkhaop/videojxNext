@@ -8,6 +8,48 @@ type RemoteHistoryRow = {
   [key: string]: any
 }
 
+type NormalizedConfig = {
+  settings: Record<string, any>
+  parsers: any[]
+  webdavServers: any[]
+  defaults: Record<string, any>
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, any>
+}
+
+function normalizeRootConfig(value: unknown): NormalizedConfig {
+  const source = asRecord(value)
+  return {
+    settings: asRecord(source.settings),
+    parsers: Array.isArray(source.parsers) ? source.parsers : [],
+    webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
+    defaults: asRecord(source.defaults),
+  }
+}
+
+function hasConfigContent(config: NormalizedConfig): boolean {
+  if (config.parsers.length > 0) return true
+  if (config.webdavServers.length > 0) return true
+  if (Object.keys(config.settings).length > 0) return true
+  if (Object.keys(config.defaults).length > 0) return true
+  return false
+}
+
+function normalizeRemoteConfig(value: unknown): NormalizedConfig {
+  const source = asRecord(value)
+  const extensionNode = asRecord(source.extension)
+  const extensionConfig = normalizeRootConfig(extensionNode.config)
+  if (hasConfigContent(extensionConfig)) {
+    return extensionConfig
+  }
+  return normalizeRootConfig(source)
+}
+
 function toDate(value: unknown): Date | undefined {
   if (!value) return undefined
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value
@@ -38,25 +80,38 @@ export async function hydrateFromSupabase() {
     safeCall(() => remote.getCleanupConfig()),
   ])
 
-  if (remoteConfig && typeof remoteConfig === 'object') {
+  const localConfigPayload = {
+    ...ConfigManager.getAppConfig(),
+    parsers: ConfigManager.getParsers(),
+    webdavServers: ConfigManager.getWebDAVServers(),
+  }
+  const normalizedRemoteConfig = normalizeRemoteConfig(remoteConfig)
+  const normalizedLocalConfig = normalizeRootConfig(localConfigPayload)
+  const hasRemoteConfig = hasConfigContent(normalizedRemoteConfig)
+  const hasLocalConfig = hasConfigContent(normalizedLocalConfig)
+
+  if (hasRemoteConfig) {
+    const remoteRoot = asRecord(remoteConfig)
     runWithCloudSyncSuppressed(() => {
-      const theme = (remoteConfig as any).theme
+      const theme = remoteRoot.theme
       if (theme === 'light' || theme === 'dark' || theme === 'system') {
         const current = ConfigManager.getAppConfig()
         ConfigManager.saveAppConfig({ ...current, theme })
       }
 
-      const parsers = (remoteConfig as any).parsers
+      const parsers = normalizedRemoteConfig.parsers
       if (Array.isArray(parsers)) {
         ConfigManager.saveParsers(parsers)
       }
 
-      const webdavServers = (remoteConfig as any).webdavServers
+      const webdavServers = normalizedRemoteConfig.webdavServers
       if (Array.isArray(webdavServers)) {
         ConfigManager.saveWebDAVServers(webdavServers)
       }
     })
-
+  } else if (hasLocalConfig) {
+    await safeCall(() => remote.updateUserConfig(localConfigPayload))
+    markSyncOk('config')
   }
 
   if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {
