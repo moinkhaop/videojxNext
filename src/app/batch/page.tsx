@@ -44,6 +44,7 @@ import Link from 'next/link'
 
 export default function BatchPage() {
   const [videoUrls, setVideoUrls] = useState('')
+  const [inputModePreference, setInputModePreference] = useState<'auto' | 'normal' | 'douyin_user'>('auto')
   const [selectedParser, setSelectedParser] = useState<string>('')
   const [selectedWebDAV, setSelectedWebDAV] = useState<string>('')
   const [parsers, setParsers] = useState<VideoParserConfig[]>([])
@@ -65,19 +66,21 @@ export default function BatchPage() {
 
   // 实时检测输入模式
   useEffect(() => {
-    if (videoUrls.trim()) {
-      const detectedMode = ConversionService.detectInputMode(videoUrls.trim())
-      if (detectedMode !== inputMode) {
-        setInputMode(detectedMode)
-        console.log('[批量转存] 输入模式切换:', detectedMode === BatchInputMode.DOUYIN_USER ? '抖音用户模式' : '普通批量模式')
-      }
-    } else {
-      // 输入为空时重置为普通模式
-      if (inputMode !== BatchInputMode.NORMAL) {
-        setInputMode(BatchInputMode.NORMAL)
-      }
+    let nextMode: BatchInputMode = BatchInputMode.NORMAL
+
+    if (inputModePreference === 'douyin_user') {
+      nextMode = BatchInputMode.DOUYIN_USER
+    } else if (inputModePreference === 'normal') {
+      nextMode = BatchInputMode.NORMAL
+    } else if (videoUrls.trim()) {
+      nextMode = ConversionService.detectInputMode(videoUrls.trim())
     }
-  }, [videoUrls, inputMode])
+
+    if (nextMode !== inputMode) {
+      setInputMode(nextMode)
+      console.log('[批量转存] 输入模式切换:', nextMode === BatchInputMode.DOUYIN_USER ? '抖音用户模式' : '普通批量模式')
+    }
+  }, [videoUrls, inputMode, inputModePreference])
 
   useEffect(() => {
     // 加载配置和增强解析器
@@ -148,6 +151,28 @@ export default function BatchPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
+
+  useEffect(() => {
+    if (enhancedParsers.length === 0) {
+      return
+    }
+
+    const isCompatible = (parser: EnhancedVideoParserConfig) => (
+      inputMode === BatchInputMode.DOUYIN_USER
+        ? parser.capabilities?.includes(ParserCapability.USER_PAGE)
+        : parser.capabilities?.includes(ParserCapability.SINGLE_VIDEO)
+    )
+
+    const selected = enhancedParsers.find(parser => parser.id === selectedParser)
+    if (selected && isCompatible(selected)) {
+      return
+    }
+
+    const fallback = enhancedParsers.find(isCompatible)
+    if (fallback && fallback.id !== selectedParser) {
+      setSelectedParser(fallback.id)
+    }
+  }, [enhancedParsers, inputMode, selectedParser])
 
   // 剪贴板自动检测
   useEffect(() => {
@@ -230,6 +255,11 @@ export default function BatchPage() {
     () => Array.from(new Set(parsedInputUrls)),
     [parsedInputUrls]
   )
+  const hasSingleDouyinShortLink = useMemo(() => {
+    if (inputModePreference !== 'auto') return false
+    if (uniqueInputUrls.length !== 1) return false
+    return /^https?:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/?$/i.test(uniqueInputUrls[0] || '')
+  }, [inputModePreference, uniqueInputUrls])
   const urlCount = parsedInputUrls.length
   const dedupedUrlCount = uniqueInputUrls.length
   const duplicateUrlCount = Math.max(0, urlCount - dedupedUrlCount)
@@ -258,7 +288,7 @@ export default function BatchPage() {
       return
     }
 
-    const parser = parsers.find(p => p.id === selectedParser)
+    const parser = parsers.find(p => p.id === selectedParser) || enhancedParsers.find(p => p.id === selectedParser)
     const webdav = webdavServers.find(s => s.id === selectedWebDAV)
 
     if (!parser || !webdav) {
@@ -268,7 +298,9 @@ export default function BatchPage() {
 
     // {{ AURA: Modify - 支持智能模式识别和抖音用户解析 }}
     // 自动检测输入模式
-    const detectedMode = ConversionService.detectInputMode(videoUrls.trim())
+    const detectedMode = inputModePreference === 'auto'
+      ? ConversionService.detectInputMode(videoUrls.trim())
+      : (inputModePreference === 'douyin_user' ? BatchInputMode.DOUYIN_USER : BatchInputMode.NORMAL)
     
     setIsProcessing(true)
     setIsPaused(false)
@@ -280,7 +312,8 @@ export default function BatchPage() {
 
     if (detectedMode === BatchInputMode.DOUYIN_USER) {
       // 抖音用户模式
-      const userUrl = videoUrls.trim()
+      const parsedUrls = ConversionService.parseVideoUrls(videoUrls.trim())
+      const userUrl = parsedUrls[0] || videoUrls.trim()
       batchTask = {
         id: ConversionService.generateBatchId(),
         name: `抖音用户批量转存 - ${new Date().toLocaleString()}`,
@@ -607,6 +640,39 @@ export default function BatchPage() {
                   </span>
                 )}
               </label>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs text-muted-foreground">输入模式</span>
+                <Button
+                  type="button"
+                  variant={inputModePreference === 'auto' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={isProcessing}
+                  onClick={() => setInputModePreference('auto')}
+                >
+                  自动识别
+                </Button>
+                <Button
+                  type="button"
+                  variant={inputModePreference === 'normal' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={isProcessing}
+                  onClick={() => setInputModePreference('normal')}
+                >
+                  普通批量
+                </Button>
+                <Button
+                  type="button"
+                  variant={inputModePreference === 'douyin_user' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={isProcessing}
+                  onClick={() => setInputModePreference('douyin_user')}
+                >
+                  抖音用户主页
+                </Button>
+              </div>
               <div className="flex items-center justify-end gap-2 mb-2">
                 <Button
                   type="button"
@@ -654,7 +720,9 @@ https://example.com/video2
 
 2. 抖音用户模式 - 单个用户主页链接：
 https://www.douyin.com/user/MS4w...
-（将自动解析该用户的所有视频）`}
+（将自动解析该用户的所有视频）
+
+提示：如果粘贴的是 v.douyin.com 短链，请先在上方手动切换输入模式。`}
                 value={videoUrls}
                 onChange={(e) => setVideoUrls(e.target.value)}
                 className="min-h-[200px] font-mono text-sm"
@@ -664,6 +732,21 @@ https://www.douyin.com/user/MS4w...
                 <p className="text-xs text-muted-foreground mt-1">
                   ✓ 剪贴板自动添加已启用，复制的视频链接将自动追加到列表
                 </p>
+              )}
+              {hasSingleDouyinShortLink && (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                  检测到抖音短链，自动模式无法判断它是单视频还是用户主页。
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-1 py-0 text-xs text-amber-900"
+                    disabled={isProcessing}
+                    onClick={() => setInputModePreference('douyin_user')}
+                  >
+                    按用户主页解析
+                  </Button>
+                </div>
               )}
               {/* 抖音用户模式的数量限制设置 */}
               {inputMode === BatchInputMode.DOUYIN_USER && (
@@ -711,7 +794,7 @@ https://www.douyin.com/user/MS4w...
                         : parser.capabilities?.includes(ParserCapability.SINGLE_VIDEO);
                       const isRecommended = isCompatible && (
                         inputMode === BatchInputMode.DOUYIN_USER
-                          ? parser.responseAdapter === 'douyin_user_api'
+                          ? parser.responseAdapter === 'douyin_user_api' || parser.responseAdapter === 'simplified_douyin_user_api'
                           : parser.isDefault
                       );
                       

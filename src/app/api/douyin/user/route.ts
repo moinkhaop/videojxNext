@@ -1,74 +1,258 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { DouyinUserApiResponse, DouyinUserParseRequest, DouyinVideoItem, ParsedVideoInfo, MediaType } from '@/types';
-import { requireRouteAuth } from '@/lib/api/route-auth'
+import { NextRequest, NextResponse } from 'next/server'
+import {
+  DouyinUserParseRequest,
+  DouyinVideoItem,
+  ParsedVideoInfo,
+  MediaType
+} from '@/types'
+import { extractFirstUrlFromText } from '@/lib/url/extract'
+
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+const USER_PARSE_TIMEOUT_MS = 30_000
+const MAX_LIMIT = 5000
+
+type UserParseResult = {
+  videos: ParsedVideoInfo[]
+  totalCount: number
+  userInfo?: {
+    nickname?: string
+    avatar?: string
+  }
+}
+
+type UserUpstream = {
+  name: string
+  target: string
+  adapt: (payload: any) => UserParseResult
+}
+
+const USER_UPSTREAMS: UserUpstream[] = [
+  {
+    name: 'mmp_dyhome',
+    target: 'https://api.mmp.cc/api/dyhome?url={url}',
+    adapt: adaptMmpDyhomeResponse
+  },
+  {
+    name: 'cenguigui_user',
+    target: 'https://api.cenguigui.cn/api/douyin/user.php?url={url}',
+    adapt: adaptCenguiguiResponse
+  }
+]
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRouteAuth(request)
-  if (!auth.ok) {
-    return auth.response
+  try {
+    const body: DouyinUserParseRequest = await request.json().catch(() => ({} as DouyinUserParseRequest))
+    const requestedLimit = typeof body.limit === 'number' ? body.limit : Number(body.limit ?? 20)
+    let limit = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 20
+    if (limit < 0) {
+      limit = 20
+    }
+    limit = Math.max(0, Math.min(MAX_LIMIT, limit))
+
+    const input = extractFirstUrlFromText(String(body.url || '')) || String(body.url || '').trim()
+    if (!input) {
+      return NextResponse.json(
+        { success: false, error: '缺少用户主页URL参数' },
+        { status: 400 }
+      )
+    }
+
+    const resolvedUrl = await resolveShareUrlIfNeeded(input, USER_PARSE_TIMEOUT_MS)
+    const normalizedUrl = resolvedUrl || input
+
+    const failures: string[] = []
+    for (const upstream of USER_UPSTREAMS) {
+      try {
+        const parsed = await callUserUpstream(upstream, normalizedUrl, USER_PARSE_TIMEOUT_MS)
+        const limitedVideos = limit === 0 ? parsed.videos : parsed.videos.slice(0, limit)
+
+        if (limitedVideos.length === 0) {
+          throw new Error('未找到该用户的视频内容')
+        }
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            videos: limitedVideos,
+            totalCount: parsed.totalCount,
+            limitApplied: limit,
+            actualCount: limitedVideos.length,
+            maxLimit: MAX_LIMIT,
+            userInfo: parsed.userInfo || {}
+          },
+          rawData: {
+            source: upstream.name,
+            inputUrl: input,
+            resolvedUrl: normalizedUrl
+          }
+        })
+      } catch (error) {
+        failures.push(`${upstream.name}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: failures[0] || '抖音用户解析失败',
+        rawData: {
+          inputUrl: input,
+          resolvedUrl: normalizedUrl,
+          failures: failures.slice(0, 3)
+        }
+      },
+      { status: 502 }
+    )
+  } catch (error) {
+    console.error('[douyin/user] 解析失败:', error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : '服务器错误，请稍后重试' },
+      { status: 500 }
+    )
+  }
+}
+
+async function resolveShareUrlIfNeeded(url: string, timeoutMs: number): Promise<string> {
+  if (!/^https?:\/\/v\.douyin\.com\//i.test(String(url || '').trim())) {
+    return url
   }
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const body: DouyinUserParseRequest = await request.json();
-    const { url } = body;
-    const requestedLimit = typeof body.limit === 'number' ? body.limit : Number(body.limit ?? 20);
-    const MAX_LIMIT = 5000;
-    let limit = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 20;
-    if (limit < 0) {
-      limit = 20;
-    }
-    limit = Math.max(0, Math.min(MAX_LIMIT, limit));
-    
-    if (!url) {
-      return NextResponse.json(
-        { error: '缺少用户主页URL参数' },
-        { status: 400 }
-      );
-    }
-
-    // 调用抖音用户解析API
-    const apiUrl = `https://api.cenguigui.cn/api/douyin/user.php?url=${encodeURIComponent(url)}`;
-    
-    console.log('调用抖音用户解析API:', apiUrl);
-    
-    // {{ AURA: Modify - 修复fetch超时配置错误 }}
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    
-    const response = await fetch(apiUrl, {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': DEFAULT_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       },
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
+      signal: controller.signal
+    })
+    return response.url || url
+  } catch {
+    return url
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function callUserUpstream(upstream: UserUpstream, url: string, timeoutMs: number): Promise<UserParseResult> {
+  const target = buildGetUrl(upstream.target, url)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(target, {
+      method: 'GET',
+      headers: {
+        'User-Agent': DEFAULT_USER_AGENT,
+        'Accept': 'application/json,text/plain,*/*'
+      },
+      signal: controller.signal
+    })
+
+    const text = await response.text().catch(() => '')
+    const parsed = safeParseJsonBody(text)
 
     if (!response.ok) {
-      throw new Error(`API请求失败: ${response.status}`);
+      const message = extractErrorMessage(parsed) || `${response.status} ${response.statusText}`.trim()
+      throw new Error(message || '上游请求失败')
     }
 
-    const apiResponseData: DouyinUserApiResponse = await response.json();
-    
-    // 检查API响应状态
-    if (apiResponseData.code !== 200) {
-      return NextResponse.json(
-        { error: apiResponseData.msg || '解析失败' },
-        { status: 400 }
-      );
+    if (parsed == null || typeof parsed !== 'object') {
+      throw new Error('上游返回非JSON响应')
     }
 
-    if (!apiResponseData.data || apiResponseData.data.length === 0) {
-      return NextResponse.json(
-        { error: '未找到该用户的视频内容' },
-        { status: 404 }
-      );
-    }
+    return upstream.adapt(parsed)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
-    // {{ AURA: Add - 转换抖音API数据为标准格式 }}
-    const convertDouyinToStandard = (item: DouyinVideoItem): ParsedVideoInfo => {
+function buildGetUrl(target: string, url: string): string {
+  if (target.includes('{url}')) {
+    return target.replace('{url}', encodeURIComponent(url))
+  }
+
+  const u = new URL(target)
+  if (!u.searchParams.has('url')) {
+    u.searchParams.set('url', url)
+  }
+  return u.toString()
+}
+
+function adaptMmpDyhomeResponse(payload: any): UserParseResult {
+  if (payload?.success === false) {
+    throw new Error(extractErrorMessage(payload) || 'MMP接口返回失败状态')
+  }
+
+  const videoUrls = Array.isArray(payload?.video_urls)
+    ? payload.video_urls.filter((item: unknown) =>
+      typeof item === 'string' &&
+      /^https?:\/\//i.test(item) &&
+      !isLikelyAudioOnlyUrl(item)
+    )
+    : []
+
+  if (videoUrls.length === 0) {
+    throw new Error(extractErrorMessage(payload) || 'MMP接口未返回有效视频链接')
+  }
+
+  const nickname = pickFirstNonEmpty([
+    payload?.nickname,
+    payload?.owner_handle,
+    payload?.request_params?.resolved_sec_user_id,
+    '抖音用户'
+  ])
+
+  const avatar = pickFirstNonEmpty([
+    payload?.avatar,
+    payload?.author?.avatar,
+    payload?.user?.avatar
+  ])
+
+  const videos = videoUrls.map((url: string, index: number): ParsedVideoInfo => {
+    const videoId = extractVideoId(url)
+    return {
+      title: `${nickname} 的视频 #${index + 1}${videoId ? ` (${videoId})` : ''}`,
+      author: nickname,
+      avatar,
+      description: `来自 ${nickname} 的抖音用户主页视频`,
+      mediaType: MediaType.VIDEO,
+      url,
+      format: 'mp4'
+    }
+  })
+
+  const totalCount = Number(payload?.video_count)
+  return {
+    videos,
+    totalCount: Number.isFinite(totalCount) && totalCount > 0 ? Math.floor(totalCount) : videos.length,
+    userInfo: {
+      nickname,
+      avatar
+    }
+  }
+}
+
+function adaptCenguiguiResponse(payload: any): UserParseResult {
+  if (payload?.code !== 200 || !Array.isArray(payload?.data)) {
+    throw new Error(extractErrorMessage(payload) || payload?.msg || '曾贵贵接口返回异常')
+  }
+
+  const rawItems = payload.data as DouyinVideoItem[]
+  const videos = rawItems
+    .map((item): ParsedVideoInfo | null => {
+      const mediaUrl = pickFirstNonEmpty([
+        item?.video_info?.download,
+        item?.video_info?.url
+      ])
+      if (!/^https?:\/\//i.test(mediaUrl)) {
+        return null
+      }
       return {
-        title: item.title || `${item.author}的视频`,
+        title: item.title || `${item.author || item.nickname || '抖音用户'}的视频`,
         author: item.author || item.nickname,
         avatar: item.avatar,
         signature: item.nickname,
@@ -77,46 +261,95 @@ export async function POST(request: NextRequest) {
         mediaType: MediaType.VIDEO,
         viewCount: item.play?.toString() || '0',
         uploadDate: item.time,
-        
-        // 视频相关字段
-        url: item.video_info?.download || item.video_info?.url,
-        duration: undefined, // API未提供准确时长
-        fileSize: undefined,
+        url: mediaUrl,
         format: 'mp4',
-        thumbnail: item.pic,
-        
-        // 图集相关字段 (当前为视频，暂不使用)
-        images: undefined,
-        imageCount: undefined,
-      };
-    };
+        thumbnail: item.pic
+      }
+    })
+    .filter((item): item is ParsedVideoInfo => Boolean(item))
 
-    // 应用限制并转换数据
-    // limit=0 表示不限制（全量）；limit>0 则 slice；limit<0 已归一化为默认 20
-    const limitedData = limit === 0 ? apiResponseData.data : apiResponseData.data.slice(0, limit);
-    const convertedVideos = limitedData.map(convertDouyinToStandard);
+  if (videos.length === 0) {
+    throw new Error('曾贵贵接口未返回有效视频链接')
+  }
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        videos: convertedVideos,
-        totalCount: apiResponseData.data.length,
-        limitApplied: limit,
-        actualCount: convertedVideos.length,
-        maxLimit: MAX_LIMIT,
-        userInfo: {
-          nickname: apiResponseData.data[0]?.nickname,
-          avatar: apiResponseData.data[0]?.avatar,
-        }
-      },
-      rawData: apiResponseData // 保留原始数据用于调试
-    });
+  return {
+    videos,
+    totalCount: rawItems.length,
+    userInfo: {
+      nickname: rawItems[0]?.nickname || rawItems[0]?.author,
+      avatar: rawItems[0]?.avatar
+    }
+  }
+}
 
-  } catch (error) {
-    console.error('抖音用户解析失败:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : '服务器错误，请稍后重试' },
-      { status: 500 }
-    );
+function safeParseJsonBody(body: string): any | null {
+  if (!body || !body.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(body)
+  } catch {
+  }
+
+  const start = body.indexOf('{')
+  const end = body.lastIndexOf('}')
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      return JSON.parse(body.substring(start, end + 1))
+    } catch {
+    }
+  }
+
+  return null
+}
+
+function extractErrorMessage(payload: any): string {
+  if (!payload || typeof payload !== 'object') {
+    return ''
+  }
+
+  const keys = ['error', 'message', 'msg', 'detail', 'reason']
+  for (const key of keys) {
+    const value = payload?.[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
+function pickFirstNonEmpty(values: Array<unknown>): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
+function extractVideoId(url: string): string {
+  if (!url) return ''
+  try {
+    const u = new URL(url)
+    const videoId = u.searchParams.get('video_id')
+    if (!videoId) return ''
+    const decoded = decodeURIComponent(videoId)
+    if (decoded.length <= 24) return decoded
+    return decoded.slice(0, 24)
+  } catch {
+    return ''
+  }
+}
+
+function isLikelyAudioOnlyUrl(url: string): boolean {
+  if (!url) return false
+  try {
+    const u = new URL(url)
+    const videoId = decodeURIComponent(u.searchParams.get('video_id') || '')
+    if (!videoId) return false
+    return /\.mp3(?:\?|#|$)/i.test(videoId)
+  } catch {
+    return false
   }
 }

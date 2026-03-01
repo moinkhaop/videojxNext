@@ -29,6 +29,8 @@ export class ParserRouter {
       
       // 按优先级排序：专用API > 默认API > 其他
       const sortedParsers = userPageCapable.sort((a, b) => {
+        if (a.responseAdapter === 'simplified_douyin_user_api' && b.responseAdapter !== 'simplified_douyin_user_api') return -1;
+        if (b.responseAdapter === 'simplified_douyin_user_api' && a.responseAdapter !== 'simplified_douyin_user_api') return 1;
         if (a.responseAdapter === 'douyin_user_api' && b.responseAdapter !== 'douyin_user_api') return -1;
         if (b.responseAdapter === 'douyin_user_api' && a.responseAdapter !== 'douyin_user_api') return 1;
         if (a.isDefault && !b.isDefault) return -1;
@@ -94,6 +96,17 @@ export class ParserRouter {
           endpoint: `https://api.cenguigui.cn/api/douyin/user.php?url=${encodeURIComponent(url)}`,
           method: 'GET',
           headers: { 'Content-Type': 'application/json' }
+        };
+      }
+
+      if (parser.responseAdapter === 'simplified_douyin_user_api') {
+        const endpoint = parser.apiUrl.includes('?')
+          ? `${parser.apiUrl}&url=${encodeURIComponent(url)}`
+          : `${parser.apiUrl}?url=${encodeURIComponent(url)}`;
+        return {
+          endpoint,
+          method: 'GET',
+          headers: parser.customHeaders
         };
       }
     }

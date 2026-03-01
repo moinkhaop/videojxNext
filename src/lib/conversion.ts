@@ -285,6 +285,17 @@ export class ConversionService {
         }
       }
 
+      const safeParsers: EnhancedVideoParserConfig[] = [...(resolvedParsers ?? [])]
+      const hasUserParser = safeParsers.some(parser =>
+        parser.capabilities?.includes(ParserCapability.USER_PAGE)
+      )
+      if (!hasUserParser) {
+        safeParsers.push(
+          this.getOrCreateDouyinUserParser(safeParsers)
+        )
+      }
+      resolvedParsers = safeParsers
+
       const routeResult = resolvedParsers && resolvedParsers.length > 0
         ? parserRouter.selectBestParser(
             BatchInputMode.DOUYIN_USER,
@@ -437,20 +448,33 @@ export class ConversionService {
   // {{ AURA: Add - 智能识别输入类型：普通链接 vs 抖音用户主页 }}
   static detectInputMode(input: string): BatchInputMode {
     const trimmedInput = input.trim()
-    
+    if (!trimmedInput) {
+      return BatchInputMode.NORMAL
+    }
+
+    const firstUrl = extractFirstUrlFromText(trimmedInput)
+    const normalizedInput = firstUrl || trimmedInput
+
     // 检查是否是抖音用户主页链接
     const douyinUserPatterns = [
       /douyin\.com\/user\//i,
       /iesdouyin\.com\/share\/user\//i,
-      /v\.douyin\.com\/.*\/user\//i
+      /douyin\.com\/share\/user\//i,
+      /[?&]sec_uid=/i
     ]
-    
+
     for (const pattern of douyinUserPatterns) {
-      if (pattern.test(trimmedInput)) {
+      if (pattern.test(normalizedInput)) {
         return BatchInputMode.DOUYIN_USER
       }
     }
-    
+
+    // v.douyin.com 短链既可能是视频也可能是用户主页，自动模式下默认按普通模式，
+    // 由页面“模式选择”允许用户显式切换到用户主页解析。
+    if (/^https?:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/?$/i.test(normalizedInput)) {
+      return BatchInputMode.NORMAL
+    }
+
     // 检查是否包含多行（普通批量模式）
     const lines = trimmedInput.split('\n').filter(line => line.trim())
     if (lines.length > 1) {
@@ -611,22 +635,26 @@ export class ConversionService {
   
   // {{ AURA: Add - 获取或创建抖音用户解析器 }}
   static getOrCreateDouyinUserParser(parsers: VideoParserConfig[]): EnhancedVideoParserConfig {
-    // 检查是否已有抖音用户解析器
-    const existingUserParser = parsers.find(p => 
-      p.apiUrl.includes('cenguigui.cn') && p.apiUrl.includes('user.php')
-    );
-    
+    // 检查是否已有用户主页解析器（优先复用）
+    const existingUserParser = parsers.find(p =>
+      p.capabilities?.includes(ParserCapability.USER_PAGE) ||
+      /api\.mmp\.cc\/api\/dyhome/i.test(String(p.apiUrl || '')) ||
+      /cenguigui\.cn\/api\/douyin\/user\.php/i.test(String(p.apiUrl || ''))
+    )
+
     if (existingUserParser) {
+      const isMmp = /api\.mmp\.cc\/api\/dyhome/i.test(String(existingUserParser.apiUrl || ''))
       return {
         ...existingUserParser,
         capabilities: [ParserCapability.USER_PAGE],
         supportedPlatforms: [SupportedPlatform.DOUYIN],
-        responseAdapter: 'douyin_user_api'
-      };
+        responseAdapter: isMmp ? 'simplified_douyin_user_api' : 'douyin_user_api',
+        userPageEndpoint: existingUserParser.userPageEndpoint || existingUserParser.apiUrl
+      }
     }
-    
+
     // 创建默认的抖音用户解析器
-    return apiCapabilityDetector.createDouyinUserParser();
+    return apiCapabilityDetector.createDouyinUserParser()
   }
 
   // 解析视频链接列表

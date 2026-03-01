@@ -12,9 +12,11 @@ export class ApiCapabilityDetector {
     // 基于API URL模式进行智能推断
     const urlPatterns = {
       douyin_user: [
+        /api\.mmp\.cc\/api\/dyhome/i,
         /douyin.*user\.php/i,
         /user.*douyin/i,
-        /cenguigui.*user/i
+        /cenguigui.*user/i,
+        /dyhome/i
       ],
       generic_user: [
         /user/i,
@@ -75,6 +77,11 @@ export class ApiCapabilityDetector {
   detectResponseFormat(parser: VideoParserConfig): string {
     const url = parser.apiUrl.toLowerCase();
     const name = parser.name.toLowerCase();
+
+    // MMP dyhome 用户主页API
+    if (url.includes('api.mmp.cc') && url.includes('/api/dyhome')) {
+      return 'simplified_douyin_user_api';
+    }
 
     // 抖音用户API（优先检测曾贵贵的用户API）
     if (url.includes('cenguigui.cn') && url.includes('user.php')) {
@@ -149,12 +156,12 @@ export class ApiCapabilityDetector {
     return {
       id: 'douyin_user_builtin',
       name: '内置抖音用户解析',
-      apiUrl: 'https://api.cenguigui.cn/api/douyin/user.php',
+      apiUrl: 'https://api.mmp.cc/api/dyhome',
       isDefault: false,
       capabilities: [ParserCapability.USER_PAGE],
       supportedPlatforms: [SupportedPlatform.DOUYIN],
-      responseAdapter: 'douyin_user_api',
-      userPageEndpoint: 'https://api.cenguigui.cn/api/douyin/user.php'
+      responseAdapter: 'simplified_douyin_user_api',
+      userPageEndpoint: 'https://api.mmp.cc/api/dyhome'
     };
   }
 }
