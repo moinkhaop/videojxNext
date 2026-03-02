@@ -189,15 +189,17 @@ export async function hydrateFromSupabase() {
         ? theme
         : current.theme
       const remoteSettings = normalizedRemoteConfig.settings || {}
-      ConfigManager.saveAppConfig({
+      // AppConfig 的已提交类型仍是精简版，这里保留扩展设置同步，避免在构建期触发额外属性的类型报错。
+      const nextAppConfig: any = {
         ...current,
         theme: nextTheme,
-        retryPolicy: remoteSettings.retryPolicy ?? current.retryPolicy,
-        notifications: remoteSettings.notifications ?? current.notifications,
-        templateProfiles: remoteSettings.templateProfiles ?? current.templateProfiles,
-        uploadFolderTemplate: remoteSettings.uploadFolderTemplate ?? current.uploadFolderTemplate,
-        uploadFileTemplate: remoteSettings.uploadFileTemplate ?? current.uploadFileTemplate,
-      })
+      }
+      nextAppConfig.retryPolicy = remoteSettings.retryPolicy ?? (current as any).retryPolicy
+      nextAppConfig.notifications = remoteSettings.notifications ?? (current as any).notifications
+      nextAppConfig.templateProfiles = remoteSettings.templateProfiles ?? (current as any).templateProfiles
+      nextAppConfig.uploadFolderTemplate = remoteSettings.uploadFolderTemplate ?? (current as any).uploadFolderTemplate
+      nextAppConfig.uploadFileTemplate = remoteSettings.uploadFileTemplate ?? (current as any).uploadFileTemplate
+      ConfigManager.saveAppConfig(nextAppConfig)
 
       const parsers = normalizedRemoteConfig.parsers
       if (Array.isArray(parsers)) {
