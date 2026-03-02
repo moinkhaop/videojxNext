@@ -290,9 +290,19 @@ export class ConversionService {
         parser.capabilities?.includes(ParserCapability.USER_PAGE)
       )
       if (!hasUserParser) {
-        safeParsers.push(
-          this.getOrCreateDouyinUserParser(safeParsers)
-        )
+        const userParser = this.getOrCreateDouyinUserParser(safeParsers)
+        const existingIndex = safeParsers.findIndex(parser => parser.id === userParser.id)
+        if (existingIndex === -1) {
+          safeParsers.push(userParser)
+        } else {
+          const existing = safeParsers[existingIndex]
+          safeParsers[existingIndex] = {
+            ...existing,
+            ...userParser,
+            capabilities: Array.from(new Set([...(existing.capabilities || []), ...(userParser.capabilities || [])])),
+            supportedPlatforms: Array.from(new Set([...(existing.supportedPlatforms || []), ...(userParser.supportedPlatforms || [])]))
+          }
+        }
       }
       resolvedParsers = safeParsers
 
@@ -326,6 +336,7 @@ export class ConversionService {
       const primaryParserKey = primaryUserParser?.id || ''
 
       const attempts: ParserAttemptResult[] = []
+      const normalizedUserUrl = this.normalizeDouyinUserUrl(userUrl)
 
       for (const parser of userCapableParsers) {
         if (primaryParserKey && parser.id !== primaryParserKey && isParserCoolingDown(parser.id)) {
@@ -337,7 +348,7 @@ export class ConversionService {
           console.log(`[抖音用户解析] 使用解析器: ${parser.name}`)
           const videos = await parserRouter.executeParseRequest(
             parser,
-            userUrl,
+            normalizedUserUrl,
             ParserCapability.USER_PAGE,
             limit
           )
@@ -380,7 +391,7 @@ export class ConversionService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          url: userUrl,
+          url: normalizedUserUrl,
           limit,
         } satisfies DouyinUserParseRequest)
       })
@@ -655,6 +666,31 @@ export class ConversionService {
 
     // 创建默认的抖音用户解析器
     return apiCapabilityDetector.createDouyinUserParser()
+  }
+
+  private static normalizeDouyinUserUrl(input: string): string {
+    const extracted = extractFirstUrlFromText(String(input || '').trim()) || String(input || '').trim()
+    if (!extracted) {
+      return ''
+    }
+
+    const secUidFromPath = extracted.match(/\/user\/([A-Za-z0-9_-]{10,})/i)?.[1]
+    const secUidFromQuery = (() => {
+      try {
+        const parsed = new URL(extracted)
+        const secUid = parsed.searchParams.get('sec_uid')
+        return secUid ? decodeURIComponent(secUid) : ''
+      } catch {
+        return ''
+      }
+    })()
+    const secUid = secUidFromPath || secUidFromQuery
+
+    if (secUid) {
+      return `https://www.iesdouyin.com/share/user/${secUid}`
+    }
+
+    return extracted
   }
 
   // 解析视频链接列表

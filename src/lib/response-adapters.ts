@@ -139,14 +139,8 @@ export class SimplifiedDouyinUserAdapter implements IResponseAdapter {
   readonly supportedCapabilities = [ParserCapability.USER_PAGE];
 
   canHandle(rawResponse: any): boolean {
-    // 检测简化格式：包含 nickname/video_count/video_urls 字段
-    return (
-      rawResponse &&
-      typeof rawResponse === 'object' &&
-      'video_urls' in rawResponse &&
-      Array.isArray(rawResponse.video_urls) &&
-      rawResponse.video_urls.length > 0
-    );
+    const urls = this.collectVideoUrls(rawResponse);
+    return urls.length > 0;
   }
 
   adaptSingleVideo(rawResponse: any): ParsedVideoInfo {
@@ -158,8 +152,8 @@ export class SimplifiedDouyinUserAdapter implements IResponseAdapter {
       throw new Error('无法处理此响应格式');
     }
 
-    const nickname = rawResponse.nickname || '抖音用户';
-    const videoUrls = rawResponse.video_urls as string[];
+    const nickname = rawResponse.nickname || rawResponse?.data?.nickname || '抖音用户';
+    const videoUrls = this.collectVideoUrls(rawResponse);
 
     console.log(`[简化适配器] 解析到 ${videoUrls.length} 个视频URL，用户: ${nickname}`);
 
@@ -193,10 +187,31 @@ export class SimplifiedDouyinUserAdapter implements IResponseAdapter {
     if (rawResponse?.error) {
       return rawResponse.error;
     }
+    if (rawResponse?.msg && Number(rawResponse?.code) && Number(rawResponse?.code) !== 200) {
+      return String(rawResponse.msg);
+    }
+    if (rawResponse?.detail) {
+      return String(rawResponse.detail);
+    }
     if (rawResponse?.message && !rawResponse?.video_urls) {
       return rawResponse.message;
     }
     return null;
+  }
+
+  private collectVideoUrls(rawResponse: any): string[] {
+    const candidate = rawResponse?.video_urls ?? rawResponse?.data?.video_urls;
+    const values = Array.isArray(candidate)
+      ? candidate
+      : (candidate && typeof candidate === 'object' ? Object.values(candidate) : []);
+
+    const urls: string[] = [];
+    for (const item of values) {
+      if (typeof item === 'string' && /^https?:\/\//i.test(item)) {
+        urls.push(item);
+      }
+    }
+    return urls;
   }
 }
 

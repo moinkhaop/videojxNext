@@ -104,9 +104,24 @@ export default function BatchPage() {
           const douyinUserParser = ConversionService.getOrCreateDouyinUserParser(loadedParsers)
           enhanced.push(douyinUserParser)
         }
+        const deduped = new Map<string, EnhancedVideoParserConfig>()
+        for (const parser of enhanced) {
+          const existing = deduped.get(parser.id)
+          if (!existing) {
+            deduped.set(parser.id, parser)
+            continue
+          }
+          deduped.set(parser.id, {
+            ...existing,
+            ...parser,
+            capabilities: Array.from(new Set([...(existing.capabilities || []), ...(parser.capabilities || [])])),
+            supportedPlatforms: Array.from(new Set([...(existing.supportedPlatforms || []), ...(parser.supportedPlatforms || [])]))
+          })
+        }
 
-        setEnhancedParsers(enhanced)
-        console.log('[批量转存] 解析器能力检测完成:', enhanced.map(p => `${p.name}(${p.capabilities?.join('/')})`))
+        const finalEnhancedParsers = Array.from(deduped.values())
+        setEnhancedParsers(finalEnhancedParsers)
+        console.log('[批量转存] 解析器能力检测完成:', finalEnhancedParsers.map(p => `${p.name}(${p.capabilities?.join('/')})`))
       } catch (error) {
         console.error('[批量转存] 解析器能力检测失败:', error)
         // 降级到原始解析器

@@ -59,36 +59,39 @@ export async function POST(request: NextRequest) {
     }
 
     const resolvedUrl = await resolveShareUrlIfNeeded(input, USER_PARSE_TIMEOUT_MS)
-    const normalizedUrl = resolvedUrl || input
+    const candidates = buildUserUrlCandidates(input, resolvedUrl || input)
 
     const failures: string[] = []
     for (const upstream of USER_UPSTREAMS) {
-      try {
-        const parsed = await callUserUpstream(upstream, normalizedUrl, USER_PARSE_TIMEOUT_MS)
-        const limitedVideos = limit === 0 ? parsed.videos : parsed.videos.slice(0, limit)
+      for (const candidateUrl of candidates) {
+        try {
+          const parsed = await callUserUpstream(upstream, candidateUrl, USER_PARSE_TIMEOUT_MS)
+          const limitedVideos = limit === 0 ? parsed.videos : parsed.videos.slice(0, limit)
 
-        if (limitedVideos.length === 0) {
-          throw new Error('未找到该用户的视频内容')
-        }
-
-        return NextResponse.json({
-          success: true,
-          data: {
-            videos: limitedVideos,
-            totalCount: parsed.totalCount,
-            limitApplied: limit,
-            actualCount: limitedVideos.length,
-            maxLimit: MAX_LIMIT,
-            userInfo: parsed.userInfo || {}
-          },
-          rawData: {
-            source: upstream.name,
-            inputUrl: input,
-            resolvedUrl: normalizedUrl
+          if (limitedVideos.length === 0) {
+            throw new Error('未找到该用户的视频内容')
           }
-        })
-      } catch (error) {
-        failures.push(`${upstream.name}: ${error instanceof Error ? error.message : String(error)}`)
+
+          return NextResponse.json({
+            success: true,
+            data: {
+              videos: limitedVideos,
+              totalCount: parsed.totalCount,
+              limitApplied: limit,
+              actualCount: limitedVideos.length,
+              maxLimit: MAX_LIMIT,
+              userInfo: parsed.userInfo || {}
+            },
+            rawData: {
+              source: upstream.name,
+              inputUrl: input,
+              resolvedUrl: resolvedUrl || input,
+              requestUrl: candidateUrl
+            }
+          })
+        } catch (error) {
+          failures.push(`${upstream.name}(${candidateUrl}): ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
     }
 
@@ -98,7 +101,7 @@ export async function POST(request: NextRequest) {
         error: failures[0] || '抖音用户解析失败',
         rawData: {
           inputUrl: input,
-          resolvedUrl: normalizedUrl,
+          resolvedUrl: resolvedUrl || input,
           failures: failures.slice(0, 3)
         }
       },
@@ -180,6 +183,28 @@ function buildGetUrl(target: string, url: string): string {
     u.searchParams.set('url', url)
   }
   return u.toString()
+}
+
+function buildUserUrlCandidates(input: string, resolvedUrl: string): string[] {
+  const candidates: string[] = []
+  const pushCandidate = (value: string) => {
+    const trimmed = String(value || '').trim()
+    if (!trimmed) return
+    if (!candidates.includes(trimmed)) {
+      candidates.push(trimmed)
+    }
+  }
+
+  pushCandidate(input)
+  pushCandidate(resolvedUrl)
+
+  const secUid = extractSecUid(input) || extractSecUid(resolvedUrl)
+  if (secUid) {
+    pushCandidate(`https://www.iesdouyin.com/share/user/${secUid}`)
+    pushCandidate(`https://www.douyin.com/user/${secUid}`)
+  }
+
+  return candidates
 }
 
 function adaptMmpDyhomeResponse(payload: any): UserParseResult {
@@ -337,6 +362,25 @@ function extractVideoId(url: string): string {
     const decoded = decodeURIComponent(videoId)
     if (decoded.length <= 24) return decoded
     return decoded.slice(0, 24)
+  } catch {
+    return ''
+  }
+}
+
+function extractSecUid(url: string): string {
+  const source = String(url || '').trim()
+  if (!source) return ''
+
+  const matchFromPath = source.match(/\/user\/([A-Za-z0-9_-]{10,})/i)
+  if (matchFromPath?.[1]) {
+    return matchFromPath[1]
+  }
+
+  try {
+    const u = new URL(source)
+    const secUid = u.searchParams.get('sec_uid')
+    if (!secUid) return ''
+    return decodeURIComponent(secUid)
   } catch {
     return ''
   }
