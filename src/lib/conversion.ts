@@ -51,12 +51,22 @@ export interface BatchPoolState {
   total: number
 }
 
+export class ConversionCancelledError extends Error {
+  constructor(message = '任务已停止') {
+    super(message)
+    this.name = 'ConversionCancelledError'
+  }
+}
+
 type BatchRuntimeCallbacks = {
   onPoolState?: (state: BatchPoolState) => void
+  isCancelled?: () => boolean
+  getAbortSignal?: () => AbortSignal | undefined
 }
 
 export class ConversionService {
   private static readonly DEFAULT_BATCH_CONCURRENCY = 3
+  private static readonly DEFAULT_DOUYIN_UPLOAD_CONCURRENCY = 2
   private static readonly DEFAULT_BATCH_TASK_DELAY_MS = 0
   private static readonly DEFAULT_PARSE_CACHE_TTL_MS = 5 * 60 * 1000
   private static readonly DEFAULT_PARSE_CACHE_MAX_ENTRIES = 300
@@ -65,6 +75,14 @@ export class ConversionService {
     const fromEnv = Number(process.env.NEXT_PUBLIC_BATCH_CONCURRENCY ?? String(this.DEFAULT_BATCH_CONCURRENCY))
     if (!Number.isFinite(fromEnv)) return this.DEFAULT_BATCH_CONCURRENCY
     return Math.max(1, Math.min(6, Math.floor(fromEnv)))
+  })()
+
+  private static readonly DOUYIN_UPLOAD_CONCURRENCY = (() => {
+    const fromEnv = Number(
+      process.env.NEXT_PUBLIC_DOUYIN_UPLOAD_CONCURRENCY ?? String(this.DEFAULT_DOUYIN_UPLOAD_CONCURRENCY)
+    )
+    if (!Number.isFinite(fromEnv)) return this.DEFAULT_DOUYIN_UPLOAD_CONCURRENCY
+    return Math.max(1, Math.min(4, Math.floor(fromEnv)))
   })()
 
   private static readonly PARSE_CACHE_TTL_MS = (() => {
@@ -93,6 +111,60 @@ export class ConversionService {
       return
     }
     await new Promise(resolve => setTimeout(resolve, this.INTER_TASK_DELAY_MS))
+  }
+
+  private static isCancellationRequested(callbacks?: BatchRuntimeCallbacks): boolean {
+    return Boolean(callbacks?.isCancelled?.())
+  }
+
+  private static ensureNotCancelled(callbacks?: BatchRuntimeCallbacks) {
+    if (this.isCancellationRequested(callbacks)) {
+      throw new ConversionCancelledError('用户已停止批量任务')
+    }
+  }
+
+  static isCancellationError(error: unknown): boolean {
+    if (error instanceof ConversionCancelledError) {
+      return true
+    }
+    if (!(error instanceof Error)) {
+      return false
+    }
+    if (error.name === 'AbortError') {
+      return true
+    }
+    const message = String(error.message || '').toLowerCase()
+    return message.includes('abort') || message.includes('stopped')
+  }
+
+  private static async waitFor(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0) {
+      return
+    }
+
+    if (!signal) {
+      await new Promise(resolve => setTimeout(resolve, ms))
+      return
+    }
+
+    if (signal.aborted) {
+      throw new ConversionCancelledError('用户已停止批量任务')
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, ms)
+
+      const onAbort = () => {
+        clearTimeout(timeoutId)
+        signal.removeEventListener('abort', onAbort)
+        reject(new ConversionCancelledError('用户已停止批量任务'))
+      }
+
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
   }
 
   private static cloneParsedInfo(data: ParsedVideoInfo): ParsedVideoInfo {
@@ -166,7 +238,8 @@ export class ConversionService {
     totalTasks: number,
     runTask: (index: number) => Promise<boolean>,
     onTaskSettled?: (index: number, processed: number) => void,
-    onPoolState?: (state: BatchPoolState) => void
+    onPoolState?: (state: BatchPoolState) => void,
+    isCancelled?: () => boolean
   ) {
     if (totalTasks <= 0) {
       return
@@ -176,7 +249,10 @@ export class ConversionService {
     let inFlight = 0
     let processed = 0
 
-    const initialConcurrency = Math.min(this.BATCH_CONCURRENCY, totalTasks)
+    const stageConcurrencyCap = stage === 'douyin_upload'
+      ? Math.min(this.BATCH_CONCURRENCY, this.DOUYIN_UPLOAD_CONCURRENCY)
+      : this.BATCH_CONCURRENCY
+    const initialConcurrency = Math.min(stageConcurrencyCap, totalTasks)
     let currentConcurrency = initialConcurrency
 
     const emitPoolState = (event: BatchPoolEvent) => {
@@ -195,6 +271,7 @@ export class ConversionService {
 
     let failureStreak = 0
     let successStreak = 0
+    const cancelled = () => Boolean(isCancelled?.())
 
     let launchChain = Promise.resolve()
 
@@ -208,7 +285,12 @@ export class ConversionService {
 
     await new Promise<void>(resolve => {
       const pump = () => {
-        while (inFlight < currentConcurrency && nextIndex < totalTasks) {
+        if (cancelled() && inFlight === 0) {
+          resolve()
+          return
+        }
+
+        while (!cancelled() && inFlight < currentConcurrency && nextIndex < totalTasks) {
           const index = nextIndex++
           inFlight++
           emitPoolState('task_started')
@@ -218,7 +300,9 @@ export class ConversionService {
 
             let success = false
             try {
-              success = await runTask(index)
+              if (!cancelled()) {
+                success = await runTask(index)
+              }
             } catch {
               success = false
             }
@@ -248,13 +332,17 @@ export class ConversionService {
             emitPoolState('task_settled')
             onTaskSettled?.(index, processed)
 
-            if (processed >= totalTasks) {
+            if (processed >= totalTasks || (cancelled() && inFlight === 0)) {
               resolve()
               return
             }
 
             pump()
           })()
+        }
+
+        if (cancelled() && inFlight === 0) {
+          resolve()
         }
       }
 
@@ -521,12 +609,13 @@ export class ConversionService {
     onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
     callbacks?: BatchRuntimeCallbacks
   ): Promise<ExtendedBatchTask> {
-    
+    this.ensureNotCancelled(callbacks)
     batchTask.status = TaskStatus.PARSING
     
     try {
       // 第一阶段：解析用户主页获取视频列表
       onProgress?.(10, undefined)
+      this.ensureNotCancelled(callbacks)
       
       if (!batchTask.sourceUrl) {
         throw new Error('缺少用户主页URL')
@@ -542,6 +631,7 @@ export class ConversionService {
         undefined,
         batchTask.parserConfig?.id
       )
+      this.ensureNotCancelled(callbacks)
       
       // 更新批量任务信息
       batchTask.totalSourceVideos = userVideos.length
@@ -569,6 +659,9 @@ export class ConversionService {
           'douyin_upload',
           totalTasks,
           async (index) => {
+            if (this.isCancellationRequested(callbacks)) {
+              return false
+            }
             const task = batchTask.tasks[index]
 
             try {
@@ -580,7 +673,11 @@ export class ConversionService {
                 batchTask.webdavConfig,
                 undefined,
                 undefined,
-                task.videoUrl
+                task.videoUrl,
+                {
+                  signal: callbacks?.getAbortSignal?.(),
+                  isCancelled: callbacks?.isCancelled
+                }
               )
 
               task.status = TaskStatus.SUCCESS
@@ -595,6 +692,9 @@ export class ConversionService {
               return true
             } catch (error) {
               console.error(`[抖音用户批量转存] 任务失败:`, error)
+              if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
+                return false
+              }
               task.status = TaskStatus.FAILED
               task.completedAt = new Date()
               task.error = error instanceof Error ? error.message : '上传失败'
@@ -610,9 +710,12 @@ export class ConversionService {
             const progress = 20 + (processed / totalTasks) * 70
             onProgress?.(progress, batchTask.tasks[_index])
           },
-          callbacks?.onPoolState
+          callbacks?.onPoolState,
+          callbacks?.isCancelled
         )
       }
+
+      this.ensureNotCancelled(callbacks)
       
       // 更新最终状态
       batchTask.completedAt = new Date()
@@ -633,6 +736,9 @@ export class ConversionService {
       
     } catch (error) {
       console.error('[抖音用户批量转存] 批量转存失败:', error)
+      if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
+        throw new ConversionCancelledError('用户已停止批量任务')
+      }
       batchTask.status = TaskStatus.FAILED
       batchTask.completedAt = new Date()
       throw error
@@ -885,7 +991,11 @@ export class ConversionService {
     webdavConfig: WebDAVConfig,
     folderPath?: string,
     onProgress?: (progress: number, hint: string) => void,
-    sourceUrl?: string
+    sourceUrl?: string,
+    runtimeControl?: {
+      signal?: AbortSignal
+      isCancelled?: () => boolean
+    }
   ): Promise<string> {
     const maxRetries = 5
     let attempt = 0
@@ -907,8 +1017,15 @@ export class ConversionService {
       lastProgress = Math.max(lastProgress, clamped)
       onProgress(clamped, hint)
     }
+
+    const ensureActive = () => {
+      if (runtimeControl?.isCancelled?.() || runtimeControl?.signal?.aborted) {
+        throw new ConversionCancelledError('用户已停止批量任务')
+      }
+    }
     
     // 根据媒体类型生成文件名
+    ensureActive()
     let fileName = ''
     if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
       const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url)
@@ -919,6 +1036,7 @@ export class ConversionService {
     
     while (attempt < maxRetries) {
       try {
+        ensureActive()
         attempt++
         emit(
           Math.min(90, 60 + attempt * 2),
@@ -927,6 +1045,16 @@ export class ConversionService {
         console.log(`[转存] WebDAV上传尝试 ${attempt}/${maxRetries}: ${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}`)
 
         const controller = new AbortController()
+        let removeAbortListener: (() => void) | null = null
+        if (runtimeControl?.signal) {
+          const onAbort = () => controller.abort()
+          if (runtimeControl.signal.aborted) {
+            controller.abort()
+          } else {
+            runtimeControl.signal.addEventListener('abort', onAbort, { once: true })
+            removeAbortListener = () => runtimeControl.signal?.removeEventListener('abort', onAbort)
+          }
+        }
         const timeoutMs = Number(process.env.NEXT_PUBLIC_WEBDAV_PROXY_TIMEOUT_MS ?? '180000')
         const timeoutId = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 180000)
 
@@ -958,6 +1086,7 @@ export class ConversionService {
             signal: controller.signal
           })
         } finally {
+          removeAbortListener?.()
           clearTimeout(timeoutId)
           clearInterval(ticker)
         }
@@ -997,6 +1126,9 @@ export class ConversionService {
         return result.filePath
         
       } catch (error) {
+        if (this.isCancellationError(error) || runtimeControl?.isCancelled?.() || runtimeControl?.signal?.aborted) {
+          throw new ConversionCancelledError('用户已停止批量任务')
+        }
         lastError = error
         console.error(`[转存] 上传尝试 ${attempt} 失败:`, error)
         emit(
@@ -1011,7 +1143,7 @@ export class ConversionService {
             Math.max(60, lastProgress),
             `等待 ${Math.round(waitTime / 1000)} 秒后重试（第 ${attempt + 1}/${maxRetries} 次）`
           )
-          await new Promise(resolve => setTimeout(resolve, waitTime))
+          await this.waitFor(waitTime, runtimeControl?.signal)
         } else {
           break
         }
@@ -1028,6 +1160,7 @@ export class ConversionService {
     onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
     callbacks?: BatchRuntimeCallbacks
   ): Promise<BatchTask> {
+    this.ensureNotCancelled(callbacks)
     batchTask.status = TaskStatus.PARSING
     
     const totalTasks = batchTask.tasks.length
@@ -1048,6 +1181,9 @@ export class ConversionService {
         'normal_batch',
         totalTasks,
         async (index) => {
+          if (this.isCancellationRequested(callbacks)) {
+            return false
+          }
           const task = batchTask.tasks[index]
 
           inFlightProgress.set(task.id, 0)
@@ -1062,7 +1198,8 @@ export class ConversionService {
                 task.status = status
                 inFlightProgress.set(task.id, Math.max(0, Math.min(99, progress)))
                 emitOverallProgress(task)
-              }
+              },
+              callbacks
             )
 
             batchTask.tasks[index] = updatedTask
@@ -1074,6 +1211,9 @@ export class ConversionService {
 
             return false
           } catch (error) {
+            if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
+              return false
+            }
             console.error(`批量任务中的单个任务失败:`, error)
             task.status = TaskStatus.FAILED
             task.completedAt = new Date()
@@ -1088,9 +1228,12 @@ export class ConversionService {
         (index, processed) => {
           onProgress?.((processed / totalTasks) * 100, batchTask.tasks[index])
         },
-        callbacks?.onPoolState
+        callbacks?.onPoolState,
+        callbacks?.isCancelled
       )
     }
+
+    this.ensureNotCancelled(callbacks)
 
     batchTask.completedAt = new Date()
     
@@ -1111,9 +1254,11 @@ export class ConversionService {
     task: ConversionTask,
     parserConfig: VideoParserConfig,
     webdavConfig: WebDAVConfig,
-    onProgress?: (progress: number, status: TaskStatus) => void
+    onProgress?: (progress: number, status: TaskStatus) => void,
+    callbacks?: BatchRuntimeCallbacks
   ): Promise<ConversionTask> {
     try {
+      this.ensureNotCancelled(callbacks)
       task.status = TaskStatus.PARSING
       onProgress?.(20, TaskStatus.PARSING)
       
@@ -1127,6 +1272,7 @@ export class ConversionService {
         }
         
         const parsedInfo = await this.parseVideo(task.videoUrl, parserConfig)
+        this.ensureNotCancelled(callbacks)
         console.log(`[转存] 解析成功，媒体类型: ${parsedInfo.mediaType}`)
         
         task.parsedVideoInfo = parsedInfo
@@ -1134,6 +1280,9 @@ export class ConversionService {
         console.log(`[转存] 解析完成: ${parsedInfo.title}`)
       } catch (error) {
         console.error('[转存] 视频解析失败:', error)
+        if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
+          throw new ConversionCancelledError('用户已停止批量任务')
+        }
         task.status = TaskStatus.FAILED
         let errorMsg = error instanceof Error ? error.message : '视频解析失败'
         
@@ -1150,13 +1299,18 @@ export class ConversionService {
       
       task.status = TaskStatus.UPLOADING
       onProgress?.(60, TaskStatus.UPLOADING)
+      this.ensureNotCancelled(callbacks)
 
       const filePath = await this.uploadToWebDAV(
         task.parsedVideoInfo!, 
         webdavConfig,
         undefined,
         undefined,
-        task.videoUrl
+        task.videoUrl,
+        {
+          signal: callbacks?.getAbortSignal?.(),
+          isCancelled: callbacks?.isCancelled
+        }
       )
 
       task.status = TaskStatus.SUCCESS
@@ -1171,6 +1325,9 @@ export class ConversionService {
       await CleanupService.cleanupAfterTaskCompletion(task)
       return task
     } catch (error) {
+      if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
+        throw new ConversionCancelledError('用户已停止批量任务')
+      }
       task.status = TaskStatus.FAILED
       task.completedAt = new Date()
       task.error = error instanceof Error ? error.message : '转存过程中发生未知错误'

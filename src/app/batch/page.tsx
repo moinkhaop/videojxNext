@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -59,6 +59,8 @@ export default function BatchPage() {
   // {{ AURA: Add - 新增抖音用户模式相关状态 }}
   const [inputMode, setInputMode] = useState<BatchInputMode>(BatchInputMode.NORMAL)
   const [videoLimit, setVideoLimit] = useState<number>(20)
+  const activeRunAbortRef = useRef<AbortController | null>(null)
+  const activeRunIdRef = useRef(0)
 
   // 剪贴板检测状态
   const [clipboardEnabled, setClipboardEnabled] = useState(false)
@@ -164,6 +166,14 @@ export default function BatchPage() {
     return () => {
       window.removeEventListener('parsers-config-updated', handleConfigUpdate)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      activeRunIdRef.current += 1
+      activeRunAbortRef.current?.abort()
+      activeRunAbortRef.current = null
     }
   }, [])
 
@@ -316,12 +326,6 @@ export default function BatchPage() {
     const detectedMode = inputModePreference === 'auto'
       ? ConversionService.detectInputMode(videoUrls.trim())
       : (inputModePreference === 'douyin_user' ? BatchInputMode.DOUYIN_USER : BatchInputMode.NORMAL)
-    
-    setIsProcessing(true)
-    setIsPaused(false)
-    setOverallProgress(0)
-    setPoolState(null)
-    setPoolHint('')
 
     let batchTask: ExtendedBatchTask
 
@@ -375,6 +379,19 @@ export default function BatchPage() {
       }
     }
 
+    const runController = new AbortController()
+    const runId = activeRunIdRef.current + 1
+    activeRunIdRef.current = runId
+    activeRunAbortRef.current?.abort()
+    activeRunAbortRef.current = runController
+    const isRunActive = () => activeRunIdRef.current === runId && !runController.signal.aborted
+    
+    setIsProcessing(true)
+    setIsPaused(false)
+    setOverallProgress(0)
+    setPoolState(null)
+    setPoolHint('')
+
     setCurrentBatch(batchTask)
     setInputMode(detectedMode)
 
@@ -383,6 +400,7 @@ export default function BatchPage() {
       const updatedBatch = await ConversionService.convertExtendedBatch(
         batchTask,
         (progress, currentTask) => {
+          if (!isRunActive()) return
           setOverallProgress(progress)
           if (currentTask) {
             setCurrentBatch(prev => {
@@ -403,16 +421,22 @@ export default function BatchPage() {
         },
         {
           onPoolState: (state) => {
+            if (!isRunActive()) return
             setPoolState(state)
             if (state.event === 'scale_down') {
               setPoolHint(`检测到失败，自动降并发到 ${state.currentConcurrency}`)
             } else if (state.event === 'scale_up') {
               setPoolHint(`任务稳定，自动恢复并发到 ${state.currentConcurrency}`)
             }
-          }
+          },
+          isCancelled: () => !isRunActive(),
+          getAbortSignal: () => runController.signal,
         }
       )
 
+      if (!isRunActive()) {
+        return
+      }
       setCurrentBatch(updatedBatch)
 
       // 保存到历史记录
@@ -433,10 +457,22 @@ export default function BatchPage() {
       })
 
     } catch (error) {
+      const cancelled = ConversionService.isCancellationError(error) || !isRunActive()
+      if (cancelled) {
+        if (activeRunIdRef.current === runId) {
+          setPoolHint('任务已停止')
+        }
+        return
+      }
       console.error('批量转存失败:', error)
       alert(`批量转存失败: ${error instanceof Error ? error.message : '未知错误'}`)
     } finally {
-      setIsProcessing(false)
+      if (activeRunIdRef.current === runId) {
+        if (activeRunAbortRef.current === runController) {
+          activeRunAbortRef.current = null
+        }
+        setIsProcessing(false)
+      }
     }
   }
 
@@ -449,6 +485,13 @@ export default function BatchPage() {
       alert('当前没有失败任务可重试')
       return
     }
+
+    const runController = new AbortController()
+    const runId = activeRunIdRef.current + 1
+    activeRunIdRef.current = runId
+    activeRunAbortRef.current?.abort()
+    activeRunAbortRef.current = runController
+    const isRunActive = () => activeRunIdRef.current === runId && !runController.signal.aborted
 
     setIsProcessing(true)
     setIsPaused(false)
@@ -477,6 +520,7 @@ export default function BatchPage() {
       const retryResult = await ConversionService.convertExtendedBatch(
         retryBatch,
         (progress, currentTask) => {
+          if (!isRunActive()) return
           setOverallProgress(progress)
           if (!currentTask) return
           setCurrentBatch(prev => {
@@ -491,6 +535,7 @@ export default function BatchPage() {
         },
         {
           onPoolState: (state) => {
+            if (!isRunActive()) return
             setPoolState(state)
             if (state.event === 'scale_down') {
               setPoolHint(`重试中自动降并发到 ${state.currentConcurrency}`)
@@ -498,9 +543,14 @@ export default function BatchPage() {
               setPoolHint(`重试中自动恢复并发到 ${state.currentConcurrency}`)
             }
           },
+          isCancelled: () => !isRunActive(),
+          getAbortSignal: () => runController.signal,
         }
       )
 
+      if (!isRunActive()) {
+        return
+      }
       const retryMap = new Map(retryResult.tasks.map(task => [task.id, task]))
       setCurrentBatch(prev => {
         if (!prev) return null
@@ -523,14 +573,29 @@ export default function BatchPage() {
         createdAt: new Date(),
       })
     } catch (error) {
+      const cancelled = ConversionService.isCancellationError(error) || !isRunActive()
+      if (cancelled) {
+        if (activeRunIdRef.current === runId) {
+          setPoolHint('重试任务已停止')
+        }
+        return
+      }
       console.error('重试失败任务时出错:', error)
       alert(`重试失败任务出错: ${error instanceof Error ? error.message : '未知错误'}`)
     } finally {
-      setIsProcessing(false)
+      if (activeRunIdRef.current === runId) {
+        if (activeRunAbortRef.current === runController) {
+          activeRunAbortRef.current = null
+        }
+        setIsProcessing(false)
+      }
     }
   }
 
   const resetBatch = () => {
+    activeRunIdRef.current += 1
+    activeRunAbortRef.current?.abort()
+    activeRunAbortRef.current = null
     setVideoUrls('')
     setCurrentBatch(null)
     setOverallProgress(0)

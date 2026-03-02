@@ -108,10 +108,63 @@ export default async function onRequest(context) {
 
         const errText = await safeReadText(uploadResp)
         const detail = extractUpstreamErrorMessage(errText) || uploadResp.statusText || `HTTP ${uploadResp.status}`
-        // Retry 423 once or twice with rename is handled on Next route, keep this simple.
-        if (uploadResp.status === 423 && attempt < maxRetries) {
-          await sleep(Math.min(500 * attempt, 2000))
-          continue
+
+        const shouldTrySafeNameFallback = uploadResp.status === 423 || uploadResp.status >= 500
+        if (shouldTrySafeNameFallback) {
+          const extension = getFileExtension(fileName, 'mp4')
+          const fallbackFileName = generateRandomFileName(extension)
+          const fallbackUploadUrl = `${dirUrl.replace(/\/$/, '')}/${encodePathSegment(fallbackFileName)}`
+
+          try {
+            const fallbackPayload = await downloadForUpload(downloadUrl, downloadHeaders, timeoutMs, maxBufferBytes)
+            const fallbackResp = await fetch(fallbackUploadUrl, {
+              method: 'PUT',
+              headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': fallbackPayload.contentType || 'application/octet-stream',
+                ...(fallbackPayload.contentLength ? { 'Content-Length': fallbackPayload.contentLength } : {})
+              },
+              body: fallbackPayload.body
+            })
+
+            if (fallbackResp.ok) {
+              return json({ success: true, filePath: fallbackUploadUrl }, 200)
+            }
+
+            const fallbackErrText = await safeReadText(fallbackResp)
+            const fallbackDetail =
+              extractUpstreamErrorMessage(fallbackErrText) ||
+              fallbackResp.statusText ||
+              `HTTP ${fallbackResp.status}`
+
+            if (uploadResp.status >= 500 && attempt < maxRetries) {
+              await sleep(Math.min(1000 * Math.pow(2, attempt - 1), 10000))
+              continue
+            }
+
+            return json(
+              {
+                success: false,
+                error: `上传失败: ${uploadResp.status} - ${detail}；回退文件名上传失败: ${fallbackResp.status} - ${fallbackDetail}`
+              },
+              uploadResp.status
+            )
+          } catch (fallbackError) {
+            if (uploadResp.status >= 500 && attempt < maxRetries) {
+              await sleep(Math.min(1000 * Math.pow(2, attempt - 1), 10000))
+              continue
+            }
+
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError || 'unknown')
+            return json(
+              {
+                success: false,
+                error: `上传失败: ${uploadResp.status} - ${detail}；回退文件名上传异常: ${fallbackMessage}`
+              },
+              uploadResp.status
+            )
+          }
         }
 
         return json({ success: false, error: `上传失败: ${uploadResp.status} - ${detail}` }, uploadResp.status)
@@ -408,6 +461,11 @@ function generateRandomFileName(extension) {
   const ms = String(now.getMilliseconds()).padStart(3, '0')
   const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   return `${year}${month}${day}_${hours}${minutes}${seconds}_${ms}${randomNum}.${String(extension || 'jpg')}`
+}
+
+function getFileExtension(fileName, fallback = 'mp4') {
+  const match = /\.([a-zA-Z0-9]{1,10})$/.exec(String(fileName || ''))
+  return String(match && match[1] ? match[1] : fallback).toLowerCase()
 }
 
 function extractUpstreamErrorMessage(body) {
