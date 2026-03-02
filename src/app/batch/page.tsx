@@ -402,22 +402,25 @@ export default function BatchPage() {
         (progress, currentTask) => {
           if (!isRunActive()) return
           setOverallProgress(progress)
-          if (currentTask) {
-            setCurrentBatch(prev => {
-              if (!prev) return null
-              const updatedTasks = prev.tasks.map(t =>
-                t.id === currentTask.id ? currentTask : t
-              )
-              return {
-                ...prev,
-                tasks: updatedTasks,
-                completedTasks: updatedTasks.filter(t => t.status === TaskStatus.SUCCESS).length
-              }
-            })
-          } else {
-            // 更新整体进度
-            setCurrentBatch(prev => prev ? { ...prev, status: TaskStatus.PARSING } : null)
-          }
+          setCurrentBatch(prev => {
+            if (!prev) return null
+
+            // 抖音用户模式的任务会在解析阶段后才生成，需要在首次进度回调时同步到页面状态。
+            const parsedTasks = Array.isArray(batchTask.tasks) ? batchTask.tasks : []
+            const baseTasks = prev.tasks.length > 0 ? prev.tasks : parsedTasks
+            const updatedTasks = currentTask
+              ? baseTasks.map(task => (task.id === currentTask.id ? currentTask : task))
+              : baseTasks
+
+            return {
+              ...prev,
+              status: TaskStatus.PARSING,
+              totalTasks: batchTask.totalTasks,
+              totalSourceVideos: batchTask.totalSourceVideos,
+              tasks: updatedTasks,
+              completedTasks: updatedTasks.filter(task => task.status === TaskStatus.SUCCESS).length
+            }
+          })
         },
         {
           onPoolState: (state) => {
