@@ -43,6 +43,7 @@
     accountHistorySyncMeta: document.getElementById('account-history-sync-meta'),
 
     settingApiBaseUrl: document.getElementById('setting-api-base-url'),
+    settingExecProfile: document.getElementById('setting-exec-profile'),
     settingBatchConcurrency: document.getElementById('setting-batch-concurrency'),
     settingBatchRetryCount: document.getElementById('setting-batch-retry-count'),
     settingHistoryLimit: document.getElementById('setting-history-limit'),
@@ -122,6 +123,48 @@
         maxRetries: 2,
         baseDelayMs: 600,
         maxDelayMs: 12000
+      },
+      executionProfiles: {
+        activeProfileId: '',
+        lastProfileId: '',
+        profiles: [
+          {
+            id: 'stable_first',
+            name: '稳定优先',
+            batchConcurrency: 1,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 3,
+              baseDelayMs: 800,
+              maxDelayMs: 20000
+            }
+          },
+          {
+            id: 'balanced',
+            name: '均衡',
+            batchConcurrency: 2,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 2,
+              baseDelayMs: 600,
+              maxDelayMs: 12000
+            }
+          },
+          {
+            id: 'speed_first',
+            name: '速度优先',
+            batchConcurrency: 4,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 1,
+              baseDelayMs: 400,
+              maxDelayMs: 8000
+            }
+          }
+        ]
       },
       notifications: {
         enabled: true,
@@ -287,6 +330,31 @@
 
   function renderSettings() {
     el.settingApiBaseUrl.value = pageState.settings.apiBaseUrl || '';
+    if (el.settingExecProfile) {
+      const execProfiles = pageState.settings && pageState.settings.executionProfiles && typeof pageState.settings.executionProfiles === 'object'
+        ? pageState.settings.executionProfiles
+        : { activeProfileId: '', profiles: [] };
+      const profiles = Array.isArray(execProfiles.profiles) ? execProfiles.profiles : [];
+      const activeProfileId = String(execProfiles.activeProfileId || '').trim();
+      const hasActive = Boolean(activeProfileId && profiles.some((p) => p && p.id === activeProfileId));
+
+      el.settingExecProfile.innerHTML = '';
+
+      const optManual = document.createElement('option');
+      optManual.value = '';
+      optManual.textContent = '自定义（手动）';
+      el.settingExecProfile.appendChild(optManual);
+
+      profiles.forEach((profile) => {
+        if (!profile || !profile.id) return;
+        const opt = document.createElement('option');
+        opt.value = profile.id;
+        opt.textContent = profile.name ? String(profile.name) : profile.id;
+        el.settingExecProfile.appendChild(opt);
+      });
+
+      el.settingExecProfile.value = hasActive ? activeProfileId : '';
+    }
     el.settingBatchConcurrency.value = String(pageState.settings.batchConcurrency || 2);
     if (el.settingBatchRetryCount) {
       el.settingBatchRetryCount.value = String(pageState.settings.batchRetryCount || 2);
@@ -912,9 +980,49 @@
   }
 
   function bindSettingsActions() {
+    if (el.settingExecProfile) {
+      el.settingExecProfile.addEventListener('change', () => {
+        const execProfiles = pageState.settings && pageState.settings.executionProfiles && typeof pageState.settings.executionProfiles === 'object'
+          ? pageState.settings.executionProfiles
+          : { activeProfileId: '', profiles: [] };
+        const profileId = String(el.settingExecProfile.value || '').trim();
+        const profiles = Array.isArray(execProfiles.profiles) ? execProfiles.profiles : [];
+        const profile = profileId ? profiles.find((p) => p && p.id === profileId) : null;
+        if (!profile) {
+          return;
+        }
+
+        el.settingBatchConcurrency.value = String(profile.batchConcurrency || 2);
+        if (el.settingAdaptiveConcurrency) {
+          el.settingAdaptiveConcurrency.checked = profile.adaptiveConcurrency !== false;
+        }
+
+        const retryPolicy = normalizeRetryPolicy(profile.retryPolicy || {}, (profile.retryPolicy && profile.retryPolicy.maxRetries) || 2);
+        if (el.settingBatchRetryCount) {
+          el.settingBatchRetryCount.value = String(retryPolicy.maxRetries);
+        }
+        if (el.settingRetryBaseDelayMs) el.settingRetryBaseDelayMs.value = String(retryPolicy.baseDelayMs);
+        if (el.settingRetryMaxDelayMs) el.settingRetryMaxDelayMs.value = String(retryPolicy.maxDelayMs);
+        if (el.settingRetryClassTimeout) el.settingRetryClassTimeout.checked = retryPolicy.retryableClasses.includes('timeout');
+        if (el.settingRetryClassNetwork) el.settingRetryClassNetwork.checked = retryPolicy.retryableClasses.includes('network');
+        if (el.settingRetryClassHttp5xx) el.settingRetryClassHttp5xx.checked = retryPolicy.retryableClasses.includes('http5xx');
+        if (el.settingRetryClassHttp4xx) el.settingRetryClassHttp4xx.checked = retryPolicy.retryableClasses.includes('http4xx');
+        if (el.settingRetryClassInvalid) el.settingRetryClassInvalid.checked = retryPolicy.retryableClasses.includes('invalid_payload');
+      });
+    }
+
     el.btnSaveSettings.addEventListener('click', async () => {
       try {
         pageState.settings.apiBaseUrl = normalizeBaseUrl(el.settingApiBaseUrl.value);
+        if (el.settingExecProfile) {
+          pageState.settings.executionProfiles = pageState.settings.executionProfiles && typeof pageState.settings.executionProfiles === 'object'
+            ? pageState.settings.executionProfiles
+            : { activeProfileId: '', lastProfileId: '', profiles: [] };
+          pageState.settings.executionProfiles.activeProfileId = String(el.settingExecProfile.value || '').trim();
+          if (pageState.settings.executionProfiles.activeProfileId) {
+            pageState.settings.executionProfiles.lastProfileId = pageState.settings.executionProfiles.activeProfileId;
+          }
+        }
         pageState.settings.batchConcurrency = Math.max(1, Math.min(5, Number(el.settingBatchConcurrency.value || 2)));
         pageState.settings.batchRetryCount = Math.max(0, Math.min(5, Number(el.settingBatchRetryCount ? el.settingBatchRetryCount.value : 2)));
         const retryableClasses = [
@@ -954,6 +1062,26 @@
 
         await send('SETTINGS_NOTIFY_SAVE', { notifications: pageState.settings.notifications });
         await send('SETTINGS_RETRY_POLICY_SAVE', { retryPolicy: pageState.settings.retryPolicy });
+        if (pageState.settings.executionProfiles && typeof pageState.settings.executionProfiles === 'object') {
+          const activeProfileId = String(pageState.settings.executionProfiles.activeProfileId || '').trim();
+          if (activeProfileId) {
+            const profiles = Array.isArray(pageState.settings.executionProfiles.profiles)
+              ? pageState.settings.executionProfiles.profiles
+              : [];
+            pageState.settings.executionProfiles.profiles = profiles.map((profile) => {
+              if (!profile || profile.id !== activeProfileId) {
+                return profile;
+              }
+              return {
+                ...profile,
+                batchConcurrency: pageState.settings.batchConcurrency,
+                adaptiveConcurrency: pageState.settings.adaptiveConcurrency,
+                retryPolicy: pageState.settings.retryPolicy
+              };
+            });
+          }
+          await send('SETTINGS_EXECUTION_PROFILE_SAVE', { executionProfiles: pageState.settings.executionProfiles });
+        }
         await persistConfig('设置已保存');
       } catch (error) {
         setNotice(error.message, 'error');

@@ -74,6 +74,17 @@
             <div class="muted">扩展调用当前项目 API 的地址，默认本地开发端口。</div>
           </div>
 
+          <hr />
+
+          <h3 style="margin: 0;">执行档位（实验性）</h3>
+          <div class="col">
+            <label class="small">当前档位</label>
+            <select id="setting-exec-profile">
+              <option value="">自定义（手动）</option>
+            </select>
+            <div class="muted">切换档位会把并发/重试策略填入下方表单，保存后生效。</div>
+          </div>
+
           <div class="row" style="gap: 12px;">
             <div class="col" style="flex: 1;">
               <label class="small">批量并发数 (1-5)</label>

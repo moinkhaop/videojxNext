@@ -148,6 +148,47 @@ const DEFAULT_TEMPLATE_PROFILES = [
   }
 ];
 
+const DEFAULT_EXECUTION_PROFILES = Array.isArray(DEFAULT_STATE?.settings?.executionProfiles?.profiles)
+  ? clone(DEFAULT_STATE.settings.executionProfiles.profiles)
+  : [
+    {
+      id: 'stable_first',
+      name: '稳定优先',
+      batchConcurrency: 1,
+      adaptiveConcurrency: true,
+      retryPolicy: {
+        retryableClasses: [...DEFAULT_RETRYABLE_CLASSES],
+        maxRetries: 3,
+        baseDelayMs: 800,
+        maxDelayMs: 20000
+      }
+    },
+    {
+      id: 'balanced',
+      name: '均衡',
+      batchConcurrency: 2,
+      adaptiveConcurrency: true,
+      retryPolicy: {
+        retryableClasses: [...DEFAULT_RETRYABLE_CLASSES],
+        maxRetries: 2,
+        baseDelayMs: 600,
+        maxDelayMs: 12000
+      }
+    },
+    {
+      id: 'speed_first',
+      name: '速度优先',
+      batchConcurrency: 4,
+      adaptiveConcurrency: true,
+      retryPolicy: {
+        retryableClasses: [...DEFAULT_RETRYABLE_CLASSES],
+        maxRetries: 1,
+        baseDelayMs: 400,
+        maxDelayMs: 8000
+      }
+    }
+  ];
+
 function normalizeRetryableClasses(input) {
   const raw = Array.isArray(input) ? input : [];
   const seen = new Set();
@@ -211,6 +252,45 @@ function normalizeTemplateProfiles(input) {
   const hasActive = safeProfiles.some((item) => item.id === activeProfileId);
   return {
     activeProfileId: hasActive ? activeProfileId : safeProfiles[0].id,
+    profiles: safeProfiles
+  };
+}
+
+function normalizeExecutionProfiles(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  const profilesRaw = Array.isArray(source.profiles) ? source.profiles : DEFAULT_EXECUTION_PROFILES;
+  const profiles = [];
+  const seen = new Set();
+
+  for (const item of profilesRaw) {
+    const id = String(item && item.id ? item.id : '').trim() || createId('exec_profile');
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const batchConcurrency = Math.max(1, Math.min(5, Math.trunc(Number(item && item.batchConcurrency != null ? item.batchConcurrency : 2))));
+    const adaptiveConcurrency = item && Object.prototype.hasOwnProperty.call(item, 'adaptiveConcurrency')
+      ? item.adaptiveConcurrency !== false
+      : true;
+    const retryPolicy = normalizeRetryPolicy(item && item.retryPolicy ? item.retryPolicy : {}, item && item.retryPolicy ? item.retryPolicy.maxRetries : undefined);
+
+    profiles.push({
+      id,
+      name: String(item && item.name ? item.name : '未命名档位').trim() || '未命名档位',
+      batchConcurrency,
+      adaptiveConcurrency,
+      retryPolicy
+    });
+  }
+
+  const safeProfiles = profiles.length > 0 ? profiles : clone(DEFAULT_EXECUTION_PROFILES);
+  const activeProfileId = String(source.activeProfileId || '').trim();
+  const lastProfileId = String(source.lastProfileId || '').trim();
+  const hasActive = safeProfiles.some((p) => p.id === activeProfileId);
+  const hasLast = safeProfiles.some((p) => p.id === lastProfileId);
+
+  return {
+    activeProfileId: hasActive ? activeProfileId : '',
+    lastProfileId: hasLast ? lastProfileId : '',
     profiles: safeProfiles
   };
 }
@@ -853,6 +933,7 @@ async function ensureInitialized() {
     state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
     state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
     state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+    state.settings.executionProfiles = normalizeExecutionProfiles(state.settings.executionProfiles);
     state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
     state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
     state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
@@ -1105,6 +1186,7 @@ function pickExtensionConfigSnapshot(state) {
       batchRetryCount: normalizedTaskSettings.batchRetryCount,
       retryPolicy: normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount),
       notifications: normalizeNotificationSettings(normalizedTaskSettings.notifications),
+      executionProfiles: normalizeExecutionProfiles(state?.settings?.executionProfiles),
       templateProfiles: normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles),
       historyLimit: Math.max(100, Math.min(1000, Number(state?.settings?.historyLimit || 500))),
       uploadFolderTemplate: normalizedTaskSettings.uploadFolderTemplate,
@@ -1151,6 +1233,7 @@ async function applyCloudConfig(config, updatedAt) {
       state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
       state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
       state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+      state.settings.executionProfiles = normalizeExecutionProfiles(state.settings.executionProfiles);
       state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
       state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
       state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
@@ -1303,6 +1386,75 @@ async function createHistoryRecord(input) {
       status: detail.status
     });
   }
+
+  if (!detail.profileSnapshot) {
+    try {
+      const state = await readState();
+      const taskSettings = normalizeTaskSettings(state.settings);
+      const execProfiles = normalizeExecutionProfiles(state.settings && state.settings.executionProfiles);
+      const activeId = String(execProfiles.activeProfileId || '').trim();
+      const activeProfile = activeId ? (execProfiles.profiles || []).find((p) => p && p.id === activeId) : null;
+
+      detail.profileSnapshot = {
+        mode: activeProfile ? 'profile' : 'manual',
+        profileId: activeProfile ? activeProfile.id : '',
+        profileName: activeProfile ? activeProfile.name : '',
+        batchConcurrency: taskSettings.batchConcurrency,
+        adaptiveConcurrency: taskSettings.adaptiveConcurrency,
+        batchRetryCount: taskSettings.batchRetryCount,
+        retryPolicy: normalizeRetryPolicy(taskSettings.retryPolicy, taskSettings.batchRetryCount)
+      };
+    } catch (error) {
+      detail.profileSnapshot = {
+        mode: 'unknown',
+        profileId: '',
+        profileName: '',
+        batchConcurrency: 0,
+        adaptiveConcurrency: true,
+        batchRetryCount: 0,
+        retryPolicy: normalizeRetryPolicy({}, 0)
+      };
+    }
+  }
+
+  if (status === 'failed' && !detail.failureFingerprint) {
+    try {
+      const failureClass = String(detail.failureClass || classifyFailure({ message: detail.error || '' }) || 'unknown');
+      const parserName = String(detail.parserName || '').trim().toLowerCase();
+      const sourceUrl = extractFirstUrl(
+        detail.sourceUrl || detail.inputUrl || detail.videoLongUrl || detail.shareShortUrl || detail.pageUrl || ''
+      );
+
+      let host = '';
+      if (sourceUrl) {
+        try {
+          host = String(new URL(sourceUrl).hostname || '').toLowerCase();
+        } catch (error) {
+          host = '';
+        }
+      }
+
+      const rawError = String(detail.error || (input && input.error) || '').trim().toLowerCase();
+      const normalizedError = rawError
+        .replace(/https?:\/\/\S+/g, 'url')
+        .replace(/\b[0-9a-f]{8,}\b/gi, 'hex')
+        .replace(/\b\d{2,}\b/g, 'n')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160);
+
+      const fingerprintKey = `${failureClass}|${parserName}|${host}|${normalizedError}`;
+      let hash = 2166136261;
+      for (let i = 0; i < fingerprintKey.length; i += 1) {
+        hash ^= fingerprintKey.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      detail.failureFingerprint = `fpv1:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+    } catch (error) {
+      detail.failureFingerprint = '';
+    }
+  }
+
   detail.notified = Boolean(detail.notified);
 
   const record = {
@@ -3417,6 +3569,7 @@ async function saveConfiguration(payload) {
       state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
       state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
       state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+      state.settings.executionProfiles = normalizeExecutionProfiles(state.settings.executionProfiles);
       state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
       state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
       state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
@@ -3625,6 +3778,23 @@ async function saveRetryPolicySettings(payload) {
       retryPolicy,
       batchRetryCount: retryPolicy.maxRetries
     };
+    state.settings.configUpdatedAt = Date.now();
+    state.settings.configUserId = state.auth && state.auth.user && state.auth.user.id
+      ? String(state.auth.user.id)
+      : '';
+  });
+
+  return getPublicState();
+}
+
+async function saveExecutionProfileSettings(payload) {
+  const input = payload && payload.executionProfiles && typeof payload.executionProfiles === 'object'
+    ? payload.executionProfiles
+    : payload || {};
+  const executionProfiles = normalizeExecutionProfiles(input);
+
+  await mutateState((state) => {
+    state.settings.executionProfiles = executionProfiles;
     state.settings.configUpdatedAt = Date.now();
     state.settings.configUserId = state.auth && state.auth.user && state.auth.user.id
       ? String(state.auth.user.id)
@@ -3865,6 +4035,10 @@ const handlers = {
 
   async SETTINGS_RETRY_POLICY_SAVE(payload) {
     return saveRetryPolicySettings(payload || {});
+  },
+
+  async SETTINGS_EXECUTION_PROFILE_SAVE(payload) {
+    return saveExecutionProfileSettings(payload || {});
   }
 };
 

@@ -1,0 +1,288 @@
+# VideoJX Next V2 设计方案（自动托管上传 / Auto Pilot）
+
+## 1. 背景与目标
+
+在已上线能力（任务通知、失败分类、可恢复重试、命名模板工作台、效率洞察）的基础上，V2 的核心目标是：
+
+1. 让用户从“盯任务执行”转向“配置策略后自动运行”。
+2. 进一步降低失败任务的人工干预成本。
+3. 在不引入新数据库/消息队列的前提下完成增强（继续使用现有 Supabase + JSON 字段）。
+
+> 版本起始时间：2026-03-02（本地时区）
+
+---
+
+## 2. 成功指标（KPI）
+
+1. 批量任务成功率在 V1 基线上提升 `>= 10%`。  
+2. 失败任务人工干预次数下降 `>= 40%`。  
+3. 批量任务平均处理时长下降 `>= 20%`。  
+4. 通知到用户执行修复动作的中位时长降低到 `< 2 分钟`。
+
+---
+
+## 3. 范围定义
+
+### 3.1 In Scope
+
+1. 执行策略档案（Execution Profiles）  
+2. 失败指纹聚合与自动修复建议  
+3. 任务后处理流水线（Post-Upload Pipeline）  
+4. 策略应用与回滚审计（本地+云端配置）
+
+### 3.2 Out of Scope
+
+1. 多租户/团队协作权限模型  
+2. 新计费体系  
+3. 引入外部队列系统或新增独立业务表
+
+---
+
+## 4. 功能设计
+
+## 功能 E：执行策略档案（Execution Profiles）
+
+### 用户问题
+
+不同场景需要不同执行偏好（稳定/平衡/速度），现在需手动改并发与重试参数。
+
+### 方案
+
+提供 3 套内置档案：
+
+1. `stable_first`（稳定优先）  
+2. `balanced`（平衡）  
+3. `speed_first`（速度优先）
+
+支持按任务类型自动套用：
+
+1. 单任务上传  
+2. 队列任务  
+3. 用户主页批量任务
+
+### 核心规则
+
+1. 每次任务启动时从配置快照读取档案，不受运行中配置变更影响。  
+2. 档案切换自动映射到 `batchConcurrency / retryPolicy / adaptiveConcurrency`。  
+3. 提供“一键回滚到上一个档案”。
+
+### 验收标准
+
+1. 档案切换后新任务立即生效。  
+2. 旧任务继续使用旧快照，不发生中途参数漂移。  
+3. 回滚操作 1 次点击完成并写入审计记录。
+
+---
+
+## 功能 F：失败指纹与自动修复（Auto Repair）
+
+### 用户问题
+
+用户知道失败分类，但不知道“下一步该怎么修”。
+
+### 方案
+
+新增失败指纹（fingerprint）聚合：
+
+`fingerprint = {failureClass + parserName + sourceHost + normalizedErrorSnippet}`
+
+提供自动修复建议：
+
+1. 切换默认解析器到当前成功率更高者  
+2. 自动改重试策略（仅可恢复错误 + 指数退避）  
+3. 降低并发（批量连续失败阈值触发）
+
+### 核心规则
+
+1. 同类失败在 24h 内达到阈值后才触发“强建议”。  
+2. 自动修复先本地应用，再尽力写回云端。  
+3. 自动修复动作必须可回滚。
+
+### 验收标准
+
+1. Top 指纹可视化展示（次数、近24h趋势、受影响任务数）。  
+2. 每个 Top 指纹至少 1 条可执行建议。  
+3. 一键应用成功后，5 秒内在配置页可见变更。
+
+---
+
+## 功能 G：任务后处理流水线（Post-Upload Pipeline）
+
+### 用户问题
+
+上传成功后还要做二次整理（改名、归档、标记），耗时且易漏。
+
+### 方案
+
+上传成功后可按条件触发后处理：
+
+1. 统一前后缀（如 `[已传]_{title}`）  
+2. 按日期归档迁移  
+3. 生成摘要条目（用于后续复盘）
+
+### 核心规则
+
+1. 后处理失败不影响主任务成功状态。  
+2. 记录 `postProcessTrace[]`，可在历史详情查看。  
+3. 支持 `mediaType` 条件（仅视频/仅图集/全部）。
+
+### 验收标准
+
+1. 后处理成功率 `>= 99%`。  
+2. 主任务与后处理状态独立展示。  
+3. 可在设置中一键关闭后处理模块。
+
+---
+
+## 5. 数据结构与协议变更
+
+## 5.1 扩展设置新增字段（`settings`）
+
+```ts
+settings.executionProfiles = {
+  // 默认为空表示“自定义（手动）”，只作为预设/标签存在，不强制覆盖现有设置。
+  activeProfileId: '',
+  profiles: [
+    { id: 'stable_first', name: '稳定优先', batchConcurrency: 1, adaptiveConcurrency: true, retryPolicy: {...} },
+    { id: 'balanced', name: '平衡', batchConcurrency: 2, adaptiveConcurrency: true, retryPolicy: {...} },
+    { id: 'speed_first', name: '速度优先', batchConcurrency: 4, adaptiveConcurrency: true, retryPolicy: {...} }
+  ],
+  lastProfileId?: string
+}
+
+settings.autoRepair = {
+  enabled: true,
+  fingerprintWindowHours: 24,
+  triggerThreshold: 3,
+  autoApplyLowRisk: false
+}
+
+settings.postProcess = {
+  enabled: false,
+  onlyMediaType: 'all' | 'video' | 'image_album',
+  renamePrefix: '',
+  byDateArchive: false,
+  writeSummary: true
+}
+```
+
+## 5.2 历史详情扩展（`history.detail`）
+
+```ts
+detail.failureFingerprint?: string
+detail.postProcessTrace?: Array<{
+  at: string
+  step: 'rename' | 'archive' | 'summary'
+  status: 'success' | 'failed'
+  message?: string
+}>
+detail.profileSnapshot?: {
+  profileId: string
+  batchConcurrency: number
+  adaptiveConcurrency: boolean
+  retryPolicy: {
+    retryableClasses: string[]
+    maxRetries: number
+    baseDelayMs: number
+    maxDelayMs: number
+  }
+}
+```
+
+## 5.3 消息协议新增
+
+1. `SETTINGS_EXECUTION_PROFILE_SAVE`  
+2. `SETTINGS_AUTOREPAIR_SAVE`  
+3. `SETTINGS_POSTPROCESS_SAVE`  
+4. `TASKS_AUTOREPAIR_APPLY`
+
+## 5.4 站点 API 新增（V2）
+
+1. `GET /api/insights/fingerprints?range=7d|30d`  
+2. `POST /api/insights/fingerprints/apply`
+
+---
+
+## 6. 实施计划与 TODO
+
+## Phase A（1-2 周）：策略档案 + 指纹基础
+
+### 6.1 扩展端
+
+1. `chrome-extension/background.js`
+   - 加入 `executionProfiles` 归一化
+   - 任务启动时写入 `profileSnapshot`
+   - 失败后生成 `failureFingerprint`
+2. `chrome-extension/options.html / options.js`
+   - 增加策略档案配置 UI
+   - 增加自动修复开关与阈值配置
+3. `chrome-extension/popup.js`
+   - 增加“应用自动修复建议”入口
+
+### 6.2 站点端
+
+1. `src/lib/storage.ts`
+   - 新增 `get/saveExecutionProfilesConfig`
+   - 新增 `get/saveAutoRepairConfig`
+2. `src/lib/insights.ts`
+   - 输出失败指纹聚合结果
+
+### 6.3 测试
+
+1. 指纹生成一致性测试  
+2. 档案切换/回滚测试  
+3. 配置云同步兼容测试（根字段 ↔ extension.settings）
+
+---
+
+## Phase B（2 周）：自动修复 + 后处理流水线
+
+### 6.4 自动修复
+
+1. 新增 `TASKS_AUTOREPAIR_APPLY` 实际执行逻辑  
+2. 低风险策略可自动应用（可关闭）
+
+### 6.5 后处理流水线
+
+1. 在上传成功路径挂接后处理步骤  
+2. 写入 `postProcessTrace[]`  
+3. UI 展示后处理结果
+
+### 6.6 站点 API 与页面
+
+1. 新增指纹 API  
+2. 洞察页新增“失败指纹看板 + 一键应用”
+
+### 6.7 测试
+
+1. 后处理失败不影响主状态  
+2. 自动修复误触发回滚测试  
+3. 1k 历史记录聚合性能回归（首屏 < 1s，本地优先）
+
+---
+
+## 7. 风险与缓解
+
+1. 风险：自动策略误切换导致波动  
+   - 缓解：默认仅建议不自动应用；自动应用仅限低风险动作。  
+2. 风险：配置字段扩展导致同步冲突  
+   - 缓解：统一走 `normalize` + `extension.config.settings` 映射。  
+3. 风险：后处理增加耗时  
+   - 缓解：后处理异步执行，主任务先完成。
+
+---
+
+## 8. 发布策略
+
+1. 第一阶段灰度：仅开放给 `test` 分支用户配置。  
+2. 观察 3 天指标：失败率、恢复率、通知触达。  
+3. 指标达标后合并到 `main` 并发布扩展更新。
+
+---
+
+## 9. Definition of Done
+
+1. 核心功能 E/F/G 全部有 UI 入口 + 可回滚。  
+2. 配置云同步与本地读取一致，无字段丢失。  
+3. 自动化测试覆盖核心路径并通过。  
+4. 指标面板可观测并验证 KPI。

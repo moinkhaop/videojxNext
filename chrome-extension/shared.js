@@ -27,6 +27,48 @@
         baseDelayMs: 600,
         maxDelayMs: 12000
       },
+      executionProfiles: {
+        activeProfileId: '',
+        lastProfileId: '',
+        profiles: [
+          {
+            id: 'stable_first',
+            name: '稳定优先',
+            batchConcurrency: 1,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 3,
+              baseDelayMs: 800,
+              maxDelayMs: 20000
+            }
+          },
+          {
+            id: 'balanced',
+            name: '均衡',
+            batchConcurrency: 2,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 2,
+              baseDelayMs: 600,
+              maxDelayMs: 12000
+            }
+          },
+          {
+            id: 'speed_first',
+            name: '速度优先',
+            batchConcurrency: 4,
+            adaptiveConcurrency: true,
+            retryPolicy: {
+              retryableClasses: ['timeout', 'network', 'http5xx'],
+              maxRetries: 1,
+              baseDelayMs: 400,
+              maxDelayMs: 8000
+            }
+          }
+        ]
+      },
       templateProfiles: {
         activeProfileId: 'balanced',
         profiles: [
