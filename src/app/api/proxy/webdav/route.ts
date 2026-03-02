@@ -708,6 +708,7 @@ export async function POST(request: NextRequest) {
             const isScriptError =
               uploadResponse.status === 545 ||
               /error\s+return\s+from\s+script/i.test(parsedError ?? '')
+            const isServerUploadError = uploadResponse.status >= 500
 
             const isLockedError =
               uploadResponse.status === 423 ||
@@ -783,8 +784,10 @@ export async function POST(request: NextRequest) {
               errorMessage = `上传服务错误 (423): 目标文件被锁定。已尝试自动改名重试但仍失败。${retryDetails.join('；')}。建议稍后重试，或检查 WebDAV 服务端锁机制（如 Nextcloud 文件锁/数据库锁）和目录权限。`
             }
 
-            if (isScriptError) {
-              console.warn('[WebDAV] 检测到脚本类错误，尝试使用安全随机文件名回退上传')
+            if (isScriptError || isServerUploadError) {
+              console.warn(
+                `[WebDAV] 检测到服务端上传异常(${uploadResponse.status})，尝试使用安全随机文件名回退上传`
+              )
               const fallbackFileName = generateRandomFileName(getFileExtension(fileName, 'mp4'))
               const fallbackUploadPath = buildWebDAVPath(webdavConfig, folderPath, fallbackFileName)
 
@@ -828,7 +831,11 @@ export async function POST(request: NextRequest) {
                 `回退文件名上传失败: ${fallbackDetail || fallbackResponse.statusText}`,
               ].join('；')
 
-              errorMessage = `上传服务错误 (545): 远端脚本执行失败。${detailMessage}。建议检查WebDAV服务端脚本、目录写权限，或改用纯英文路径。`
+              if (isScriptError) {
+                errorMessage = `上传服务错误 (545): 远端脚本执行失败。${detailMessage}。建议检查WebDAV服务端脚本、目录写权限，或改用纯英文路径。`
+              } else {
+                errorMessage = `上传服务错误 (${uploadResponse.status}): 服务器返回内部错误。${detailMessage}。已自动尝试安全文件名回退但仍失败，建议检查 WebDAV 服务端日志、目录写权限和并发限制。`
+              }
             }
           } catch (e) {
             // 忽略错误详情获取失败

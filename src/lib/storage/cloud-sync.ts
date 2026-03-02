@@ -27,8 +27,24 @@ function asRecord(value: unknown): Record<string, any> {
 
 function normalizeRootConfig(value: unknown): NormalizedConfig {
   const source = asRecord(value)
+  const settings = asRecord(source.settings)
+  if (!settings.retryPolicy && source.retryPolicy) {
+    settings.retryPolicy = source.retryPolicy
+  }
+  if (!settings.notifications && source.notifications) {
+    settings.notifications = source.notifications
+  }
+  if (!settings.templateProfiles && source.templateProfiles) {
+    settings.templateProfiles = source.templateProfiles
+  }
+  if (!settings.uploadFolderTemplate && source.uploadFolderTemplate) {
+    settings.uploadFolderTemplate = source.uploadFolderTemplate
+  }
+  if (!settings.uploadFileTemplate && source.uploadFileTemplate) {
+    settings.uploadFileTemplate = source.uploadFileTemplate
+  }
   return {
-    settings: asRecord(source.settings),
+    settings,
     parsers: Array.isArray(source.parsers) ? source.parsers : [],
     webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
     defaults: asRecord(source.defaults),
@@ -86,18 +102,40 @@ function normalizeRemoteHistory(rows: RemoteHistoryRow[]): HistoryRecord[] {
       const type: HistoryRecord['type'] = row.type === 'batch' ? 'batch' : 'single'
       const rawTask = row.task && typeof row.task === 'object' ? row.task : {}
       const taskCreatedAt = toDate(rawTask.createdAt) ?? createdAt
-      return {
-        ...row,
+      const normalizedTask = {
+        ...rawTask,
+        createdAt: taskCreatedAt,
+        completedAt: toDate(rawTask.completedAt),
+      } as HistoryRecord['task']
+
+      const normalized: HistoryRecord = {
         id: row.id,
         type,
         createdAt,
-        task: {
-          ...rawTask,
-          createdAt: taskCreatedAt,
-          completedAt: toDate(rawTask.completedAt),
-        } as any,
-        lastViewedAt: toDate((row as any).lastViewedAt),
+        task: normalizedTask,
       }
+
+      const lastViewedAt = toDate((row as any).lastViewedAt)
+      if (lastViewedAt) {
+        normalized.lastViewedAt = lastViewedAt
+      }
+
+      const tags = Array.isArray((row as any).tags)
+        ? (row as any).tags.filter((tagId: unknown): tagId is string => typeof tagId === 'string' && tagId.trim().length > 0)
+        : []
+      if (tags.length > 0) {
+        normalized.tags = tags
+      }
+
+      if (typeof (row as any).notes === 'string') {
+        normalized.notes = (row as any).notes
+      }
+
+      if (typeof (row as any).isFavorite === 'boolean') {
+        normalized.isFavorite = (row as any).isFavorite
+      }
+
+      return normalized
     })
     .sort((a, b) => {
       const aTime = toDate(a.createdAt)?.getTime() ?? 0
@@ -145,11 +183,21 @@ export async function hydrateFromSupabase() {
   if (hasRemoteConfig) {
     const remoteRoot = asRecord(remoteConfig)
     runWithCloudSyncSuppressed(() => {
+      const current = ConfigManager.getAppConfig()
       const theme = remoteRoot.theme
-      if (theme === 'light' || theme === 'dark' || theme === 'system') {
-        const current = ConfigManager.getAppConfig()
-        ConfigManager.saveAppConfig({ ...current, theme })
-      }
+      const nextTheme = theme === 'light' || theme === 'dark' || theme === 'system'
+        ? theme
+        : current.theme
+      const remoteSettings = normalizedRemoteConfig.settings || {}
+      ConfigManager.saveAppConfig({
+        ...current,
+        theme: nextTheme,
+        retryPolicy: remoteSettings.retryPolicy ?? current.retryPolicy,
+        notifications: remoteSettings.notifications ?? current.notifications,
+        templateProfiles: remoteSettings.templateProfiles ?? current.templateProfiles,
+        uploadFolderTemplate: remoteSettings.uploadFolderTemplate ?? current.uploadFolderTemplate,
+        uploadFileTemplate: remoteSettings.uploadFileTemplate ?? current.uploadFileTemplate,
+      })
 
       const parsers = normalizedRemoteConfig.parsers
       if (Array.isArray(parsers)) {
