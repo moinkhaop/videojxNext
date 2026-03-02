@@ -84,6 +84,35 @@ function getNameWithoutExtension(fileName: string): string {
   return fileName.replace(/\.[^.]*$/, '')
 }
 
+function getImageExtensionFromUrl(imageUrl: string, fallback = 'jpg'): string {
+  try {
+    const parsed = new URL(String(imageUrl || ''))
+    const path = parsed.pathname || ''
+    const ext = path.split('.').pop()?.toLowerCase() || ''
+    if (/^[a-z0-9]{1,5}$/.test(ext)) {
+      return ext === 'jpeg' ? 'jpg' : ext
+    }
+  } catch {
+  }
+  return fallback
+}
+
+function sanitizeAlbumName(name: string): string {
+  const base = getNameWithoutExtension(String(name || ''))
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return (base || 'image_album').slice(0, 80)
+}
+
+function buildAlbumImageFileName(albumName: string, index: number, imageUrl: string): string {
+  const ext = getImageExtensionFromUrl(imageUrl, 'jpg')
+  const seq = String(index + 1).padStart(3, '0')
+  const base = sanitizeAlbumName(albumName)
+  return `${base}_${seq}.${ext}`
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -549,12 +578,21 @@ export async function POST(request: NextRequest) {
       
       // 2. 并发上传图片文件（限流）
       let successCount = 0
+      let skippedCount = 0
       const workers = Array.from({ length: Math.min(IMAGE_UPLOAD_CONCURRENCY, images.length) }, (_, workerIndex) => {
         return (async () => {
           for (let index = workerIndex; index < images.length; index += IMAGE_UPLOAD_CONCURRENCY) {
             const image: ImageInfo = images[index]
-            const imageFileName = generateRandomFileName('jpg')
-            const imageUploadPath = `${albumFolderPath}/${imageFileName}`
+            const imageFileName = buildAlbumImageFileName(fileName, index, image.url)
+            const imageUploadPath = `${albumFolderPath}/${encodeURIComponent(imageFileName)}`
+
+            const alreadyExists = await checkWebDAVResourceExists(imageUploadPath, auth)
+            if (alreadyExists) {
+              skippedCount++
+              successCount++
+              console.log(`[WebDAV] 图片已存在，跳过 ${index + 1}/${images.length}: ${imageUploadPath}`)
+              continue
+            }
 
             console.log(`[WebDAV] 上传图片 ${index + 1}/${images.length}: ${imageUploadPath}`)
 
@@ -569,7 +607,7 @@ export async function POST(request: NextRequest) {
       })
       await Promise.all(workers)
       
-      console.log(`[WebDAV] 图集上传完成，成功上传 ${successCount}/${images.length} 张图片`)
+      console.log(`[WebDAV] 图集上传完成，成功 ${successCount}/${images.length}（其中跳过已存在 ${skippedCount}）`)
       
       // 3. 返回文件夹路径作为上传结果
       const result: WebDAVUploadResponse = {

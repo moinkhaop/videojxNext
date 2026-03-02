@@ -46,14 +46,21 @@ export default async function onRequest(context) {
 
       const concurrency = clampInt(getEnvInt(context.env, 'WEBDAV_IMAGE_UPLOAD_CONCURRENCY', DEFAULT_IMAGE_UPLOAD_CONCURRENCY), 1, 8)
       let successCount = 0
+      let skippedCount = 0
       const workers = Array.from({ length: Math.min(concurrency, images.length) }, (_, workerIndex) => {
         return (async () => {
           for (let index = workerIndex; index < images.length; index += concurrency) {
             const item = images[index]
             const imageUrl = item && typeof item.url === 'string' ? item.url : ''
             if (!imageUrl) continue
-            const imageFileName = generateRandomFileName('jpg')
+            const imageFileName = buildAlbumImageFileName(fileName, index, imageUrl)
             const imageUploadUrl = `${albumFolderUrl.replace(/\/$/, '')}/${encodePathSegment(imageFileName)}`
+            const alreadyExists = await checkWebDAVResourceExists(imageUploadUrl, auth)
+            if (alreadyExists) {
+              skippedCount++
+              successCount++
+              continue
+            }
             const uploaded = await uploadBinaryToWebDAV({
               sourceUrl: imageUrl,
               destUrl: imageUploadUrl,
@@ -67,6 +74,7 @@ export default async function onRequest(context) {
       })
       await Promise.all(workers)
 
+      console.log(`[WebDAV] 图集上传完成，成功 ${successCount}/${images.length}（跳过已存在 ${skippedCount}）`)
       return json({ success: successCount > 0, filePath: albumFolderUrl }, 200)
     }
 
@@ -503,6 +511,39 @@ function generateRandomFileName(extension) {
   const ms = String(now.getMilliseconds()).padStart(3, '0')
   const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   return `${year}${month}${day}_${hours}${minutes}${seconds}_${ms}${randomNum}.${String(extension || 'jpg')}`
+}
+
+function getNameWithoutExtension(fileName) {
+  return String(fileName || '').replace(/\.[^.]*$/, '')
+}
+
+function sanitizeAlbumName(name) {
+  return getNameWithoutExtension(String(name || ''))
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'image_album'
+}
+
+function getImageExtensionFromUrl(imageUrl, fallback = 'jpg') {
+  try {
+    const parsed = new URL(String(imageUrl || ''))
+    const path = parsed.pathname || ''
+    const ext = path.split('.').pop()?.toLowerCase() || ''
+    if (/^[a-z0-9]{1,5}$/.test(ext)) {
+      return ext === 'jpeg' ? 'jpg' : ext
+    }
+  } catch {
+  }
+  return fallback
+}
+
+function buildAlbumImageFileName(albumName, index, imageUrl) {
+  const base = sanitizeAlbumName(albumName)
+  const seq = String(Number(index) + 1).padStart(3, '0')
+  const ext = getImageExtensionFromUrl(imageUrl, 'jpg')
+  return `${base}_${seq}.${ext}`
 }
 
 function getFileExtension(fileName, fallback = 'mp4') {
