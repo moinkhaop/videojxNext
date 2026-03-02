@@ -86,6 +86,7 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
       <video
         ref={videoRef}
         className="w-full h-full object-contain"
+        src={proxiedVideoUrl}
         poster={thumbnail}
         preload="auto"
         controls
@@ -95,9 +96,6 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
         onVolumeChange={(e) => setIsMuted((e.target as HTMLVideoElement).muted)}
         onError={handleVideoError}
       >
-        <source src={proxiedVideoUrl} type="video/mp4" />
-        <source src={proxiedVideoUrl} type="video/webm" />
-        <source src={proxiedVideoUrl} type="video/ogg" />
         您的浏览器不支持视频播放。
       </video>
 
