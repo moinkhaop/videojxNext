@@ -1,4 +1,20 @@
-import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry, HistoryStats, TaskStatus, Tag, ParserCapability, SupportedPlatform } from '@/types'
+import {
+  AppConfig,
+  VideoParserConfig,
+  WebDAVConfig,
+  HistoryRecord,
+  CleanupConfig,
+  CleanupLogEntry,
+  HistoryStats,
+  TaskStatus,
+  Tag,
+  ParserCapability,
+  SupportedPlatform,
+  RetryPolicyConfig,
+  NotificationSettings,
+  TemplateProfilesConfig,
+  NamingTemplateProfile,
+} from '@/types'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { markSyncError, markSyncOk } from '@/lib/supabase/sync-status'
 
@@ -31,6 +47,193 @@ const createUuid = (): string => {
   bytes[8] = (bytes[8] & 0x3f) | 0x80
   const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+const DEFAULT_TEMPLATE_PROFILES: NamingTemplateProfile[] = [
+  {
+    id: 'safe',
+    name: '保守模式',
+    folderTemplate: '{author}',
+    fileTemplate: '{title}',
+  },
+  {
+    id: 'balanced',
+    name: '信息丰富',
+    folderTemplate: '{author}',
+    fileTemplate: '{awemeId}_{title}',
+  },
+  {
+    id: 'by_date',
+    name: '按日期归档',
+    folderTemplate: '{date}/{author}',
+    fileTemplate: '{awemeId}_{title}',
+  },
+]
+const DEFAULT_TEMPLATE_PROFILE_ID = 'balanced'
+const DEFAULT_UPLOAD_FOLDER_TEMPLATE = '{author}'
+const DEFAULT_UPLOAD_FILE_TEMPLATE = '{awemeId}_{title}'
+
+const DEFAULT_RETRY_POLICY: RetryPolicyConfig = {
+  retryableClasses: ['timeout', 'network', 'http5xx'],
+  maxRetries: 2,
+  baseDelayMs: 600,
+  maxDelayMs: 12000,
+}
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  enabled: true,
+  success: false,
+  failure: true,
+  batchDone: true,
+  quietHoursStart: '23:00',
+  quietHoursEnd: '08:00',
+}
+
+function normalizeTemplateProfiles(input: unknown): TemplateProfilesConfig {
+  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
+  const rawProfiles = Array.isArray(source.profiles) ? source.profiles : DEFAULT_TEMPLATE_PROFILES
+  const profiles: NamingTemplateProfile[] = []
+  const seen = new Set<string>()
+
+  for (const raw of rawProfiles) {
+    const id = String(raw?.id || '').trim() || createUuid()
+    if (seen.has(id)) continue
+    seen.add(id)
+    profiles.push({
+      id,
+      name: String(raw?.name || '未命名模板').trim() || '未命名模板',
+      folderTemplate: String(raw?.folderTemplate || '{author}').trim() || '{author}',
+      fileTemplate: String(raw?.fileTemplate || '{awemeId}_{title}').trim() || '{awemeId}_{title}',
+    })
+  }
+
+  const safeProfiles = profiles.length > 0 ? profiles : [...DEFAULT_TEMPLATE_PROFILES]
+  const activeProfileId = String(source.activeProfileId || '').trim()
+  const preferredActiveId = safeProfiles.some(item => item.id === DEFAULT_TEMPLATE_PROFILE_ID)
+    ? DEFAULT_TEMPLATE_PROFILE_ID
+    : safeProfiles[0].id
+  const hasActive = safeProfiles.some(item => item.id === activeProfileId)
+  return {
+    activeProfileId: hasActive ? activeProfileId : preferredActiveId,
+    profiles: safeProfiles,
+  }
+}
+
+function normalizeRetryPolicy(input: unknown): RetryPolicyConfig {
+  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
+  const classes = Array.isArray(source.retryableClasses) ? source.retryableClasses : DEFAULT_RETRY_POLICY.retryableClasses
+  const allowed = new Set(['timeout', 'network', 'http4xx', 'http5xx', 'invalid_payload', 'unknown'])
+  const retryableClasses = Array.from(new Set(classes.map(item => String(item || '').trim()).filter(item => allowed.has(item))))
+  return {
+    retryableClasses: (retryableClasses.length > 0 ? retryableClasses : DEFAULT_RETRY_POLICY.retryableClasses) as RetryPolicyConfig['retryableClasses'],
+    maxRetries: Math.max(0, Math.min(5, Number(source.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries))),
+    baseDelayMs: Math.max(150, Math.min(60000, Number(source.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs))),
+    maxDelayMs: Math.max(300, Math.min(120000, Number(source.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs))),
+  }
+}
+
+function normalizeNotificationSettings(input: unknown): NotificationSettings {
+  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
+  const quietHoursStart = /^\d{2}:\d{2}$/.test(String(source.quietHoursStart || ''))
+    ? String(source.quietHoursStart)
+    : DEFAULT_NOTIFICATION_SETTINGS.quietHoursStart
+  const quietHoursEnd = /^\d{2}:\d{2}$/.test(String(source.quietHoursEnd || ''))
+    ? String(source.quietHoursEnd)
+    : DEFAULT_NOTIFICATION_SETTINGS.quietHoursEnd
+  return {
+    enabled: source.enabled !== false,
+    success: source.success === true,
+    failure: source.failure !== false,
+    batchDone: source.batchDone !== false,
+    quietHoursStart,
+    quietHoursEnd,
+  }
+}
+
+function asObject(value: unknown): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, any>
+}
+
+function ensureTemplateProfile(
+  config: TemplateProfilesConfig,
+  profileId: string,
+  folderTemplate: string,
+  fileTemplate: string
+): TemplateProfilesConfig {
+  const next = normalizeTemplateProfiles(config)
+  const targetIndex = next.profiles.findIndex(item => item.id === profileId)
+  const patched = [...next.profiles]
+  const nextProfile: NamingTemplateProfile = {
+    id: profileId,
+    name: targetIndex >= 0 ? patched[targetIndex].name : '当前模板',
+    folderTemplate,
+    fileTemplate,
+  }
+  if (targetIndex >= 0) {
+    patched[targetIndex] = {
+      ...patched[targetIndex],
+      ...nextProfile,
+    }
+  } else {
+    patched.unshift(nextProfile)
+  }
+  return normalizeTemplateProfiles({
+    activeProfileId: profileId,
+    profiles: patched,
+  })
+}
+
+function normalizeAppConfig(input: unknown): AppConfig {
+  const source = asObject(input)
+  const themeCandidate = String(source.theme || 'system')
+  const theme: AppConfig['theme'] =
+    themeCandidate === 'light' || themeCandidate === 'dark' || themeCandidate === 'system'
+      ? themeCandidate
+      : 'system'
+
+  const rawLegacyFolder = String(source.uploadFolderTemplate || '').trim()
+  const rawLegacyFile = String(source.uploadFileTemplate || '').trim()
+  const hasLegacyTemplates = Boolean(rawLegacyFolder || rawLegacyFile)
+  const folderTemplate = rawLegacyFolder || DEFAULT_UPLOAD_FOLDER_TEMPLATE
+  const fileTemplate = rawLegacyFile || DEFAULT_UPLOAD_FILE_TEMPLATE
+
+  const hasTemplateProfiles =
+    source.templateProfiles &&
+    typeof source.templateProfiles === 'object' &&
+    !Array.isArray(source.templateProfiles)
+  let templateProfiles = normalizeTemplateProfiles(source.templateProfiles)
+  if (!hasTemplateProfiles && hasLegacyTemplates) {
+    templateProfiles = ensureTemplateProfile(templateProfiles, 'legacy_current', folderTemplate, fileTemplate)
+  }
+
+  const activeProfile = templateProfiles.profiles.find(item => item.id === templateProfiles.activeProfileId) || null
+  const normalizedFolderTemplate = folderTemplate || activeProfile?.folderTemplate || DEFAULT_UPLOAD_FOLDER_TEMPLATE
+  const normalizedFileTemplate = fileTemplate || activeProfile?.fileTemplate || DEFAULT_UPLOAD_FILE_TEMPLATE
+  if (activeProfile && (
+    activeProfile.folderTemplate !== normalizedFolderTemplate ||
+    activeProfile.fileTemplate !== normalizedFileTemplate
+  )) {
+    templateProfiles = ensureTemplateProfile(
+      templateProfiles,
+      templateProfiles.activeProfileId,
+      normalizedFolderTemplate,
+      normalizedFileTemplate
+    )
+  }
+
+  return {
+    parsers: Array.isArray(source.parsers) ? source.parsers : [],
+    webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
+    theme,
+    uploadFolderTemplate: normalizedFolderTemplate,
+    uploadFileTemplate: normalizedFileTemplate,
+    retryPolicy: normalizeRetryPolicy(source.retryPolicy),
+    notifications: normalizeNotificationSettings(source.notifications),
+    templateProfiles,
+  }
 }
 
 function resolveStorageScope() {
@@ -221,33 +424,80 @@ export class ConfigManager {
 
   // 获取应用配置
   static getAppConfig(): AppConfig {
-    const defaultConfig: AppConfig = {
-      parsers: [],
-      webdavServers: [],
-      theme: 'system'
-    }
-
     try {
       const stored = getScopedStorageItem(this.CONFIG_KEY)
       if (stored) {
-        return { ...defaultConfig, ...JSON.parse(stored) }
+        return normalizeAppConfig(JSON.parse(stored))
       }
     } catch (error) {
       console.error('获取应用配置失败:', error)
     }
 
-    return defaultConfig
+    return normalizeAppConfig({})
   }
 
   // 保存应用配置
   static saveAppConfig(config: AppConfig): void {
     try {
-      setScopedStorageItem(this.CONFIG_KEY, JSON.stringify(config))
+      const normalized = normalizeAppConfig(config)
+      setScopedStorageItem(this.CONFIG_KEY, JSON.stringify(normalized))
     } catch (error) {
       console.error('保存应用配置失败:', error)
     }
 
     scheduleConfigSyncToSupabase()
+  }
+
+  static getTemplateProfilesConfig(): TemplateProfilesConfig {
+    const app = this.getAppConfig()
+    return normalizeTemplateProfiles(app.templateProfiles)
+  }
+
+  static saveTemplateProfilesConfig(templateProfiles: TemplateProfilesConfig): void {
+    const app = this.getAppConfig()
+    const normalizedProfiles = normalizeTemplateProfiles(templateProfiles)
+    const active = normalizedProfiles.profiles.find(item => item.id === normalizedProfiles.activeProfileId) || normalizedProfiles.profiles[0]
+    this.saveAppConfig({
+      ...app,
+      templateProfiles: normalizedProfiles,
+      uploadFolderTemplate: active?.folderTemplate || DEFAULT_UPLOAD_FOLDER_TEMPLATE,
+      uploadFileTemplate: active?.fileTemplate || DEFAULT_UPLOAD_FILE_TEMPLATE,
+    })
+  }
+
+  static resetTemplateProfilesToDefault(): void {
+    this.saveTemplateProfilesConfig(
+      normalizeTemplateProfiles({
+        activeProfileId: DEFAULT_TEMPLATE_PROFILE_ID,
+        profiles: DEFAULT_TEMPLATE_PROFILES,
+      })
+    )
+  }
+
+  static getRetryPolicyConfig(): RetryPolicyConfig {
+    const app = this.getAppConfig()
+    return normalizeRetryPolicy(app.retryPolicy)
+  }
+
+  static saveRetryPolicyConfig(retryPolicy: RetryPolicyConfig): void {
+    const app = this.getAppConfig()
+    this.saveAppConfig({
+      ...app,
+      retryPolicy: normalizeRetryPolicy(retryPolicy),
+    })
+  }
+
+  static getNotificationSettings(): NotificationSettings {
+    const app = this.getAppConfig()
+    return normalizeNotificationSettings(app.notifications)
+  }
+
+  static saveNotificationSettings(notifications: NotificationSettings): void {
+    const app = this.getAppConfig()
+    this.saveAppConfig({
+      ...app,
+      notifications: normalizeNotificationSettings(notifications),
+    })
   }
 
   // 获取解析器配置（合并内置默认配置和用户自定义配置，过滤禁用项）

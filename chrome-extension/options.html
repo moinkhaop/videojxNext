@@ -101,6 +101,74 @@
             <div class="muted">图片为文件夹名，视频自动补扩展名。</div>
           </div>
 
+          <hr />
+
+          <h3 style="margin: 0;">任务通知</h3>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-notify-enabled" type="checkbox" style="width: auto;" />
+            <span>启用系统通知</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-notify-success" type="checkbox" style="width: auto;" />
+            <span>单任务成功时通知</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-notify-failure" type="checkbox" style="width: auto;" />
+            <span>任务失败时通知</span>
+          </label>
+          <label class="row" style="gap: 8px;">
+            <input id="setting-notify-batch-done" type="checkbox" style="width: auto;" />
+            <span>批量完成时通知</span>
+          </label>
+
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">静默开始</label>
+              <input id="setting-notify-quiet-start" type="time" value="23:00" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">静默结束</label>
+              <input id="setting-notify-quiet-end" type="time" value="08:00" />
+            </div>
+          </div>
+
+          <hr />
+
+          <h3 style="margin: 0;">重试策略</h3>
+          <div class="row" style="gap: 12px;">
+            <div class="col" style="flex: 1;">
+              <label class="small">退避基数 (ms)</label>
+              <input id="setting-retry-base-delay-ms" type="number" min="150" max="60000" />
+            </div>
+            <div class="col" style="flex: 1;">
+              <label class="small">最大退避 (ms)</label>
+              <input id="setting-retry-max-delay-ms" type="number" min="300" max="120000" />
+            </div>
+          </div>
+
+          <div class="row wrap">
+            <label class="row" style="gap: 8px;">
+              <input id="setting-retry-class-timeout" type="checkbox" style="width: auto;" />
+              <span>timeout</span>
+            </label>
+            <label class="row" style="gap: 8px;">
+              <input id="setting-retry-class-network" type="checkbox" style="width: auto;" />
+              <span>network</span>
+            </label>
+            <label class="row" style="gap: 8px;">
+              <input id="setting-retry-class-http5xx" type="checkbox" style="width: auto;" />
+              <span>http5xx</span>
+            </label>
+            <label class="row" style="gap: 8px;">
+              <input id="setting-retry-class-http4xx" type="checkbox" style="width: auto;" />
+              <span>http4xx</span>
+            </label>
+            <label class="row" style="gap: 8px;">
+              <input id="setting-retry-class-invalid" type="checkbox" style="width: auto;" />
+              <span>invalid_payload</span>
+            </label>
+          </div>
+
           <label class="row" style="gap: 8px;">
             <input id="setting-auto-sync-history" type="checkbox" style="width: auto;" />
             <span>登录后自动同步历史到云端</span>

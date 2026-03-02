@@ -13,6 +13,43 @@
       historyLimit: 500,
       uploadFolderTemplate: '{author}',
       uploadFileTemplate: '{awemeId}_{title}',
+      notifications: {
+        enabled: true,
+        success: false,
+        failure: true,
+        batchDone: true,
+        quietHoursStart: '23:00',
+        quietHoursEnd: '08:00'
+      },
+      retryPolicy: {
+        retryableClasses: ['timeout', 'network', 'http5xx'],
+        maxRetries: 2,
+        baseDelayMs: 600,
+        maxDelayMs: 12000
+      },
+      templateProfiles: {
+        activeProfileId: 'balanced',
+        profiles: [
+          {
+            id: 'safe',
+            name: '保守模式',
+            folderTemplate: '{author}',
+            fileTemplate: '{title}'
+          },
+          {
+            id: 'balanced',
+            name: '信息丰富',
+            folderTemplate: '{author}',
+            fileTemplate: '{awemeId}_{title}'
+          },
+          {
+            id: 'by_date',
+            name: '按日期归档',
+            folderTemplate: '{date}/{author}',
+            fileTemplate: '{awemeId}_{title}'
+          }
+        ]
+      },
       batchFilters: {
         mediaType: 'all',
         minDurationSec: 0,
@@ -143,7 +180,8 @@
       loggedInAt: 0
     },
     history: [],
-    tasks: {}
+    tasks: {},
+    inbox: []
   };
 
   function clone(obj) {

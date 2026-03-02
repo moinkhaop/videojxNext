@@ -65,7 +65,11 @@
     previewInfo: document.getElementById('preview-info'),
     previewOpenLink: document.getElementById('preview-open-link'),
     queueSummary: document.getElementById('queue-summary'),
-    queueList: document.getElementById('queue-list')
+    queueList: document.getElementById('queue-list'),
+    btnInboxRefresh: document.getElementById('btn-inbox-refresh'),
+    btnInboxRetry: document.getElementById('btn-inbox-retry'),
+    inboxSummary: document.getElementById('inbox-summary'),
+    inboxList: document.getElementById('inbox-list')
   };
 
   let pageState = {
@@ -264,7 +268,7 @@
   }
 
   function setLoading(loading) {
-    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnQueueAdd, el.btnCheckSession, el.btnOpenPreview, el.btnPreviewBack].forEach((button) => {
+    [el.btnSmartUpload, el.btnGetShare, el.btnFillActive, el.btnPasteClipboard, el.btnParse, el.btnUpload, el.btnQueueAdd, el.btnCheckSession, el.btnOpenPreview, el.btnPreviewBack, el.btnInboxRefresh, el.btnInboxRetry].forEach((button) => {
       if (!button) return;
       button.disabled = loading;
     });
@@ -400,6 +404,80 @@
     });
   }
 
+  function inboxBadgeClass(kind) {
+    if (kind === 'failure') return 'badge fail';
+    if (kind === 'batch_done') return 'badge warn';
+    return 'badge success';
+  }
+
+  function inboxBadgeLabel(kind) {
+    if (kind === 'failure') return '失败';
+    if (kind === 'batch_done') return '批量完成';
+    return '成功';
+  }
+
+  function formatInboxTime(value) {
+    const raw = String(value || '');
+    const ts = Date.parse(raw);
+    if (!Number.isFinite(ts)) return raw || '-';
+    return new Date(ts).toLocaleString();
+  }
+
+  function renderInboxItems(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (el.inboxSummary) {
+      const failed = list.filter((item) => String(item && item.kind ? item.kind : '') === 'failure').length;
+      el.inboxSummary.textContent = `最近事件：${list.length}（失败 ${failed}）`;
+    }
+
+    if (!el.inboxList) return;
+    if (list.length === 0) {
+      el.inboxList.innerHTML = '<div class="muted">暂无任务消息</div>';
+      return;
+    }
+
+    el.inboxList.innerHTML = '';
+    list.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'queue-item';
+
+      const head = document.createElement('div');
+      head.className = 'queue-item-head';
+      const title = document.createElement('div');
+      title.className = 'queue-item-title';
+      title.textContent = String(item && item.title ? item.title : '任务消息');
+      const badge = document.createElement('span');
+      badge.className = inboxBadgeClass(String(item && item.kind ? item.kind : ''));
+      badge.textContent = inboxBadgeLabel(String(item && item.kind ? item.kind : ''));
+      head.appendChild(title);
+      head.appendChild(badge);
+
+      const meta = document.createElement('div');
+      meta.className = 'queue-item-meta';
+      meta.textContent = formatInboxTime(item && item.createdAt ? item.createdAt : '');
+
+      const message = document.createElement('div');
+      message.className = 'list-item-meta';
+      message.textContent = String(item && item.message ? item.message : '-');
+
+      row.appendChild(head);
+      row.appendChild(meta);
+      row.appendChild(message);
+      if (String(item && item.kind ? item.kind : '') === 'failure') {
+        const actions = document.createElement('div');
+        actions.className = 'row wrap';
+        actions.style.marginTop = '6px';
+        const btnRetry = document.createElement('button');
+        btnRetry.className = 'secondary small-btn';
+        btnRetry.textContent = '一键重试可恢复失败';
+        btnRetry.addEventListener('click', retryRecoverableInboxTasks);
+        actions.appendChild(btnRetry);
+        row.appendChild(actions);
+      }
+      el.inboxList.appendChild(row);
+    });
+  }
+
   async function refreshQueueTasks(withNotice) {
     const allTasks = await send('TASKS_LIST');
     const queueTasks = (Array.isArray(allTasks) ? allTasks : [])
@@ -415,6 +493,31 @@
     renderQueueTasks(queueTasks);
     if (withNotice) {
       setResult(`任务队列已刷新，共 ${queueTasks.length} 条。`, 'success');
+    }
+  }
+
+  async function refreshInbox(withNotice) {
+    const items = await send('TASKS_INBOX_LIST');
+    renderInboxItems(items);
+    if (withNotice) {
+      setResult(`收件箱已刷新，共 ${Array.isArray(items) ? items.length : 0} 条。`, 'success');
+    }
+  }
+
+  async function retryRecoverableInboxTasks() {
+    setLoading(true);
+    try {
+      const result = await send('TASKS_RETRY_RECOVERABLE');
+      await refreshQueueTasks(false);
+      await refreshInbox(false);
+      const queued = Number(result && result.queued ? result.queued : 0);
+      const relaunched = Number(result && result.relaunched ? result.relaunched : 0);
+      const matched = Number(result && result.matched ? result.matched : 0);
+      setResult(`已处理可恢复失败任务：匹配 ${matched}，入队 ${queued}，重启 ${relaunched}。`, 'success');
+    } catch (error) {
+      setResult(error.message, 'error');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -870,6 +973,14 @@
         refreshQueueTasks(true).catch((error) => setResult(error.message, 'error'));
       });
     }
+    if (el.btnInboxRefresh) {
+      el.btnInboxRefresh.addEventListener('click', () => {
+        refreshInbox(true).catch((error) => setResult(error.message, 'error'));
+      });
+    }
+    if (el.btnInboxRetry) {
+      el.btnInboxRetry.addEventListener('click', retryRecoverableInboxTasks);
+    }
     if (el.btnOpenPreview) el.btnOpenPreview.addEventListener('click', () => switchToView('preview'));
     if (el.btnPreviewBack) el.btnPreviewBack.addEventListener('click', () => switchToView('home'));
 
@@ -887,8 +998,14 @@
     }
 
     chrome.runtime.onMessage.addListener((message) => {
-      if (!message || message.type !== 'TASK_UPDATED') return;
-      refreshQueueTasks(false).catch(() => {});
+      if (!message || !message.type) return;
+      if (message.type === 'TASK_UPDATED') {
+        refreshQueueTasks(false).catch(() => {});
+        return;
+      }
+      if (message.type === 'INBOX_UPDATED') {
+        refreshInbox(false).catch(() => {});
+      }
     });
 
     if (queuePollTimer) {
@@ -896,6 +1013,7 @@
     }
     queuePollTimer = setInterval(() => {
       refreshQueueTasks(false).catch(() => {});
+      refreshInbox(false).catch(() => {});
     }, 3000);
   }
 
@@ -904,6 +1022,7 @@
     await loadState();
     await loadActiveContext();
     await refreshQueueTasks(false);
+    await refreshInbox(false);
     renderShareMeta();
     clearPreview();
     switchToView('home');

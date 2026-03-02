@@ -17,7 +17,9 @@ import {
   Trash2,
   CheckCircle,
   XCircle,
-  ExternalLink
+  ExternalLink,
+  FileSignature,
+  BarChart3
 } from 'lucide-react'
 import { VideoParserConfig, WebDAVConfig } from '@/types'
 import { ConfigManager, DataManager } from '@/lib/storage'
@@ -552,6 +554,20 @@ export default function SettingsPage() {
                   <button className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:border-orange-300 dark:hover:border-orange-700 hover:bg-orange-50/50 dark:hover:bg-orange-950/20 transition-all text-left">
                     <Trash2 className="w-4 h-4 text-orange-600 dark:text-orange-400 flex-shrink-0" />
                     <span className="text-sm font-medium">清理设置</span>
+                  </button>
+                </Link>
+
+                <Link href="/settings/naming">
+                  <button className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:border-cyan-300 dark:hover:border-cyan-700 hover:bg-cyan-50/50 dark:hover:bg-cyan-950/20 transition-all text-left">
+                    <FileSignature className="w-4 h-4 text-cyan-600 dark:text-cyan-400 flex-shrink-0" />
+                    <span className="text-sm font-medium">命名模板工作台</span>
+                  </button>
+                </Link>
+
+                <Link href="/insights">
+                  <button className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:border-fuchsia-300 dark:hover:border-fuchsia-700 hover:bg-fuchsia-50/50 dark:hover:bg-fuchsia-950/20 transition-all text-left">
+                    <BarChart3 className="w-4 h-4 text-fuchsia-600 dark:text-fuchsia-400 flex-shrink-0" />
+                    <span className="text-sm font-medium">效率洞察</span>
                   </button>
                 </Link>
               </div>

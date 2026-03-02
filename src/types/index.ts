@@ -267,11 +267,44 @@ export interface HistoryStats {
   tagUsage: Record<string, number>; // 标签使用统计
 }
 
+export interface RetryPolicyConfig {
+  retryableClasses: ParserErrorClass[];
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  success: boolean;
+  failure: boolean;
+  batchDone: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+}
+
+export interface NamingTemplateProfile {
+  id: string;
+  name: string;
+  folderTemplate: string;
+  fileTemplate: string;
+}
+
+export interface TemplateProfilesConfig {
+  activeProfileId: string;
+  profiles: NamingTemplateProfile[];
+}
+
 // 应用配置类型
 export interface AppConfig {
   parsers: VideoParserConfig[];
   webdavServers: WebDAVConfig[];
   theme: 'light' | 'dark' | 'system';
+  uploadFolderTemplate?: string;
+  uploadFileTemplate?: string;
+  retryPolicy?: RetryPolicyConfig;
+  notifications?: NotificationSettings;
+  templateProfiles?: TemplateProfilesConfig;
 }
 
 // API响应类型

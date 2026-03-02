@@ -13,8 +13,24 @@ function asRecord(value: unknown): Record<string, any> {
 
 function normalizeExtensionConfig(value: unknown) {
   const source = asRecord(value)
+  const settings = asRecord(source.settings)
+  if (!settings.retryPolicy && source.retryPolicy) {
+    settings.retryPolicy = source.retryPolicy
+  }
+  if (!settings.notifications && source.notifications) {
+    settings.notifications = source.notifications
+  }
+  if (!settings.templateProfiles && source.templateProfiles) {
+    settings.templateProfiles = source.templateProfiles
+  }
+  if (!settings.uploadFolderTemplate && source.uploadFolderTemplate) {
+    settings.uploadFolderTemplate = source.uploadFolderTemplate
+  }
+  if (!settings.uploadFileTemplate && source.uploadFileTemplate) {
+    settings.uploadFileTemplate = source.uploadFileTemplate
+  }
   return {
-    settings: asRecord(source.settings),
+    settings,
     parsers: Array.isArray(source.parsers) ? source.parsers : [],
     webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
     defaults: asRecord(source.defaults),

@@ -124,14 +124,110 @@ function normalizeBatchFilters(input) {
   };
 }
 
+const RETRY_CLASSES = ['timeout', 'network', 'http4xx', 'http5xx', 'invalid_payload', 'unknown'];
+const DEFAULT_RETRYABLE_CLASSES = ['timeout', 'network', 'http5xx'];
+
+const DEFAULT_TEMPLATE_PROFILES = [
+  {
+    id: 'safe',
+    name: '保守模式',
+    folderTemplate: '{author}',
+    fileTemplate: '{title}'
+  },
+  {
+    id: 'balanced',
+    name: '信息丰富',
+    folderTemplate: '{author}',
+    fileTemplate: '{awemeId}_{title}'
+  },
+  {
+    id: 'by_date',
+    name: '按日期归档',
+    folderTemplate: '{date}/{author}',
+    fileTemplate: '{awemeId}_{title}'
+  }
+];
+
+function normalizeRetryableClasses(input) {
+  const raw = Array.isArray(input) ? input : [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const key = String(item || '').trim();
+    if (!RETRY_CLASSES.includes(key)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out.length > 0 ? out : [...DEFAULT_RETRYABLE_CLASSES];
+}
+
+function normalizeRetryPolicy(input, fallbackMaxRetries) {
+  const source = input && typeof input === 'object' ? input : {};
+  const maxRetriesFallback = Number.isFinite(Number(fallbackMaxRetries)) ? Number(fallbackMaxRetries) : 2;
+  return {
+    retryableClasses: normalizeRetryableClasses(source.retryableClasses),
+    maxRetries: Math.max(0, Math.min(5, Math.trunc(Number(source.maxRetries ?? maxRetriesFallback)))),
+    baseDelayMs: Math.max(150, Math.min(60000, Math.trunc(Number(source.baseDelayMs ?? 600)))),
+    maxDelayMs: Math.max(300, Math.min(120000, Math.trunc(Number(source.maxDelayMs ?? 12000))))
+  };
+}
+
+function normalizeClockText(value, fallback) {
+  const text = String(value || '').trim();
+  return /^\d{2}:\d{2}$/.test(text) ? text : fallback;
+}
+
+function normalizeNotificationSettings(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  return {
+    enabled: source.enabled !== false,
+    success: source.success === true,
+    failure: source.failure !== false,
+    batchDone: source.batchDone !== false,
+    quietHoursStart: normalizeClockText(source.quietHoursStart, '23:00'),
+    quietHoursEnd: normalizeClockText(source.quietHoursEnd, '08:00')
+  };
+}
+
+function normalizeTemplateProfiles(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  const profiles = Array.isArray(source.profiles) ? source.profiles : DEFAULT_TEMPLATE_PROFILES;
+  const normalized = [];
+  const seen = new Set();
+  for (const profile of profiles) {
+    const id = String(profile && profile.id ? profile.id : '').trim() || createId('profile');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      name: String(profile && profile.name ? profile.name : '未命名模板').trim() || '未命名模板',
+      folderTemplate: String(profile && profile.folderTemplate ? profile.folderTemplate : '{author}').trim() || '{author}',
+      fileTemplate: String(profile && profile.fileTemplate ? profile.fileTemplate : '{awemeId}_{title}').trim() || '{awemeId}_{title}'
+    });
+  }
+  const safeProfiles = normalized.length > 0 ? normalized : clone(DEFAULT_TEMPLATE_PROFILES);
+  const activeProfileId = String(source.activeProfileId || '').trim();
+  const hasActive = safeProfiles.some((item) => item.id === activeProfileId);
+  return {
+    activeProfileId: hasActive ? activeProfileId : safeProfiles[0].id,
+    profiles: safeProfiles
+  };
+}
+
 function normalizeTaskSettings(settings) {
   const source = settings && typeof settings === 'object' ? settings : {};
+  const legacyMaxRetries = Math.max(0, Math.min(5, Math.trunc(Number(source.batchRetryCount || 2))));
+  const retryPolicy = normalizeRetryPolicy(source.retryPolicy, legacyMaxRetries);
   return {
     batchConcurrency: Math.max(1, Math.min(5, Number(source.batchConcurrency || 2))),
     adaptiveConcurrency: source.adaptiveConcurrency !== false,
     autoResumeTasks: source.autoResumeTasks !== false,
     dedupeWithCloud: source.dedupeWithCloud !== false,
-    batchRetryCount: Math.max(0, Math.min(5, Math.trunc(Number(source.batchRetryCount || 2)))),
+    batchRetryCount: retryPolicy.maxRetries,
+    retryPolicy,
+    notifications: normalizeNotificationSettings(source.notifications),
+    templateProfiles: normalizeTemplateProfiles(source.templateProfiles),
     uploadFolderTemplate: String(source.uploadFolderTemplate || '{author}').trim() || '{author}',
     uploadFileTemplate: String(source.uploadFileTemplate || '{awemeId}_{title}').trim() || '{awemeId}_{title}',
     batchFilters: normalizeBatchFilters(source.batchFilters)
@@ -299,21 +395,79 @@ function evaluateBatchFilter(parsedInfo, filters, source) {
   return { matched: true, reason: '' };
 }
 
-function isRetryableError(error) {
+function classifyFailure(input) {
+  const status = Number(input && input.status);
+  if (Number.isFinite(status) && status >= 400 && status < 500) {
+    return 'http4xx';
+  }
+  if (Number.isFinite(status) && status >= 500) {
+    return 'http5xx';
+  }
+
+  const raw = [
+    input && typeof input.message === 'string' ? input.message : '',
+    input && input.error instanceof Error ? input.error.message : '',
+    input && typeof input.error === 'string' ? input.error : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (!raw) return 'unknown';
+  if (/(abort|aborted|timeout|timed out|超时|中止)/i.test(raw)) return 'timeout';
+  if (/(network|fetch failed|failed to fetch|econn|enotfound|dns|socket|连接失败|不可达)/i.test(raw)) return 'network';
+  if (/(payload|non-json|json|empty response|无法解析|invalid|格式)/i.test(raw)) return 'invalid_payload';
+  if (/\bhttp[\s:/-]*([45]\d{2})\b|\bstatus[\s:=]*([45]\d{2})\b|[\(（]([45]\d{2})[\)）]/i.test(raw)) {
+    const matched = raw.match(/\bhttp[\s:/-]*([45]\d{2})\b|\bstatus[\s:=]*([45]\d{2})\b|[\(（]([45]\d{2})[\)）]/i);
+    const code = Number(matched && (matched[1] || matched[2] || matched[3]));
+    if (Number.isFinite(code) && code >= 400 && code < 500) return 'http4xx';
+    if (Number.isFinite(code) && code >= 500) return 'http5xx';
+  }
+  return 'unknown';
+}
+
+function isRetryableClass(errorClass, retryPolicy) {
+  const policy = normalizeRetryPolicy(retryPolicy, 2);
+  return policy.retryableClasses.includes(String(errorClass || 'unknown'));
+}
+
+function clockTextToMinutes(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(text)) return null;
+  const [hh, mm] = text.split(':').map((item) => Number(item));
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+function isInQuietHours(notificationSettings, nowDate) {
+  const settings = normalizeNotificationSettings(notificationSettings);
+  const start = clockTextToMinutes(settings.quietHoursStart);
+  const end = clockTextToMinutes(settings.quietHoursEnd);
+  if (start == null || end == null || start === end) return false;
+  const now = nowDate instanceof Date ? nowDate : new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  if (start < end) {
+    return minutes >= start && minutes < end;
+  }
+  return minutes >= start || minutes < end;
+}
+
+function isRetryableError(error, retryPolicy) {
   const message = toErrorMessage(error).toLowerCase();
   if (!message) return false;
   if (/请选择|缺少|无效|未找到|不能为空|参数/.test(message)) {
     return false;
   }
-  if (/timeout|timed out|network|fetch|http 5|请求失败|上传失败|解析失败|连接|socket|econn|reset|abort|rate/i.test(message)) {
-    return true;
-  }
-  return true;
+  const errorClass = classifyFailure({ error, message });
+  return isRetryableClass(errorClass, retryPolicy);
 }
 
 async function withRetry(task, options) {
-  const maxRetries = Math.max(0, Math.min(5, Number(options && options.maxRetries ? options.maxRetries : 0)));
-  const baseDelayMs = Math.max(150, Number(options && options.baseDelayMs ? options.baseDelayMs : 600));
+  const policy = normalizeRetryPolicy(options && options.retryPolicy, options && options.maxRetries);
+  const maxRetries = Math.max(0, Math.min(5, Number(options && options.maxRetries != null ? options.maxRetries : policy.maxRetries)));
+  const baseDelayMs = Math.max(150, Number(options && options.baseDelayMs ? options.baseDelayMs : policy.baseDelayMs));
+  const maxDelayMs = Math.max(baseDelayMs, Number(options && options.maxDelayMs ? options.maxDelayMs : policy.maxDelayMs));
   let attempt = 0;
   let lastError = null;
   while (attempt <= maxRetries) {
@@ -321,13 +475,31 @@ async function withRetry(task, options) {
       return await task(attempt);
     } catch (error) {
       lastError = error;
-      if (attempt >= maxRetries || !isRetryableError(error)) {
+      const errorClass = classifyFailure({ error, message: toErrorMessage(error) });
+      const canRetry = isRetryableError(error, policy);
+      if (attempt >= maxRetries || !canRetry) {
+        if (options && typeof options.onFailure === 'function') {
+          try {
+            options.onFailure({
+              attempt: attempt + 1,
+              error,
+              errorClass,
+              message: toErrorMessage(error)
+            });
+          } catch (callbackError) {}
+        }
         break;
       }
-      const delay = Math.min(12000, Math.round(baseDelayMs * Math.pow(2, attempt)));
+      const delay = Math.min(maxDelayMs, Math.round(baseDelayMs * Math.pow(2, attempt)));
       if (options && typeof options.onRetry === 'function') {
         try {
-          options.onRetry({ attempt: attempt + 1, delay, error });
+          options.onRetry({
+            attempt: attempt + 1,
+            delay,
+            error,
+            errorClass,
+            message: toErrorMessage(error)
+          });
         } catch (callbackError) {}
       }
       await sleep(delay);
@@ -651,6 +823,13 @@ async function ensureInitialized() {
       state.tasks = {};
     }
 
+    if (!Array.isArray(state.inbox)) {
+      state.inbox = [];
+    }
+    if (state.inbox.length > 200) {
+      state.inbox = state.inbox.slice(0, 200);
+    }
+
     if (!state.auth || typeof state.auth !== 'object') {
       state.auth = clone(DEFAULT_STATE.auth);
     }
@@ -672,6 +851,9 @@ async function ensureInitialized() {
     state.settings.autoResumeTasks = normalizedTaskSettings.autoResumeTasks;
     state.settings.dedupeWithCloud = normalizedTaskSettings.dedupeWithCloud;
     state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
+    state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
+    state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+    state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
     state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
     state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
     state.settings.historyLimit = Math.max(100, Math.min(1000, Number(state.settings.historyLimit || 500)));
@@ -921,6 +1103,9 @@ function pickExtensionConfigSnapshot(state) {
       autoResumeTasks: normalizedTaskSettings.autoResumeTasks,
       dedupeWithCloud: normalizedTaskSettings.dedupeWithCloud,
       batchRetryCount: normalizedTaskSettings.batchRetryCount,
+      retryPolicy: normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount),
+      notifications: normalizeNotificationSettings(normalizedTaskSettings.notifications),
+      templateProfiles: normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles),
       historyLimit: Math.max(100, Math.min(1000, Number(state?.settings?.historyLimit || 500))),
       uploadFolderTemplate: normalizedTaskSettings.uploadFolderTemplate,
       uploadFileTemplate: normalizedTaskSettings.uploadFileTemplate,
@@ -964,6 +1149,9 @@ async function applyCloudConfig(config, updatedAt) {
       state.settings.autoResumeTasks = normalizedTaskSettings.autoResumeTasks;
       state.settings.dedupeWithCloud = normalizedTaskSettings.dedupeWithCloud;
       state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
+      state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
+      state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+      state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
       state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
       state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
       state.settings.batchFilters = normalizeBatchFilters(normalizedTaskSettings.batchFilters);
@@ -1102,15 +1290,30 @@ async function syncConfigAuto() {
 
 async function createHistoryRecord(input) {
   const now = new Date().toISOString();
+  const detail = input && input.detail && typeof input.detail === 'object'
+    ? clone(input.detail)
+    : {};
+  const status = String(input && input.status ? input.status : 'success');
+  if (!Array.isArray(detail.retryTrace)) {
+    detail.retryTrace = [];
+  }
+  if (status === 'failed' && !detail.failureClass) {
+    detail.failureClass = classifyFailure({
+      message: detail.error || (input && input.error) || '',
+      status: detail.status
+    });
+  }
+  detail.notified = Boolean(detail.notified);
+
   const record = {
     id: input.id || createId('history'),
     type: input.type || 'single',
     createdAt: input.createdAt || now,
     updatedAt: now,
     title: input.title || '未命名任务',
-    status: input.status || 'success',
+    status,
     source: input.source || 'extension',
-    detail: input.detail || {},
+    detail,
     cloudSynced: false,
     cloudError: ''
   };
@@ -1178,6 +1381,11 @@ async function saveHistoryRecord(record, options) {
         });
       });
     }
+  }
+
+  try {
+    await dispatchHistoryInboxEvent(resultRecord);
+  } catch (error) {
   }
 
   return resultRecord;
@@ -1559,41 +1767,86 @@ async function directUpload(payload) {
   }
 
   const uploadSourceUrl = metaLong || metaShort || inputUrl || '';
-  const naming = buildUploadNaming(normalizedTaskSettings, parsed, {
-    sourceUrl: uploadSourceUrl,
-    awemeId: metaAwemeId || awemeId
-  });
-  const filePath = await uploadParsedMedia(parsed, selected.webdav, naming.folderPath, uploadSourceUrl, {
-    fileName: naming.fileName
-  });
+  const retryTrace = [];
+  try {
+    const naming = buildUploadNaming(normalizedTaskSettings, parsed, {
+      sourceUrl: uploadSourceUrl,
+      awemeId: metaAwemeId || awemeId
+    });
+    const filePath = await withRetry(
+      async () => uploadParsedMedia(parsed, selected.webdav, naming.folderPath, uploadSourceUrl, {
+        fileName: naming.fileName
+      }),
+      {
+        retryPolicy: normalizedTaskSettings.retryPolicy,
+        onRetry(info) {
+          retryTrace.push({
+            at: new Date().toISOString(),
+            class: info.errorClass || 'unknown',
+            message: info.message || toErrorMessage(info.error),
+            attempt: info.attempt
+          });
+        }
+      }
+    );
 
-  const history = await createHistoryRecord({
-    type: 'single',
-    title: parsed.title || '单视频上传',
-    status: 'success',
-    detail: {
-      inputUrl,
-      shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
-      videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
-      awemeId: metaAwemeId || awemeId,
-      pageUrl: metaPageUrl,
-      linkSource: metaSource,
-      mediaType: parsed.mediaType,
-      parserName: parsedByPage ? '抖音页面API' : finalParserName,
-      pageApiError: parsedByPage ? '' : (fallbackUsed ? pageApiError : ''),
-      webdavName: selected.webdav.name,
+    const history = await createHistoryRecord({
+      type: 'single',
+      title: parsed.title || '单视频上传',
+      status: 'success',
+      detail: {
+        inputUrl,
+        shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
+        videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
+        awemeId: metaAwemeId || awemeId,
+        pageUrl: metaPageUrl,
+        linkSource: metaSource,
+        mediaType: parsed.mediaType,
+        parserName: parsedByPage ? '抖音页面API' : finalParserName,
+        pageApiError: parsedByPage ? '' : (fallbackUsed ? pageApiError : ''),
+        webdavName: selected.webdav.name,
+        filePath,
+        author: parsed.author || '',
+        retryCount: retryTrace.length,
+        retryTrace
+      }
+    });
+
+    await saveHistoryRecord(history);
+
+    return {
+      parsed,
       filePath,
-      author: parsed.author || ''
-    }
-  });
-
-  await saveHistoryRecord(history);
-
-  return {
-    parsed,
-    filePath,
-    history
-  };
+      history
+    };
+  } catch (error) {
+    const errorMessage = toErrorMessage(error);
+    const failureClass = classifyFailure({ error, message: errorMessage });
+    const failedHistory = await createHistoryRecord({
+      type: 'single',
+      title: parsed && parsed.title ? parsed.title : '单视频上传',
+      status: 'failed',
+      detail: {
+        inputUrl,
+        shareShortUrl: metaShort || (/v\.douyin\.com/i.test(inputUrl) ? inputUrl : ''),
+        videoLongUrl: metaLong || (/\/video\//i.test(inputUrl) ? inputUrl : ''),
+        awemeId: metaAwemeId || awemeId,
+        pageUrl: metaPageUrl,
+        linkSource: metaSource,
+        mediaType: parsed && parsed.mediaType ? parsed.mediaType : 'video',
+        parserName: parsedByPage ? '抖音页面API' : finalParserName,
+        pageApiError: parsedByPage ? '' : (fallbackUsed ? pageApiError : ''),
+        webdavName: selected.webdav.name,
+        author: parsed && parsed.author ? parsed.author : '',
+        error: errorMessage,
+        failureClass,
+        retryCount: retryTrace.length,
+        retryTrace
+      }
+    });
+    await saveHistoryRecord(failedHistory);
+    throw error;
+  }
 }
 
 async function parseActiveTabContext() {
@@ -1776,7 +2029,9 @@ async function triggerCopyShareLinkOnActiveTab() {
 }
 
 async function updateTask(taskId, patch) {
+  let previousTask = null;
   const nextState = await mutateState((state) => {
+    previousTask = state.tasks[taskId] ? clone(state.tasks[taskId]) : null;
     if (!state.tasks[taskId]) {
       state.tasks[taskId] = {
         id: taskId,
@@ -1784,11 +2039,15 @@ async function updateTask(taskId, patch) {
       };
     }
 
-    state.tasks[taskId] = {
+    const nextTask = {
       ...state.tasks[taskId],
       ...patch,
       updatedAt: new Date().toISOString()
     };
+    if (String(nextTask.status || '') === 'failed' && !nextTask.failureClass) {
+      nextTask.failureClass = classifyFailure({ message: nextTask.error || '' });
+    }
+    state.tasks[taskId] = nextTask;
   });
 
   const task = nextState.tasks[taskId];
@@ -1799,6 +2058,8 @@ async function updateTask(taskId, patch) {
     });
   } catch (error) {
   }
+
+  void dispatchTaskInboxEvent(task, previousTask);
 
   return task;
 }
@@ -1820,6 +2081,208 @@ function appendTaskLog(logs, message) {
   if (logs.length > 40) {
     logs.length = 40;
   }
+}
+
+function pickNotificationSwitch(settings, kind) {
+  const normalized = normalizeNotificationSettings(settings);
+  if (!normalized.enabled) return false;
+  if (kind === 'success') return normalized.success === true;
+  if (kind === 'failure') return normalized.failure !== false;
+  if (kind === 'batch_done') return normalized.batchDone !== false;
+  return false;
+}
+
+function formatInboxMessage(record, kind) {
+  const detail = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+  if (kind === 'failure') {
+    return String(detail.error || record.error || '任务执行失败');
+  }
+  if (kind === 'batch_done') {
+    const success = Number(detail.success || 0);
+    const failed = Number(detail.failed || 0);
+    const skipped = Number(detail.skipped || 0);
+    const total = Number(detail.total || 0);
+    return `批量任务完成：成功 ${success} / 失败 ${failed} / 跳过 ${skipped} / 总计 ${total}`;
+  }
+  return String(detail.filePath || detail.sourceUrl || '任务执行成功');
+}
+
+function buildInboxItemFromHistory(record, kind) {
+  const detail = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+  const createdAt = String(record && record.createdAt ? record.createdAt : new Date().toISOString());
+  return {
+    id: createId('inbox'),
+    key: `history:${record.id}:${record.status}`,
+    kind,
+    title: String(record && record.title ? record.title : '未命名任务'),
+    message: formatInboxMessage(record, kind),
+    status: String(record && record.status ? record.status : ''),
+    historyId: String(record && record.id ? record.id : ''),
+    taskId: String(detail.taskId || detail.batchTaskId || detail.queueTaskId || ''),
+    createdAt
+  };
+}
+
+function buildInboxItemFromTask(task, kind) {
+  const createdAt = String(task && (task.updatedAt || task.finishedAt || task.createdAt) ? (task.updatedAt || task.finishedAt || task.createdAt) : new Date().toISOString());
+  return {
+    id: createId('inbox'),
+    key: `task:${task.id}:${task.status}`,
+    kind,
+    title: String(task && task.title ? task.title : '任务通知'),
+    message: kind === 'failure'
+      ? String(task && task.error ? task.error : '任务失败')
+      : `任务状态更新：${String(task && task.status ? task.status : '')}`,
+    status: String(task && task.status ? task.status : ''),
+    historyId: '',
+    taskId: String(task && task.id ? task.id : ''),
+    createdAt
+  };
+}
+
+async function listInboxItems() {
+  const state = await readState();
+  const list = Array.isArray(state.inbox) ? state.inbox : [];
+  return list
+    .slice()
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, 20);
+}
+
+async function pushInboxItem(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  let created = null;
+  await mutateState((state) => {
+    if (!Array.isArray(state.inbox)) {
+      state.inbox = [];
+    }
+    const key = String(item.key || '');
+    if (key && state.inbox.some((entry) => String(entry && entry.key ? entry.key : '') === key)) {
+      return;
+    }
+    const normalized = {
+      ...item,
+      id: String(item.id || createId('inbox')),
+      createdAt: String(item.createdAt || new Date().toISOString())
+    };
+    state.inbox.unshift(normalized);
+    state.inbox = state.inbox.slice(0, 200);
+    created = normalized;
+  });
+
+  if (created) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'INBOX_UPDATED',
+        payload: created
+      });
+    } catch (error) {}
+  }
+
+  return created;
+}
+
+async function showSystemNotification(item, settings) {
+  const kind = String(item && item.kind ? item.kind : '');
+  if (!pickNotificationSwitch(settings, kind)) {
+    return false;
+  }
+  if (isInQuietHours(settings, new Date())) {
+    return false;
+  }
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') {
+    return false;
+  }
+
+  const iconUrl = 'icons/icon128.png';
+  const titlePrefix = kind === 'failure'
+    ? '任务失败'
+    : (kind === 'batch_done' ? '批量完成' : '任务成功');
+  const title = `${titlePrefix} · VideoJX`;
+  const message = String(item && item.message ? item.message : '').slice(0, 300) || '任务状态已更新';
+  const notificationId = `videojx_${String(item && item.id ? item.id : createId('notice')).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+
+  return new Promise((resolve) => {
+    try {
+      chrome.notifications.create(notificationId, {
+        type: 'basic',
+        iconUrl,
+        title,
+        message
+      }, () => {
+        const err = chrome.runtime.lastError;
+        resolve(!err);
+      });
+    } catch (error) {
+      resolve(false);
+    }
+  });
+}
+
+async function dispatchHistoryInboxEvent(record) {
+  const status = String(record && record.status ? record.status : '');
+  let kind = '';
+  if (status === 'failed') {
+    kind = 'failure';
+  } else if (status === 'partial' || (status === 'success' && String(record && record.type ? record.type : '') === 'batch')) {
+    kind = 'batch_done';
+  } else if (status === 'success') {
+    kind = 'success';
+  }
+  if (!kind) return false;
+
+  const item = buildInboxItemFromHistory(record, kind);
+  const created = await pushInboxItem(item);
+  if (!created) {
+    return false;
+  }
+
+  const state = await readState();
+  const taskSettings = normalizeTaskSettings(state.settings);
+  const notified = await showSystemNotification(created, taskSettings.notifications);
+
+  await mutateState((next) => {
+    next.history = (next.history || []).map((entry) => {
+      if (!entry || entry.id !== record.id) return entry;
+      const detail = entry.detail && typeof entry.detail === 'object' ? entry.detail : {};
+      return {
+        ...entry,
+        detail: {
+          ...detail,
+          notified
+        }
+      };
+    });
+  });
+
+  return notified;
+}
+
+async function dispatchTaskInboxEvent(task, previousTask) {
+  const prevStatus = String(previousTask && previousTask.status ? previousTask.status : '');
+  const nextStatus = String(task && task.status ? task.status : '');
+  if (!nextStatus || nextStatus === prevStatus) {
+    return;
+  }
+
+  let kind = '';
+  if (nextStatus === 'failed') {
+    kind = 'failure';
+  }
+  if (!kind) {
+    return;
+  }
+
+  const item = buildInboxItemFromTask(task, kind);
+  const created = await pushInboxItem(item);
+  if (!created) return;
+
+  const state = await readState();
+  const taskSettings = normalizeTaskSettings(state.settings);
+  await showSystemNotification(created, taskSettings.notifications);
 }
 
 function normalizeBatchLimit(value, fallback) {
@@ -1937,6 +2400,7 @@ async function processParsedVideosForTask(params) {
             appendTaskLog(logs, `⏭️ ${title} - ${filterCheck.reason}`);
           } else {
             let retryCount = 0;
+            const retryTrace = [];
             try {
               const naming = buildUploadNaming(taskSettings, parsedLike, {
                 sourceUrl,
@@ -1951,9 +2415,15 @@ async function processParsedVideosForTask(params) {
                   fileName: naming.fileName
                 }),
                 {
-                  maxRetries: taskSettings.batchRetryCount,
+                  retryPolicy: taskSettings.retryPolicy,
                   onRetry(info) {
                     retryCount = info.attempt;
+                    retryTrace.push({
+                      at: new Date().toISOString(),
+                      class: info.errorClass || 'unknown',
+                      message: info.message || toErrorMessage(info.error),
+                      attempt: info.attempt
+                    });
                     appendTaskLog(logs, `🔁 ${title} - 第 ${info.attempt} 次重试（${Math.round(info.delay / 1000)}s 后）`);
                   }
                 }
@@ -1971,6 +2441,7 @@ async function processParsedVideosForTask(params) {
                   sourceUrl: sourceUrl || userUrl,
                   awemeId,
                   retryCount,
+                  retryTrace,
                   batchTaskId: taskId
                 }
               });
@@ -1984,6 +2455,7 @@ async function processParsedVideosForTask(params) {
               appendTaskLog(logs, `✅ ${title}${retryCount > 0 ? `（重试 ${retryCount} 次）` : ''}`);
             } catch (error) {
               const errorMessage = toErrorMessage(error);
+              const failureClass = classifyFailure({ error, message: errorMessage });
               counters.failed += 1;
               counters.processed += 1;
               appendTaskLog(logs, `❌ ${title} - ${errorMessage}`);
@@ -1999,7 +2471,9 @@ async function processParsedVideosForTask(params) {
                   sourceUrl: sourceUrl || userUrl,
                   awemeId,
                   retryCount,
+                  retryTrace,
                   error: errorMessage,
+                  failureClass,
                   batchTaskId: taskId
                 }
               });
@@ -2077,6 +2551,7 @@ async function processAwemeIdsForTask(params) {
           appendTaskLog(logs, `⏭️ ${titleFallback} - 跳过（已上传 awemeId=${awemeId}）`);
         } else {
           let retryCount = 0;
+          const retryTrace = [];
           try {
             const parsed = await withRetry(
               async () => {
@@ -2087,9 +2562,15 @@ async function processAwemeIdsForTask(params) {
                 return result;
               },
               {
-                maxRetries: taskSettings.batchRetryCount,
+                retryPolicy: taskSettings.retryPolicy,
                 onRetry(info) {
                   retryCount = info.attempt;
+                  retryTrace.push({
+                    at: new Date().toISOString(),
+                    class: info.errorClass || 'unknown',
+                    message: info.message || toErrorMessage(info.error),
+                    attempt: info.attempt
+                  });
                   appendTaskLog(logs, `🔁 ${titleFallback} - 页面解析重试 ${info.attempt} 次`);
                 }
               }
@@ -2119,9 +2600,15 @@ async function processAwemeIdsForTask(params) {
                   fileName: naming.fileName
                 }),
                 {
-                  maxRetries: taskSettings.batchRetryCount,
+                  retryPolicy: taskSettings.retryPolicy,
                   onRetry(info) {
                     retryCount = Math.max(retryCount, info.attempt);
+                    retryTrace.push({
+                      at: new Date().toISOString(),
+                      class: info.errorClass || 'unknown',
+                      message: info.message || toErrorMessage(info.error),
+                      attempt: info.attempt
+                    });
                     appendTaskLog(logs, `🔁 ${parsed.title || titleFallback} - 上传重试 ${info.attempt} 次`);
                   }
                 }
@@ -2139,6 +2626,7 @@ async function processAwemeIdsForTask(params) {
                   sourceUrl,
                   awemeId,
                   retryCount,
+                  retryTrace,
                   batchTaskId: taskId
                 }
               });
@@ -2153,6 +2641,7 @@ async function processAwemeIdsForTask(params) {
             }
           } catch (error) {
             const errorMessage = toErrorMessage(error);
+            const failureClass = classifyFailure({ error, message: errorMessage });
             counters.failed += 1;
             counters.processed += 1;
             appendTaskLog(logs, `❌ ${titleFallback} - ${errorMessage}`);
@@ -2168,7 +2657,9 @@ async function processAwemeIdsForTask(params) {
                 sourceUrl,
                 awemeId,
                 retryCount,
+                retryTrace,
                 error: errorMessage,
+                failureClass,
                 batchTaskId: taskId
               }
             });
@@ -2255,14 +2746,36 @@ async function runQueuedSingleUpload(taskId, payload) {
   const metaAwemeId = meta && meta.awemeId ? String(meta.awemeId || '').trim() : '';
   const awemeId = metaAwemeId || extractAwemeIdFromUrl(inputUrl) || extractAwemeIdFromUrl(metaLong) || extractAwemeIdFromUrl(metaShort);
   const uploadSourceUrl = metaLong || metaShort || inputUrl || '';
+  const retryTrace = [];
 
   const naming = buildUploadNaming(taskSettings, preparedParsed, {
     sourceUrl: uploadSourceUrl,
     awemeId
   });
-  const filePath = await uploadParsedMedia(preparedParsed, selected.webdav, naming.folderPath, uploadSourceUrl, {
-    fileName: naming.fileName
-  });
+  let filePath = '';
+  try {
+    filePath = await withRetry(
+      async () => uploadParsedMedia(preparedParsed, selected.webdav, naming.folderPath, uploadSourceUrl, {
+        fileName: naming.fileName
+      }),
+      {
+        retryPolicy: taskSettings.retryPolicy,
+        onRetry(info) {
+          retryTrace.push({
+            at: new Date().toISOString(),
+            class: info.errorClass || 'unknown',
+            message: info.message || toErrorMessage(info.error),
+            attempt: info.attempt
+          });
+        }
+      }
+    );
+  } catch (error) {
+    try {
+      error.retryTrace = retryTrace.slice();
+    } catch (attachError) {}
+    throw error;
+  }
 
   const history = await createHistoryRecord({
     type: 'single',
@@ -2279,7 +2792,9 @@ async function runQueuedSingleUpload(taskId, payload) {
       sourceUrl: uploadSourceUrl,
       queueTaskId: taskId,
       mediaType: preparedParsed.mediaType || 'video',
-      author: preparedParsed.author || ''
+      author: preparedParsed.author || '',
+      retryCount: retryTrace.length,
+      retryTrace
     }
   });
 
@@ -2292,11 +2807,13 @@ async function runQueuedSingleUpload(taskId, payload) {
   };
 }
 
-async function appendFailedQueueHistory(taskId, payload, errorMessage) {
+async function appendFailedQueueHistory(taskId, payload, errorMessage, retryTrace) {
   const data = payload && typeof payload === 'object' ? payload : {};
   const parsed = data.parsed && typeof data.parsed === 'object' ? data.parsed : null;
   const title = parsed && parsed.title ? String(parsed.title) : '队列上传';
   const sourceUrl = extractFirstUrl(data.videoUrl || '');
+  const traces = Array.isArray(retryTrace) ? retryTrace : [];
+  const failureClass = classifyFailure({ message: errorMessage });
 
   const failRecord = await createHistoryRecord({
     type: 'single',
@@ -2308,6 +2825,9 @@ async function appendFailedQueueHistory(taskId, payload, errorMessage) {
       parserName: String(data.parserName || ''),
       awemeId: String(data && data.meta && data.meta.awemeId ? data.meta.awemeId : ''),
       error: errorMessage,
+      failureClass,
+      retryCount: traces.length,
+      retryTrace: traces,
       queueTaskId: taskId
     }
   });
@@ -2351,11 +2871,13 @@ async function pumpSingleUploadQueue() {
         });
       } catch (error) {
         const message = toErrorMessage(error);
-        await appendFailedQueueHistory(taskId, nextTask.payload || {}, message).catch(() => {});
+        const failureClass = classifyFailure({ error, message });
+        await appendFailedQueueHistory(taskId, nextTask.payload || {}, message, error && Array.isArray(error.retryTrace) ? error.retryTrace : []).catch(() => {});
         await updateTask(taskId, {
           status: 'failed',
           progress: 100,
           error: message,
+          failureClass,
           finishedAt: new Date().toISOString(),
           logs: [`任务失败：${message}`]
         });
@@ -2521,10 +3043,12 @@ async function runUserBatchUpload(taskId, payload) {
       finishedAt: new Date().toISOString()
     });
   } catch (error) {
+    const message = toErrorMessage(error);
     await updateTask(taskId, {
       status: 'failed',
       progress: 100,
-      error: toErrorMessage(error),
+      error: message,
+      failureClass: classifyFailure({ error, message }),
       finishedAt: new Date().toISOString()
     });
   }
@@ -2773,10 +3297,12 @@ async function runUserPageBatchUpload(taskId, payload) {
       finishedAt: new Date().toISOString()
     });
   } catch (error) {
+    const message = toErrorMessage(error);
     await updateTask(taskId, {
       status: 'failed',
       progress: 100,
-      error: toErrorMessage(error),
+      error: message,
+      failureClass: classifyFailure({ error, message }),
       finishedAt: new Date().toISOString()
     });
   }
@@ -2867,7 +3393,8 @@ async function getPublicState() {
       expiresAt: state.auth ? state.auth.expiresAt : 0
     },
     historyCount: (state.history || []).length,
-    taskCount: Object.keys(state.tasks || {}).length
+    taskCount: Object.keys(state.tasks || {}).length,
+    inboxCount: Array.isArray(state.inbox) ? state.inbox.length : 0
   };
 }
 
@@ -2888,6 +3415,9 @@ async function saveConfiguration(payload) {
       state.settings.autoResumeTasks = normalizedTaskSettings.autoResumeTasks;
       state.settings.dedupeWithCloud = normalizedTaskSettings.dedupeWithCloud;
       state.settings.batchRetryCount = normalizedTaskSettings.batchRetryCount;
+      state.settings.retryPolicy = normalizeRetryPolicy(normalizedTaskSettings.retryPolicy, normalizedTaskSettings.batchRetryCount);
+      state.settings.notifications = normalizeNotificationSettings(normalizedTaskSettings.notifications);
+      state.settings.templateProfiles = normalizeTemplateProfiles(normalizedTaskSettings.templateProfiles);
       state.settings.uploadFolderTemplate = normalizedTaskSettings.uploadFolderTemplate;
       state.settings.uploadFileTemplate = normalizedTaskSettings.uploadFileTemplate;
       state.settings.batchFilters = normalizeBatchFilters(normalizedTaskSettings.batchFilters);
@@ -2981,6 +3511,127 @@ async function listTasks() {
     return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
   });
   return tasks;
+}
+
+function isRecoverableTaskFailure(task, retryPolicy) {
+  if (!task || typeof task !== 'object') return false;
+  if (String(task.status || '') !== 'failed') return false;
+  const failureClass = String(task.failureClass || classifyFailure({ message: task.error || '' }));
+  return isRetryableClass(failureClass, retryPolicy);
+}
+
+async function retryRecoverableTasks() {
+  const state = await readState();
+  const taskSettings = normalizeTaskSettings(state.settings);
+  const retryPolicy = taskSettings.retryPolicy;
+  const tasks = Object.values(state.tasks || {});
+  const recoverable = tasks.filter((task) => isRecoverableTaskFailure(task, retryPolicy));
+
+  let queued = 0;
+  let relaunched = 0;
+
+  for (const task of recoverable) {
+    const taskId = String(task.id || '');
+    const payload = task && task.payload && typeof task.payload === 'object' ? task.payload : null;
+    if (!taskId || !payload) continue;
+    const type = String(task.type || '');
+
+    if (type === 'single_queue_upload') {
+      queued += 1;
+      await updateTask(taskId, {
+        status: 'queued',
+        progress: 0,
+        error: '',
+        failureClass: '',
+        logs: ['可恢复失败任务已重新入队，等待后台执行']
+      });
+      continue;
+    }
+
+    if (type === 'user_batch_upload') {
+      relaunched += 1;
+      await updateTask(taskId, {
+        status: 'pending',
+        progress: 0,
+        error: '',
+        failureClass: '',
+        logs: ['可恢复失败任务已重新启动']
+      });
+      launchTaskRunner(taskId, async () => {
+        await runUserBatchUpload(taskId, payload || {});
+      });
+      continue;
+    }
+
+    if (type === 'user_page_batch_upload') {
+      relaunched += 1;
+      await updateTask(taskId, {
+        status: 'collecting',
+        progress: 0,
+        error: '',
+        failureClass: '',
+        logs: ['可恢复失败任务已重新启动']
+      });
+      launchTaskRunner(taskId, async () => {
+        await runUserPageBatchUpload(taskId, payload || {});
+      });
+    }
+  }
+
+  if (queued > 0) {
+    void pumpSingleUploadQueue();
+  }
+
+  return {
+    matched: recoverable.length,
+    queued,
+    relaunched
+  };
+}
+
+async function saveNotificationSettings(payload) {
+  const input = payload && payload.notifications && typeof payload.notifications === 'object'
+    ? payload.notifications
+    : payload || {};
+  const notifications = normalizeNotificationSettings(input);
+
+  await mutateState((state) => {
+    const normalizedTaskSettings = normalizeTaskSettings(state.settings);
+    state.settings = {
+      ...state.settings,
+      ...normalizedTaskSettings,
+      notifications
+    };
+    state.settings.configUpdatedAt = Date.now();
+    state.settings.configUserId = state.auth && state.auth.user && state.auth.user.id
+      ? String(state.auth.user.id)
+      : '';
+  });
+
+  return getPublicState();
+}
+
+async function saveRetryPolicySettings(payload) {
+  const input = payload && payload.retryPolicy && typeof payload.retryPolicy === 'object'
+    ? payload.retryPolicy
+    : payload || {};
+
+  await mutateState((state) => {
+    const normalizedTaskSettings = normalizeTaskSettings(state.settings);
+    const retryPolicy = normalizeRetryPolicy(input, normalizedTaskSettings.batchRetryCount);
+    state.settings = {
+      ...state.settings,
+      ...normalizedTaskSettings,
+      retryPolicy,
+      batchRetryCount: retryPolicy.maxRetries
+    };
+    state.settings.configUpdatedAt = Date.now();
+    state.settings.configUserId = state.auth && state.auth.user && state.auth.user.id
+      ? String(state.auth.user.id)
+      : '';
+  });
+
+  return getPublicState();
 }
 
 const handlers = {
@@ -3167,6 +3818,14 @@ const handlers = {
     return listTasks();
   },
 
+  async TASKS_INBOX_LIST() {
+    return listInboxItems();
+  },
+
+  async TASKS_RETRY_RECOVERABLE() {
+    return retryRecoverableTasks();
+  },
+
   async TASKS_RESUME() {
     return resumePendingTasks();
   },
@@ -3198,6 +3857,14 @@ const handlers = {
 
   async HISTORY_PULL_REMOTE() {
     return pullHistoryFromCloud();
+  },
+
+  async SETTINGS_NOTIFY_SAVE(payload) {
+    return saveNotificationSettings(payload || {});
+  },
+
+  async SETTINGS_RETRY_POLICY_SAVE(payload) {
+    return saveRetryPolicySettings(payload || {});
   }
 };
 

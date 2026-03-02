@@ -48,6 +48,19 @@
     settingHistoryLimit: document.getElementById('setting-history-limit'),
     settingUploadFolderTemplate: document.getElementById('setting-upload-folder-template'),
     settingUploadFileTemplate: document.getElementById('setting-upload-file-template'),
+    settingNotifyEnabled: document.getElementById('setting-notify-enabled'),
+    settingNotifySuccess: document.getElementById('setting-notify-success'),
+    settingNotifyFailure: document.getElementById('setting-notify-failure'),
+    settingNotifyBatchDone: document.getElementById('setting-notify-batch-done'),
+    settingNotifyQuietStart: document.getElementById('setting-notify-quiet-start'),
+    settingNotifyQuietEnd: document.getElementById('setting-notify-quiet-end'),
+    settingRetryBaseDelayMs: document.getElementById('setting-retry-base-delay-ms'),
+    settingRetryMaxDelayMs: document.getElementById('setting-retry-max-delay-ms'),
+    settingRetryClassTimeout: document.getElementById('setting-retry-class-timeout'),
+    settingRetryClassNetwork: document.getElementById('setting-retry-class-network'),
+    settingRetryClassHttp5xx: document.getElementById('setting-retry-class-http5xx'),
+    settingRetryClassHttp4xx: document.getElementById('setting-retry-class-http4xx'),
+    settingRetryClassInvalid: document.getElementById('setting-retry-class-invalid'),
     settingAdaptiveConcurrency: document.getElementById('setting-adaptive-concurrency'),
     settingAutoResumeTasks: document.getElementById('setting-auto-resume-tasks'),
     settingDedupeCloud: document.getElementById('setting-dedupe-cloud'),
@@ -104,6 +117,20 @@
       autoResumeTasks: true,
       dedupeWithCloud: true,
       batchRetryCount: 2,
+      retryPolicy: {
+        retryableClasses: ['timeout', 'network', 'http5xx'],
+        maxRetries: 2,
+        baseDelayMs: 600,
+        maxDelayMs: 12000
+      },
+      notifications: {
+        enabled: true,
+        success: false,
+        failure: true,
+        batchDone: true,
+        quietHoursStart: '23:00',
+        quietHoursEnd: '08:00'
+      },
       historyLimit: 500,
       uploadFolderTemplate: '{author}',
       uploadFileTemplate: '{awemeId}_{title}',
@@ -176,6 +203,45 @@
     };
   }
 
+  function normalizeNotificationSettings(input) {
+    const source = input && typeof input === 'object' ? input : {};
+    const quietHoursStart = /^\d{2}:\d{2}$/.test(String(source.quietHoursStart || ''))
+      ? String(source.quietHoursStart)
+      : '23:00';
+    const quietHoursEnd = /^\d{2}:\d{2}$/.test(String(source.quietHoursEnd || ''))
+      ? String(source.quietHoursEnd)
+      : '08:00';
+    return {
+      enabled: source.enabled !== false,
+      success: source.success === true,
+      failure: source.failure !== false,
+      batchDone: source.batchDone !== false,
+      quietHoursStart,
+      quietHoursEnd
+    };
+  }
+
+  function normalizeRetryPolicy(input, fallbackRetries) {
+    const source = input && typeof input === 'object' ? input : {};
+    const classes = Array.isArray(source.retryableClasses) ? source.retryableClasses : ['timeout', 'network', 'http5xx'];
+    const normalizedClasses = [];
+    const seen = new Set();
+    const allowed = ['timeout', 'network', 'http4xx', 'http5xx', 'invalid_payload', 'unknown'];
+    classes.forEach((item) => {
+      const value = String(item || '').trim();
+      if (!allowed.includes(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      normalizedClasses.push(value);
+    });
+    return {
+      retryableClasses: normalizedClasses.length > 0 ? normalizedClasses : ['timeout', 'network', 'http5xx'],
+      maxRetries: Math.max(0, Math.min(5, Number(source.maxRetries != null ? source.maxRetries : fallbackRetries))),
+      baseDelayMs: Math.max(150, Math.min(60000, Number(source.baseDelayMs || 600))),
+      maxDelayMs: Math.max(300, Math.min(120000, Number(source.maxDelayMs || 12000)))
+    };
+  }
+
   function switchTab(tab) {
     el.tabButtons.forEach((button) => {
       if (button.dataset.tab === tab) {
@@ -232,6 +298,22 @@
     if (el.settingUploadFileTemplate) {
       el.settingUploadFileTemplate.value = String(pageState.settings.uploadFileTemplate || '{awemeId}_{title}');
     }
+    const notifications = normalizeNotificationSettings(pageState.settings.notifications || {});
+    if (el.settingNotifyEnabled) el.settingNotifyEnabled.checked = notifications.enabled !== false;
+    if (el.settingNotifySuccess) el.settingNotifySuccess.checked = notifications.success === true;
+    if (el.settingNotifyFailure) el.settingNotifyFailure.checked = notifications.failure !== false;
+    if (el.settingNotifyBatchDone) el.settingNotifyBatchDone.checked = notifications.batchDone !== false;
+    if (el.settingNotifyQuietStart) el.settingNotifyQuietStart.value = notifications.quietHoursStart;
+    if (el.settingNotifyQuietEnd) el.settingNotifyQuietEnd.value = notifications.quietHoursEnd;
+
+    const retryPolicy = normalizeRetryPolicy(pageState.settings.retryPolicy || {}, pageState.settings.batchRetryCount || 2);
+    if (el.settingRetryBaseDelayMs) el.settingRetryBaseDelayMs.value = String(retryPolicy.baseDelayMs);
+    if (el.settingRetryMaxDelayMs) el.settingRetryMaxDelayMs.value = String(retryPolicy.maxDelayMs);
+    if (el.settingRetryClassTimeout) el.settingRetryClassTimeout.checked = retryPolicy.retryableClasses.includes('timeout');
+    if (el.settingRetryClassNetwork) el.settingRetryClassNetwork.checked = retryPolicy.retryableClasses.includes('network');
+    if (el.settingRetryClassHttp5xx) el.settingRetryClassHttp5xx.checked = retryPolicy.retryableClasses.includes('http5xx');
+    if (el.settingRetryClassHttp4xx) el.settingRetryClassHttp4xx.checked = retryPolicy.retryableClasses.includes('http4xx');
+    if (el.settingRetryClassInvalid) el.settingRetryClassInvalid.checked = retryPolicy.retryableClasses.includes('invalid_payload');
     if (el.settingAdaptiveConcurrency) {
       el.settingAdaptiveConcurrency.checked = pageState.settings.adaptiveConcurrency !== false;
     }
@@ -617,8 +699,34 @@
       const detail = document.createElement('div');
       detail.className = 'list-item-meta';
       detail.style.marginTop = '4px';
-      const path = record.detail && record.detail.filePath ? record.detail.filePath : '';
-      detail.textContent = path || (record.detail && record.detail.sourceUrl ? record.detail.sourceUrl : '');
+      const detailData = record && record.detail && typeof record.detail === 'object' ? record.detail : {};
+      const path = detailData.filePath ? String(detailData.filePath || '') : '';
+      const sourceUrl = detailData.sourceUrl ? String(detailData.sourceUrl || '') : '';
+      detail.textContent = path || sourceUrl || '-';
+
+      const failureInfo = document.createElement('div');
+      failureInfo.className = 'list-item-meta';
+      failureInfo.style.marginTop = '4px';
+      const failureClass = detailData.failureClass ? String(detailData.failureClass || '') : '';
+      const retryCount = Number(detailData.retryCount || (Array.isArray(detailData.retryTrace) ? detailData.retryTrace.length : 0));
+      if (failureClass || retryCount > 0) {
+        failureInfo.textContent = `失败分类：${failureClass || '-'} | 重试次数：${Math.max(0, retryCount)}`;
+      } else {
+        failureInfo.textContent = '失败分类：- | 重试次数：0';
+      }
+
+      const traceInfo = document.createElement('div');
+      traceInfo.className = 'list-item-meta';
+      traceInfo.style.marginTop = '4px';
+      const trace = Array.isArray(detailData.retryTrace) ? detailData.retryTrace : [];
+      if (trace.length > 0) {
+        const latest = trace[trace.length - 1];
+        const latestClass = latest && latest.class ? String(latest.class || '') : '-';
+        const latestMsg = latest && latest.message ? String(latest.message || '') : '';
+        traceInfo.textContent = `最近重试：${latestClass}${latestMsg ? ` | ${latestMsg}` : ''}`;
+      } else {
+        traceInfo.textContent = '最近重试：无';
+      }
 
       const actions = document.createElement('div');
       actions.className = 'row wrap';
@@ -636,6 +744,8 @@
       item.appendChild(title);
       item.appendChild(meta);
       item.appendChild(detail);
+      item.appendChild(failureInfo);
+      item.appendChild(traceInfo);
       item.appendChild(actions);
 
       el.historyList.appendChild(item);
@@ -807,6 +917,20 @@
         pageState.settings.apiBaseUrl = normalizeBaseUrl(el.settingApiBaseUrl.value);
         pageState.settings.batchConcurrency = Math.max(1, Math.min(5, Number(el.settingBatchConcurrency.value || 2)));
         pageState.settings.batchRetryCount = Math.max(0, Math.min(5, Number(el.settingBatchRetryCount ? el.settingBatchRetryCount.value : 2)));
+        const retryableClasses = [
+          el.settingRetryClassTimeout && el.settingRetryClassTimeout.checked ? 'timeout' : '',
+          el.settingRetryClassNetwork && el.settingRetryClassNetwork.checked ? 'network' : '',
+          el.settingRetryClassHttp5xx && el.settingRetryClassHttp5xx.checked ? 'http5xx' : '',
+          el.settingRetryClassHttp4xx && el.settingRetryClassHttp4xx.checked ? 'http4xx' : '',
+          el.settingRetryClassInvalid && el.settingRetryClassInvalid.checked ? 'invalid_payload' : '',
+        ].filter(Boolean);
+        pageState.settings.retryPolicy = normalizeRetryPolicy({
+          retryableClasses,
+          maxRetries: pageState.settings.batchRetryCount,
+          baseDelayMs: Number(el.settingRetryBaseDelayMs ? el.settingRetryBaseDelayMs.value : 600),
+          maxDelayMs: Number(el.settingRetryMaxDelayMs ? el.settingRetryMaxDelayMs.value : 12000)
+        }, pageState.settings.batchRetryCount);
+        pageState.settings.batchRetryCount = pageState.settings.retryPolicy.maxRetries;
         pageState.settings.historyLimit = Math.max(100, Math.min(1000, Number(el.settingHistoryLimit.value || 500)));
         pageState.settings.uploadFolderTemplate = el.settingUploadFolderTemplate
           ? String(el.settingUploadFolderTemplate.value || '').trim() || '{author}'
@@ -814,12 +938,22 @@
         pageState.settings.uploadFileTemplate = el.settingUploadFileTemplate
           ? String(el.settingUploadFileTemplate.value || '').trim() || '{awemeId}_{title}'
           : '{awemeId}_{title}';
+        pageState.settings.notifications = normalizeNotificationSettings({
+          enabled: Boolean(el.settingNotifyEnabled && el.settingNotifyEnabled.checked),
+          success: Boolean(el.settingNotifySuccess && el.settingNotifySuccess.checked),
+          failure: Boolean(el.settingNotifyFailure && el.settingNotifyFailure.checked),
+          batchDone: Boolean(el.settingNotifyBatchDone && el.settingNotifyBatchDone.checked),
+          quietHoursStart: el.settingNotifyQuietStart ? el.settingNotifyQuietStart.value : '23:00',
+          quietHoursEnd: el.settingNotifyQuietEnd ? el.settingNotifyQuietEnd.value : '08:00'
+        });
         pageState.settings.adaptiveConcurrency = Boolean(el.settingAdaptiveConcurrency && el.settingAdaptiveConcurrency.checked);
         pageState.settings.autoResumeTasks = Boolean(el.settingAutoResumeTasks && el.settingAutoResumeTasks.checked);
         pageState.settings.dedupeWithCloud = Boolean(el.settingDedupeCloud && el.settingDedupeCloud.checked);
         pageState.settings.autoSyncHistory = Boolean(el.settingAutoSyncHistory.checked);
         pageState.settings.batchFilters = normalizeBatchFilters(pageState.settings.batchFilters || {});
 
+        await send('SETTINGS_NOTIFY_SAVE', { notifications: pageState.settings.notifications });
+        await send('SETTINGS_RETRY_POLICY_SAVE', { retryPolicy: pageState.settings.retryPolicy });
         await persistConfig('设置已保存');
       } catch (error) {
         setNotice(error.message, 'error');
