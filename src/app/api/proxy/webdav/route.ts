@@ -239,6 +239,38 @@ async function ensureWebDAVFolderExists(folderUrl: string, auth: string, depth =
   }
 }
 
+async function checkWebDAVResourceExists(resourceUrl: string, auth: string): Promise<boolean> {
+  if (!resourceUrl) return false
+  const headers = { 'Authorization': `Basic ${auth}` }
+
+  try {
+    const head = await fetch(resourceUrl, {
+      method: 'HEAD',
+      headers,
+    })
+    if (head.status === 200 || head.status === 204 || head.status === 206) return true
+    if (head.status === 404) return false
+    if (head.status !== 405 && head.status !== 501) {
+      return false
+    }
+  } catch {
+  }
+
+  try {
+    const propfind = await fetch(resourceUrl, {
+      method: 'PROPFIND',
+      headers: {
+        ...headers,
+        'Depth': '0',
+      }
+    })
+    if (propfind.status === 207 || propfind.status === 200) return true
+  } catch {
+  }
+
+  return false
+}
+
 function extractUpstreamErrorMessage(body: string): string | null {
   if (!body) {
     return null
@@ -666,6 +698,16 @@ export async function POST(request: NextRequest) {
             success: false,
             error: `创建上传目录失败: ${dirUrl}`
           }, { status: 500 })
+        }
+
+        const alreadyExists = await checkWebDAVResourceExists(uploadPath, auth)
+        if (alreadyExists) {
+          return NextResponse.json({
+            success: true,
+            filePath: uploadPath,
+            skipped: true,
+            message: '文件已存在，已跳过上传'
+          })
         }
 
         // 上传到WebDAV服务器（支持流式 body）

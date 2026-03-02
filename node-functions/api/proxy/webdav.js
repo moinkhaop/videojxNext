@@ -82,6 +82,16 @@ export default async function onRequest(context) {
       return json({ success: false, error: `创建上传目录失败: ${dirUrl}` }, 500)
     }
 
+    const alreadyExists = await checkWebDAVResourceExists(uploadUrl, auth)
+    if (alreadyExists) {
+      return json({
+        success: true,
+        filePath: uploadUrl,
+        skipped: true,
+        message: '文件已存在，已跳过上传'
+      }, 200)
+    }
+
     let downloadUrl = videoUrl
     const canRefresh = isLikelyDouyinUrl(sourceUrl)
     let refreshed = false
@@ -433,6 +443,38 @@ async function ensureWebDAVFolderExists(folderUrl, auth, depth = 0) {
   } catch {
     return false
   }
+}
+
+async function checkWebDAVResourceExists(resourceUrl, auth) {
+  if (!resourceUrl) return false
+  const headers = { 'Authorization': `Basic ${auth}` }
+
+  try {
+    const head = await fetch(resourceUrl, {
+      method: 'HEAD',
+      headers
+    })
+    if (head.status === 200 || head.status === 204 || head.status === 206) return true
+    if (head.status === 404) return false
+    if (head.status !== 405 && head.status !== 501) {
+      return false
+    }
+  } catch {
+  }
+
+  try {
+    const propfind = await fetch(resourceUrl, {
+      method: 'PROPFIND',
+      headers: {
+        ...headers,
+        'Depth': '0'
+      }
+    })
+    if (propfind.status === 207 || propfind.status === 200) return true
+  } catch {
+  }
+
+  return false
 }
 
 async function mkcol(url, auth) {

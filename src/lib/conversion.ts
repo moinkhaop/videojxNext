@@ -653,6 +653,7 @@ export class ConversionService {
       // 第二阶段：批量上传
       const totalTasks = batchTask.tasks.length
       let completedTasks = 0
+      const userFolderPath = this.buildDouyinUserFolderPath(userVideos)
 
       if (totalTasks > 0) {
         await this.runAdaptivePool(
@@ -671,12 +672,13 @@ export class ConversionService {
               const filePath = await this.uploadToWebDAV(
                 task.parsedVideoInfo!,
                 batchTask.webdavConfig,
-                undefined,
+                userFolderPath,
                 undefined,
                 task.videoUrl,
                 {
                   signal: callbacks?.getAbortSignal?.(),
-                  isCancelled: callbacks?.isCancelled
+                  isCancelled: callbacks?.isCancelled,
+                  fileNameOverride: this.buildStableBatchVideoFileName(task.parsedVideoInfo!, task.videoUrl)
                 }
               )
 
@@ -995,6 +997,7 @@ export class ConversionService {
     runtimeControl?: {
       signal?: AbortSignal
       isCancelled?: () => boolean
+      fileNameOverride?: string
     }
   ): Promise<string> {
     const maxRetries = 5
@@ -1026,12 +1029,14 @@ export class ConversionService {
     
     // 根据媒体类型生成文件名
     ensureActive()
-    let fileName = ''
-    if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
-      const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url)
-      fileName = this.generateFileName(mediaInfo.title, format)
-    } else if (mediaInfo.mediaType === MediaType.IMAGE_ALBUM && mediaInfo.images && mediaInfo.images.length > 0) {
-      fileName = this.generateFolderName(mediaInfo.title)
+    let fileName = String(runtimeControl?.fileNameOverride || '').trim()
+    if (!fileName) {
+      if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
+        const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url)
+        fileName = this.generateFileName(mediaInfo.title, format)
+      } else if (mediaInfo.mediaType === MediaType.IMAGE_ALBUM && mediaInfo.images && mediaInfo.images.length > 0) {
+        fileName = this.generateFolderName(mediaInfo.title)
+      }
     }
     
     while (attempt < maxRetries) {
@@ -1669,6 +1674,78 @@ export class ConversionService {
       preserveExtension: false,
       addTimestamp: false
     })
+  }
+
+  private static buildDouyinUserFolderPath(videos: ParsedVideoInfo[]): string {
+    const first = videos.find(video => video && (video.author || video.uid || video.short_id))
+    const author = String(first?.author || '抖音用户').trim()
+    const stableId = String(first?.uid || first?.short_id || '').trim()
+    const raw = stableId ? `${author}_${stableId}` : author
+    return this.generateFolderName(raw || '抖音用户')
+  }
+
+  private static buildStableBatchVideoFileName(mediaInfo: ParsedVideoInfo, sourceUrl?: string): string {
+    const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url || sourceUrl)
+    const stableId = this.extractStableVideoId(mediaInfo, sourceUrl)
+    const authorPart = FilenameSanitizer.sanitize(String(mediaInfo.author || '').trim() || '用户', {
+      replacement: '_',
+      maxLength: 32,
+      preserveExtension: false,
+      addTimestamp: false
+    }).replace(/\.[^.]*$/, '')
+    const titlePart = FilenameSanitizer.sanitize(String(mediaInfo.title || '').trim() || '视频', {
+      replacement: '_',
+      maxLength: 80,
+      preserveExtension: false,
+      addTimestamp: false
+    }).replace(/\.[^.]*$/, '')
+
+    const baseName = stableId
+      ? `${authorPart}_${stableId}`
+      : `${authorPart}_${titlePart}`
+    return `${baseName}.${format}`
+  }
+
+  private static extractStableVideoId(mediaInfo: ParsedVideoInfo, sourceUrl?: string): string {
+    const directId = String(mediaInfo.short_id || mediaInfo.uid || '').trim()
+    if (directId) {
+      return directId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
+    }
+
+    const candidates = [
+      String(mediaInfo.url || ''),
+      String(sourceUrl || ''),
+      String(mediaInfo.title || '')
+    ]
+    const patterns = [
+      /[?&](?:aweme_id|video_id)=([a-zA-Z0-9_-]{6,})/i,
+      /\/video\/([0-9]{8,})/i,
+      /\b(v[0-9a-z]{8,})\b/i,
+      /[（(]([a-zA-Z0-9_-]{8,})[）)]/i
+    ]
+
+    for (const candidate of candidates) {
+      if (!candidate) continue
+      for (const pattern of patterns) {
+        const matched = candidate.match(pattern)?.[1]
+        if (!matched) continue
+        const cleaned = matched.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
+        if (cleaned && !/^https?$/i.test(cleaned)) {
+          return cleaned
+        }
+      }
+    }
+
+    const fallback = this.simpleStringHash(String(mediaInfo.url || sourceUrl || mediaInfo.title || 'video'))
+    return `vid_${fallback}`
+  }
+
+  private static simpleStringHash(input: string): string {
+    let hash = 0
+    for (let i = 0; i < input.length; i++) {
+      hash = (hash * 31 + input.charCodeAt(i)) >>> 0
+    }
+    return hash.toString(36)
   }
 
   // 智能视频格式推断方法
