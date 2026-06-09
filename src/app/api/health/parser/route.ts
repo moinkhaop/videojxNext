@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ParserErrorClass, VideoParserConfig } from '@/types'
 import { classifyParserFailure } from '@/lib/parser-health'
 import { requireRouteAuth } from '@/lib/api/route-auth'
+import {
+  readResponseTextLimited,
+  resolveAndValidateHttpUrl,
+  sanitizeCustomHeaders,
+} from '@/lib/api/parser-security'
 
 const DEFAULT_HEALTH_SAMPLE_URL = 'https://www.douyin.com/video/0'
 
@@ -86,7 +91,7 @@ export async function POST(request: NextRequest) {
     clearTimeout(timeout)
     const latencyMs = Date.now() - startedAt
 
-    const rawBody = await response.text()
+    const rawBody = await readResponseTextLimited(response)
     const parsedBody = safeParseJsonBody(rawBody)
     const logicalSuccess = evaluateLogicalSuccess(parsedBody)
     const healthy = response.ok && (logicalSuccess || parsedBody !== null)
@@ -144,28 +149,17 @@ function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl:
   const urlParamName = parserConfig.urlParamName?.trim() || 'url'
   const parserName = parserConfig.name?.trim() || ''
 
-  let upstreamUrl: URL
-  try {
-    upstreamUrl = new URL(String(parserConfig.apiUrl || '').trim(), baseUrl)
-  } catch {
-    throw new Error('解析器API地址格式错误')
+  const validatedApiUrl = resolveAndValidateHttpUrl(String(parserConfig.apiUrl || '').trim(), baseUrl, {
+    allowRelativeApi: true,
+  })
+  if (!validatedApiUrl.ok) {
+    throw new Error(validatedApiUrl.error)
   }
+  const upstreamUrl = validatedApiUrl.url
 
-  if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
-    throw new Error('解析器API地址仅支持 http/https 协议')
-  }
-
-  const headers: Record<string, string> = {
+  const headers = sanitizeCustomHeaders(parserConfig.customHeaders, {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-  }
-
-  if (parserConfig.customHeaders) {
-    for (const [key, value] of Object.entries(parserConfig.customHeaders)) {
-      if (typeof key === 'string' && typeof value === 'string' && key.trim()) {
-        headers[key] = value
-      }
-    }
-  }
+  })
 
   if (parserConfig.apiKey) {
     const headerKeys = Object.keys(headers).map(key => key.toLowerCase())
@@ -189,8 +183,12 @@ function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl:
   const method: 'GET' | 'POST' = shouldUseGet ? 'GET' : 'POST'
 
   if (method === 'GET') {
-    if (parserConfig.customQueryParams) {
-      Object.entries(parserConfig.customQueryParams).forEach(([key, value]) => {
+    const customQueryParams =
+      parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
+        ? parserConfig.customQueryParams
+        : {}
+    if (customQueryParams) {
+      Object.entries(customQueryParams).forEach(([key, value]) => {
         if (typeof key === 'string' && value !== undefined && value !== null) {
           upstreamUrl.searchParams.set(key, String(value))
         }
@@ -214,7 +212,9 @@ function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl:
   }
 
   const bodyPayload: Record<string, unknown> = {
-    ...(parserConfig.customBodyParams || {}),
+    ...(parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object'
+      ? parserConfig.customBodyParams
+      : {}),
     [urlParamName]: sampleUrl
   }
 

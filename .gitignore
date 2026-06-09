@@ -137,6 +137,7 @@ Thumbs.db
 # Temporary folders
 tmp/
 temp/
+.tmp/
 
 # Logs
 *.log
@@ -162,4 +163,5 @@ storybook-static
 # Test files
 test-*
 test*.*
+!scripts/test-parser-core.ts
 .ace-tool/

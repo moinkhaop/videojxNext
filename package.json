@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:supabase": "node scripts/test-supabase.js"
+    "test:supabase": "node scripts/test-supabase.js",
+    "test:parser": "tsc -p scripts/tsconfig.parser-tests.json && node .tmp/parser-tests/scripts/test-parser-core.js"
   },
   "dependencies": {
     "@next/font": "14.2.15",

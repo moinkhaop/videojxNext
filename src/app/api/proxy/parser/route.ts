@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { VideoParseResponse, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 import { extractFirstUrlFromText } from '@/lib/url/extract'
 import { requireRouteAuth } from '@/lib/api/route-auth'
+import {
+  readResponseTextLimited,
+  resolveAndValidateHttpUrl,
+  sanitizeCustomHeaders,
+} from '@/lib/api/parser-security'
+import {
+  normalizeDouyinInputUrl as normalizeDouyinInputUrlShared,
+  resolveShareUrlIfNeeded as resolveShareUrlIfNeededShared,
+} from '@/lib/api/douyin-parser'
 
 export const runtime = 'nodejs'
 
@@ -39,46 +48,31 @@ export async function POST(request: NextRequest) {
 
     cleanedVideoUrl = String(videoUrl || '').trim()
     extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
-    const initialNormalizedUrl = normalizeDouyinInputUrl(extractedUrl)
+    const initialNormalizedUrl = normalizeDouyinInputUrlShared(extractedUrl)
     parserName = parserConfig.name?.trim() || '自定义解析器'
     const urlParamName = parserConfig.urlParamName?.trim() || 'url'
 
-    let upstreamUrl: URL
-    try {
-      upstreamUrl = new URL(String(parserConfig.apiUrl).trim(), request.url)
-    } catch (urlError) {
-      console.error('[API] 解析API地址格式错误:', urlError)
+    const validatedApiUrl = resolveAndValidateHttpUrl(String(parserConfig.apiUrl).trim(), request.url, {
+      allowRelativeApi: true,
+    })
+    if (!validatedApiUrl.ok) {
       return NextResponse.json({
         success: false,
-        error: '解析API地址格式错误，请填写完整URL或以 / 开头的站内路径'
+        error: validatedApiUrl.error
       }, { status: 400 })
     }
 
-    if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
-      return NextResponse.json({
-        success: false,
-        error: '解析API地址仅支持 http/https 协议'
-      }, { status: 400 })
-    }
-
+    const upstreamUrl = validatedApiUrl.url
     resolvedUpstreamUrl = upstreamUrl
 
-    const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
-    normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
+    const resolvedUrl = await resolveShareUrlIfNeededShared(initialNormalizedUrl, 10000)
+    normalizedVideoUrl = normalizeDouyinInputUrlShared(resolvedUrl)
 
     console.log(`[API] 使用解析器: ${parserName}`)
 
-    const headers: Record<string, string> = {
+    const headers = sanitizeCustomHeaders(parserConfig.customHeaders, {
       'User-Agent': DEFAULT_USER_AGENT
-    }
-
-    if (parserConfig.customHeaders) {
-      for (const [key, value] of Object.entries(parserConfig.customHeaders)) {
-        if (typeof key === 'string' && typeof value === 'string' && key.trim()) {
-          headers[key] = value
-        }
-      }
-    }
+    })
 
     const headerKeys = Object.keys(headers)
     const hasContentTypeHeader = headerKeys.some(key => key.toLowerCase() === 'content-type')
@@ -107,8 +101,12 @@ export async function POST(request: NextRequest) {
 
     if (method === 'GET') {
       const queryParams = new URLSearchParams()
-      if (parserConfig.customQueryParams) {
-        Object.entries(parserConfig.customQueryParams).forEach(([key, value]) => {
+      const customQueryParams =
+        parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
+          ? parserConfig.customQueryParams
+          : {}
+      if (customQueryParams) {
+        Object.entries(customQueryParams).forEach(([key, value]) => {
           if (typeof key === 'string' && value !== undefined && value !== null) {
             queryParams.set(key, String(value))
           }
@@ -128,8 +126,12 @@ export async function POST(request: NextRequest) {
         headers['Content-Type'] = 'application/json'
       }
 
+      const customBodyParams =
+        parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object'
+          ? parserConfig.customBodyParams
+          : {}
       const bodyPayload = {
-        ...(parserConfig.customBodyParams || {}),
+        ...customBodyParams,
         [urlParamName]: normalizedVideoUrl
       }
 
@@ -163,7 +165,7 @@ export async function POST(request: NextRequest) {
 
     clearTimeout(timeoutId)
 
-    const rawBody = await response.text()
+    const rawBody = await readResponseTextLimited(response)
     console.log(`[API] 上游响应状态: ${response.status}, 内容长度: ${rawBody.length}`)
 
     if (!response.ok) {

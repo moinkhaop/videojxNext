@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { PreviewParseResponse, VideoParserConfig, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 import { extractFirstUrlFromText } from '@/lib/url/extract'
 import { requireRouteAuth } from '@/lib/api/route-auth'
+import {
+  readResponseTextLimited,
+  resolveAndValidateHttpUrl,
+  sanitizeCustomHeaders,
+} from '@/lib/api/parser-security'
+import {
+  normalizeDouyinInputUrl as normalizeDouyinInputUrlShared,
+  resolveShareUrlIfNeeded as resolveShareUrlIfNeededShared,
+} from '@/lib/api/douyin-parser'
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -24,30 +33,28 @@ export async function POST(request: NextRequest) {
 
     const cleanedVideoUrl = String(videoUrl || '').trim()
     const extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
-    const initialNormalizedUrl = normalizeDouyinInputUrl(extractedUrl)
-    const resolvedUrl = await resolveShareUrlIfNeeded(initialNormalizedUrl, 10000)
-    const normalizedVideoUrl = normalizeDouyinInputUrl(resolvedUrl)
+    const initialNormalizedUrl = normalizeDouyinInputUrlShared(extractedUrl)
+    const resolvedUrl = await resolveShareUrlIfNeededShared(initialNormalizedUrl, 10000)
+    const normalizedVideoUrl = normalizeDouyinInputUrlShared(resolvedUrl)
 
     // {{ AURA: Modify - 重构请求构建逻辑以支持自定义参数 }}
     // 构建请求到第三方解析API
-    const upstreamUrl = new URL(String(parserConfig.apiUrl || '').trim(), request.url)
-    if (!['http:', 'https:'].includes(upstreamUrl.protocol)) {
+    const validatedApiUrl = resolveAndValidateHttpUrl(String(parserConfig.apiUrl || '').trim(), request.url, {
+      allowRelativeApi: true,
+    })
+    if (!validatedApiUrl.ok) {
       return NextResponse.json({
         success: false,
-        error: '解析API地址仅支持 http/https 协议'
+        error: validatedApiUrl.error
       }, { status: 400 })
     }
+    const upstreamUrl = validatedApiUrl.url
 
     let finalApiUrl = upstreamUrl.toString();
     let method = parserConfig.requestMethod || 'POST'; // 使用配置的请求方法
-    const headers: Record<string, string> = {
+    const headers = sanitizeCustomHeaders(parserConfig.customHeaders, {
       'User-Agent': DEFAULT_USER_AGENT
-    }
-
-    // 添加自定义请求头
-    if (parserConfig.customHeaders) {
-      Object.assign(headers, parserConfig.customHeaders);
-    }
+    })
 
     // 根据请求方法构建最终请求
     if (method === 'GET') {
@@ -61,8 +68,12 @@ export async function POST(request: NextRequest) {
       url.searchParams.set(urlParamName, normalizedVideoUrl);
       
       // 添加自定义查询参数
-      if (parserConfig.customQueryParams) {
-        Object.entries(parserConfig.customQueryParams).forEach(([key, value]) => {
+      const customQueryParams =
+        parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
+          ? parserConfig.customQueryParams
+          : {}
+      if (customQueryParams) {
+        Object.entries(customQueryParams).forEach(([key, value]) => {
           url.searchParams.append(key, String(value));
         });
       }
@@ -84,7 +95,7 @@ export async function POST(request: NextRequest) {
     if (method === 'POST') {
       const urlParamName = parserConfig.urlParamName || 'url';
       body[urlParamName] = normalizedVideoUrl;
-      if (parserConfig.customBodyParams) {
+      if (parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object') {
         Object.assign(body, parserConfig.customBodyParams);
       }
     }
@@ -112,7 +123,7 @@ export async function POST(request: NextRequest) {
       console.log(`[预览解析] 收到第三方响应: ${response.status}`)
       clearTimeout(timeoutId);
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '无法获取错误内容');
+        const errorText = await readResponseTextLimited(response).catch(() => '无法获取错误内容');
         console.error(`[预览解析] API请求失败: ${response.status} ${response.statusText}`)
         
         return NextResponse.json({
@@ -128,12 +139,15 @@ export async function POST(request: NextRequest) {
       }, { status: 500 })
     }
 
-    let data;
+    const responseText = await readResponseTextLimited(response.clone()).catch(() => '')
+    let data = responseText ? safeParseJsonBody(responseText) : null;
     try {
-      data = await response.json();
+      if (!data) {
+        data = await response.json();
+      }
     } catch (jsonError) {
       try {
-        const textResponse = await response.text();
+        const textResponse = responseText || await response.text();
         if (textResponse.includes('{') && textResponse.includes('}')) {
           const jsonStart = textResponse.indexOf('{');
           const jsonEnd = textResponse.lastIndexOf('}') + 1;
@@ -499,6 +513,28 @@ function detectMediaTypeAndExtractData(dataSource: any): {
   return {
     mediaType: MediaType.VIDEO
   }
+}
+
+function safeParseJsonBody(body: string): any | null {
+  if (!body || !body.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(body)
+  } catch {
+    const start = body.indexOf('{')
+    const end = body.lastIndexOf('}')
+    if (start !== -1 && end !== -1 && end > start) {
+      try {
+        return JSON.parse(body.substring(start, end + 1))
+      } catch {
+        return null
+      }
+    }
+  }
+
+  return null
 }
 
 function extractAuthor(dataSource: any): { name?: string; avatar?: string; signature?: string } | undefined {
