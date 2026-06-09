@@ -3,10 +3,12 @@
 import { useState, useEffect, useMemo, useCallback, useDeferredValue, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import {
   History,
   Search,
@@ -26,7 +28,12 @@ import {
   List,
   Tag as TagIcon,
   RotateCcw,
-  Maximize2
+  MoreHorizontal,
+  StickyNote,
+  FileJson,
+  Link2,
+  FolderOpen,
+  ExternalLink
 } from 'lucide-react'
 import { HistoryRecord, TaskStatus, ConversionTask, HistoryStats, Tag, HistoryViewMode, HistorySortOption, MediaType } from '@/types'
 import { HistoryManager, TagManager } from '@/lib/storage'
@@ -35,6 +42,7 @@ import { VideoPreview } from '@/components/preview/VideoPreview'
 import { ImageCarousel } from '@/components/preview/ImageCarousel'
 import { useAuth } from '@/contexts/auth-context'
 import { CLOUD_STORAGE_SYNC_EVENT, hydrateFromSupabase } from '@/lib/storage/cloud-sync'
+import { getMediaPreviewLabel, getMediaStageHeightClass, isAnimatedImageMedia } from '@/components/preview/media-helpers'
 
 // 标签颜色映射
 const TAG_COLORS = {
@@ -83,6 +91,7 @@ export default function HistoryPage() {
   const [batchSelectMode, setBatchSelectMode] = useState(false)
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([])
   const [refreshingCloud, setRefreshingCloud] = useState(false)
+  const [noteDraft, setNoteDraft] = useState('')
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
@@ -205,6 +214,7 @@ export default function HistoryPage() {
   }, [filteredAndSortedRecords, currentPage])
 
   const selectedRecordIdSet = useMemo(() => new Set(selectedRecordIds), [selectedRecordIds])
+  const tagMap = useMemo(() => new Map(tags.map(tag => [tag.id, tag])), [tags])
 
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedRecords.length / ITEMS_PER_PAGE))
 
@@ -224,6 +234,24 @@ export default function HistoryPage() {
       setSelectedRecordIds([])
     }
   }, [batchSelectMode])
+
+  useEffect(() => {
+    setNoteDraft(selectedRecord?.notes || '')
+  }, [selectedRecord?.id, selectedRecord?.notes])
+
+  useEffect(() => {
+    if (filteredAndSortedRecords.length === 0) {
+      setSelectedRecord(null)
+      return
+    }
+
+    setSelectedRecord(prev => {
+      if (prev && filteredAndSortedRecords.some(record => record.id === prev.id)) {
+        return prev
+      }
+      return filteredAndSortedRecords[0]
+    })
+  }, [filteredAndSortedRecords])
 
   const handleRefresh = useCallback(async () => {
     try {
@@ -264,6 +292,11 @@ export default function HistoryPage() {
     }
   }
 
+  const handleOpenExternalLink = (url?: string) => {
+    if (!url) return
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const handleRetryTask = (record: HistoryRecord) => {
     if (record.type === 'single') {
       const task = record.task as ConversionTask
@@ -273,7 +306,7 @@ export default function HistoryPage() {
   }
 
   const handleRecordClick = (record: HistoryRecord) => {
-    setSelectedRecord(record)
+    setSelectedRecord({ ...record, lastViewedAt: new Date() })
     HistoryManager.updateLastViewedAt(record.id, 30000)
   }
 
@@ -306,6 +339,16 @@ export default function HistoryPage() {
       HistoryManager.addTagToRecord(recordId, tagId)
     }
     loadData(selectedRecord?.id ?? undefined)
+  }
+
+  const handleSaveNote = () => {
+    if (!selectedRecord) return
+
+    const normalizedNote = noteDraft.trim()
+    HistoryManager.updateRecord(selectedRecord.id, {
+      notes: normalizedNote || undefined,
+    })
+    loadData(selectedRecord.id)
   }
 
   const handleClearFilters = () => {
@@ -470,6 +513,110 @@ export default function HistoryPage() {
     return null
   }
 
+  const getRecordTags = useCallback((record: HistoryRecord) => {
+    return (record.tags || [])
+      .map(tagId => tagMap.get(tagId))
+      .filter((tag): tag is Tag => Boolean(tag))
+  }, [tagMap])
+
+  const formatDateTime = (value: Date | string) => {
+    return new Date(value).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  const formatRelativeTime = (value: Date | string) => {
+    const timestamp = new Date(value).getTime()
+    const diffMs = Date.now() - timestamp
+    const diffMinutes = Math.floor(diffMs / 60000)
+
+    if (diffMinutes < 1) return '刚刚'
+    if (diffMinutes < 60) return `${diffMinutes} 分钟前`
+
+    const diffHours = Math.floor(diffMinutes / 60)
+    if (diffHours < 24) return `${diffHours} 小时前`
+
+    const diffDays = Math.floor(diffHours / 24)
+    if (diffDays < 7) return `${diffDays} 天前`
+
+    return formatDateTime(value)
+  }
+
+  const formatDuration = (duration?: number) => {
+    if (!duration || duration <= 0) return '未知'
+
+    const totalSeconds = Math.floor(duration)
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+    }
+
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`
+  }
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return '未知'
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`
+    }
+
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  const activeFilterBadges = useMemo(() => {
+    const items: Array<{ key: string; label: string; onRemove: () => void }> = []
+
+    if (searchTerm.trim()) {
+      items.push({
+        key: 'search',
+        label: `搜索: ${searchTerm.trim()}`,
+        onRemove: () => setSearchTerm(''),
+      })
+    }
+
+    if (filterType !== 'all') {
+      items.push({
+        key: 'type',
+        label: filterType === 'single' ? '单链接' : '批量任务',
+        onRemove: () => setFilterType('all'),
+      })
+    }
+
+    if (filterStatus !== 'all') {
+      items.push({
+        key: 'status',
+        label: `状态: ${formatStatus(filterStatus)}`,
+        onRemove: () => setFilterStatus('all'),
+      })
+    }
+
+    if (showFavoritesOnly) {
+      items.push({
+        key: 'favorites',
+        label: '仅收藏',
+        onRemove: () => setShowFavoritesOnly(false),
+      })
+    }
+
+    selectedTags.forEach(tagId => {
+      const tag = tagMap.get(tagId)
+      if (!tag) return
+      items.push({
+        key: `tag-${tagId}`,
+        label: `标签: ${tag.name}`,
+        onRemove: () => setSelectedTags(prev => prev.filter(id => id !== tagId)),
+      })
+    })
+
+    return items
+  }, [filterStatus, filterType, searchTerm, selectedTags, showFavoritesOnly, tagMap])
+
   const highlightText = (text: string | undefined, className?: string): ReactNode => {
     const source = String(text ?? '')
     const keyword = deferredSearchTerm.trim()
@@ -503,7 +650,9 @@ export default function HistoryPage() {
     const isSelected = selectedRecord?.id === record.id
     const isChecked = selectedRecordIdSet.has(record.id)
     const thumbnail = getRecordThumbnail(record)
-    const recordTags = tags.filter(t => record.tags?.includes(t.id))
+    const recordTags = getRecordTags(record)
+    const parsedInfo = task.parsedVideoInfo
+    const mediaLabel = parsedInfo ? getMediaPreviewLabel(parsedInfo) : (record.type === 'batch' ? '批量任务' : '单链接')
 
     return (
       <div
@@ -515,11 +664,11 @@ export default function HistoryPage() {
             handleRecordClick(record)
           }
         }}
-        className={`p-4 border-b cursor-pointer hover:bg-accent/50 transition-colors ${
-          isSelected ? 'bg-accent' : ''
+        className={`border-b cursor-pointer transition-colors ${
+          isSelected ? 'bg-emerald-50/80 dark:bg-emerald-950/20' : 'hover:bg-accent/40'
         }`}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 p-4">
           {batchSelectMode && (
             <input
               type="checkbox"
@@ -547,13 +696,16 @@ export default function HistoryPage() {
 
           {/* 内容 */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-medium truncate">{highlightText(getRecordTitle(record))}</h3>
+                <div className="mb-1 flex items-center gap-2 flex-wrap">
+                  <h3 className="font-medium leading-5">{highlightText(getRecordTitle(record), 'line-clamp-1')}</h3>
                   {record.isFavorite && (
                     <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 flex-shrink-0" />
                   )}
+                  <Badge variant="outline" className="text-[11px]">
+                    {mediaLabel}
+                  </Badge>
                 </div>
 
                 {record.type === 'single' && (
@@ -576,7 +728,7 @@ export default function HistoryPage() {
             </div>
 
             {/* 标签和日期 */}
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
               {recordTags.map(tag => (
                 <Badge
                   key={tag.id}
@@ -587,7 +739,10 @@ export default function HistoryPage() {
                 </Badge>
               ))}
               <span className="text-xs text-muted-foreground">
-                {new Date(record.createdAt).toLocaleString()}
+                {formatRelativeTime(record.createdAt)}
+              </span>
+              <span className="text-xs text-muted-foreground/70">
+                {formatDateTime(record.createdAt)}
               </span>
             </div>
           </div>
@@ -599,9 +754,12 @@ export default function HistoryPage() {
   // 渲染网格项
   const renderGridItem = (record: HistoryRecord) => {
     const task = record.task as any
+    const isSelected = selectedRecord?.id === record.id
     const isChecked = selectedRecordIdSet.has(record.id)
     const thumbnail = getRecordThumbnail(record)
-    const recordTags = tags.filter(t => record.tags?.includes(t.id))
+    const recordTags = getRecordTags(record)
+    const parsedInfo = task.parsedVideoInfo
+    const mediaLabel = parsedInfo ? getMediaPreviewLabel(parsedInfo) : (record.type === 'batch' ? '批量任务' : '单链接')
 
     return (
       <Card
@@ -613,7 +771,9 @@ export default function HistoryPage() {
             handleRecordClick(record)
           }
         }}
-        className="cursor-pointer hover:shadow-lg transition-all hover:-translate-y-1"
+        className={`cursor-pointer transition-all hover:-translate-y-1 hover:shadow-lg ${
+          isSelected ? 'ring-2 ring-emerald-400 border-emerald-300 shadow-lg' : ''
+        }`}
       >
         <CardContent className="p-0">
           {/* 缩略图 */}
@@ -659,7 +819,12 @@ export default function HistoryPage() {
 
           {/* 信息 */}
           <div className="p-4">
-            <h3 className="font-medium truncate mb-2">{highlightText(getRecordTitle(record))}</h3>
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <h3 className="font-medium line-clamp-2">{highlightText(getRecordTitle(record))}</h3>
+              <Badge variant="outline" className="text-[11px] flex-shrink-0">
+                {mediaLabel}
+              </Badge>
+            </div>
 
             {task.parsedVideoInfo?.author && (
               <p className="text-xs text-muted-foreground mb-2">
@@ -687,12 +852,78 @@ export default function HistoryPage() {
               </div>
             )}
 
-            <p className="text-xs text-muted-foreground">
-              {new Date(record.createdAt).toLocaleString()}
-            </p>
+            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>{formatRelativeTime(record.createdAt)}</span>
+              <span>{formatDateTime(record.createdAt)}</span>
+            </div>
+            {!batchSelectMode && isSelected && (
+              <div className="mt-3 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                当前已选中，详情已同步更新
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
+    )
+  }
+
+  const renderOverviewStat = (
+    label: string,
+    value: string | number,
+    accentClass = 'text-foreground'
+  ) => (
+    <div className="rounded-2xl border border-border/70 bg-background/80 px-4 py-3">
+      <div className={`text-xl font-semibold ${accentClass}`}>{value}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{label}</div>
+    </div>
+  )
+
+  const renderDetailStat = (
+    label: string,
+    value: string,
+    helper?: string,
+    accentClass = 'text-foreground'
+  ) => (
+    <div className="rounded-2xl border border-border/70 bg-background/80 px-4 py-3">
+      <div className={`text-sm font-semibold ${accentClass}`}>{value}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{label}</div>
+      {helper ? (
+        <div className="mt-2 text-[11px] leading-5 text-muted-foreground/80">
+          {helper}
+        </div>
+      ) : null}
+    </div>
+  )
+
+  const renderSelectedContext = () => {
+    if (!selectedRecord) {
+      return (
+        <div className="rounded-2xl border border-dashed border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+          当前未选中记录。可从左侧列表或下方网格选择一条，右侧会显示预览和详情。
+        </div>
+      )
+    }
+
+    const task = selectedRecord.task as any
+    const parsedInfo = task.parsedVideoInfo
+    const mediaLabel = parsedInfo ? getMediaPreviewLabel(parsedInfo) : (selectedRecord.type === 'batch' ? '批量任务' : '单链接')
+
+    return (
+      <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/70 px-4 py-3 dark:border-emerald-900 dark:bg-emerald-950/20">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
+            {selectedRecord.type === 'single' ? '单链接记录' : '批量任务'}
+          </Badge>
+          <Badge variant="outline">{mediaLabel}</Badge>
+          <Badge className={getStatusBadgeColor(task.status)} variant="outline">
+            {formatStatus(task.status)}
+          </Badge>
+          <span className="text-sm text-muted-foreground">{formatRelativeTime(selectedRecord.createdAt)}</span>
+        </div>
+        <div className="mt-2 text-sm font-medium line-clamp-1">
+          {getRecordTitle(selectedRecord)}
+        </div>
+      </div>
     )
   }
 
@@ -710,8 +941,93 @@ export default function HistoryPage() {
     }
 
     const task = selectedRecord.task as any
-    const recordTags = tags.filter(t => selectedRecord.tags?.includes(t.id))
+    const recordTags = getRecordTags(selectedRecord)
     const parsedInfo = task.parsedVideoInfo
+    const mediaLabel = parsedInfo ? getMediaPreviewLabel(parsedInfo) : (selectedRecord.type === 'batch' ? '批量任务' : '单链接')
+    const mediaStageHeightClass = parsedInfo
+      ? getMediaStageHeightClass(parsedInfo)
+      : 'h-[280px] sm:h-[320px] lg:h-[360px]'
+    const lastViewedLabel = selectedRecord.lastViewedAt
+      ? formatDateTime(selectedRecord.lastViewedAt)
+      : '未记录'
+    const lastViewedHelper = selectedRecord.lastViewedAt
+      ? formatRelativeTime(selectedRecord.lastViewedAt)
+      : '打开记录后会自动更新时间'
+    const noteChanged = noteDraft.trim() !== (selectedRecord.notes?.trim() || '')
+    const sourceUrl = selectedRecord.type === 'single' ? task.videoUrl : task.sourceUrl
+    const directMediaUrl = parsedInfo?.url
+    const isAnimatedImage = parsedInfo ? isAnimatedImageMedia(parsedInfo) : false
+    const previewHint = isAnimatedImage
+      ? '动图将保持固定舞台展示，避免切换播放状态时布局抖动。'
+      : parsedInfo?.mediaType === MediaType.VIDEO
+        ? '视频区域已固定高度，点击播放后不会再挤压详情布局。'
+        : '图集区域保持固定预览舞台，方便连续切换记录查看。'
+    const uploadFilePath = (() => {
+      if (!task.uploadResult?.filePath) return ''
+      try {
+        return decodeURIComponent(task.uploadResult.filePath)
+      } catch {
+        return task.uploadResult.filePath
+      }
+    })()
+    const summaryMetrics: Array<{ label: string; value: string; helper?: string; accentClass?: string }> = [
+      {
+        label: '状态',
+        value: formatStatus(task.status),
+        helper: selectedRecord.type === 'single' ? '单条解析/上传任务' : '批量解析任务',
+        accentClass: task.status === TaskStatus.SUCCESS
+          ? 'text-emerald-600'
+          : task.status === TaskStatus.FAILED
+            ? 'text-red-600'
+            : 'text-foreground',
+      },
+      {
+        label: '媒体类型',
+        value: mediaLabel,
+        helper: parsedInfo?.author ? `作者：${parsedInfo.author}` : undefined,
+      },
+      {
+        label: '创建时间',
+        value: formatDateTime(selectedRecord.createdAt),
+        helper: formatRelativeTime(selectedRecord.createdAt),
+      },
+      {
+        label: '完成时间',
+        value: task.completedAt ? formatDateTime(task.completedAt) : '未完成',
+        helper: task.completedAt ? formatRelativeTime(task.completedAt) : '任务仍在处理中或提前结束',
+      },
+      {
+        label: '最近查看',
+        value: lastViewedLabel,
+        helper: lastViewedHelper,
+      },
+    ]
+
+    if (selectedRecord.type === 'single' && parsedInfo?.duration) {
+      summaryMetrics.push({
+        label: '内容时长',
+        value: formatDuration(parsedInfo.duration),
+        helper: parsedInfo.fileSize ? `文件大小：${formatFileSize(parsedInfo.fileSize)}` : undefined,
+      })
+    } else if (parsedInfo?.mediaType === MediaType.IMAGE_ALBUM) {
+      summaryMetrics.push({
+        label: '图片数量',
+        value: `${parsedInfo.imageCount || parsedInfo.images?.length || 0} 张`,
+        helper: parsedInfo.fileSize ? `内容大小：${formatFileSize(parsedInfo.fileSize)}` : '图集记录支持轮播查看',
+      })
+    } else if (selectedRecord.type === 'batch') {
+      summaryMetrics.push({
+        label: '批量进度',
+        value: `${task.completedTasks || 0} / ${task.totalTasks || 0}`,
+        helper: '用于快速确认整批任务完成情况',
+      })
+    } else {
+      summaryMetrics.push({
+        label: '内容摘要',
+        value: parsedInfo?.fileSize ? formatFileSize(parsedInfo.fileSize) : '等待更多媒体元信息',
+        helper: '记录支持标签、备注和重新进入解析流程',
+      })
+    }
 
     return (
       <div className="h-full overflow-y-auto p-6">
@@ -734,8 +1050,9 @@ export default function HistoryPage() {
               size="sm"
               variant="ghost"
               onClick={() => setShowDetailDialog(true)}
+              title="查看完整记录 JSON"
             >
-              <Maximize2 className="w-4 h-4" />
+              <FileJson className="w-4 h-4" />
             </Button>
             <Button
               size="sm"
@@ -750,23 +1067,55 @@ export default function HistoryPage() {
 
         {/* 媒体预览 */}
         {parsedInfo && (
-          <div className="mb-6">
+          <div className="mb-6 rounded-2xl border border-border/70 bg-background/80 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{mediaLabel}</Badge>
+                  {isAnimatedImage && (
+                    <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
+                      动图直出
+                    </Badge>
+                  )}
+                  <Badge className={getStatusBadgeColor(task.status)} variant="outline">
+                    <div className="flex items-center gap-1">
+                      {getStatusIcon(task.status)}
+                      <span>{formatStatus(task.status)}</span>
+                    </div>
+                  </Badge>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {previewHint}
+                </p>
+              </div>
+              {selectedRecord.type === 'single' && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleRetryTask(selectedRecord)}
+                >
+                  <RotateCcw className="w-3 h-3 mr-1" />
+                  重新解析
+                </Button>
+              )}
+            </div>
+
             {parsedInfo.mediaType === MediaType.VIDEO && parsedInfo.url && (
-              <div className="space-y-2">
-                <div className="aspect-video rounded-lg overflow-hidden border border-border">
-                  {/* {{ AURA: Modify - 添加key属性确保视频URL改变时组件重新渲染 }} */}
+              <div className="space-y-3">
+                <div className={`rounded-2xl overflow-hidden border border-border bg-slate-950 ${mediaStageHeightClass}`}>
                   <VideoPreview
                     key={`${selectedRecord.id}-${parsedInfo.url}`}
                     videoUrl={parsedInfo.url}
                     thumbnail={parsedInfo.cover || parsedInfo.thumbnail}
                     title={parsedInfo.title}
+                    format={parsedInfo.format}
                     className="w-full h-full"
                   />
                 </div>
                 {selectedRecord.type === 'single' && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">
-                      视频无法播放？
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-xs dark:border-amber-900 dark:bg-amber-950/20">
+                    <span className="text-amber-700 dark:text-amber-300">
+                      资源直链可能有时效性，若预览失败可重新解析获取最新链接。
                     </span>
                     <Button
                       size="sm"
@@ -783,36 +1132,34 @@ export default function HistoryPage() {
             )}
 
             {parsedInfo.mediaType === MediaType.IMAGE_ALBUM && parsedInfo.images && (
-              <div className="rounded-lg overflow-hidden border border-border">
+              <div className={`rounded-2xl overflow-hidden border border-border bg-muted ${mediaStageHeightClass}`}>
                 <ImageCarousel
                   images={parsedInfo.images}
                   title={parsedInfo.title}
-                  className="w-full"
+                  className="h-full w-full"
                 />
               </div>
             )}
 
             {!parsedInfo.url && !parsedInfo.images && parsedInfo.cover && (
-              <div className="aspect-video bg-muted rounded-lg overflow-hidden border border-border">
+              <div className={`bg-muted rounded-2xl overflow-hidden border border-border ${mediaStageHeightClass}`}>
                 <img src={parsedInfo.cover} alt="封面" className="w-full h-full object-cover" />
               </div>
             )}
           </div>
         )}
 
-        {/* 状态 */}
-        <div className="mb-6">
-          <Badge className={getStatusBadgeColor(task.status)} variant="outline">
-            <div className="flex items-center gap-1">
-              {getStatusIcon(task.status)}
-              <span>{formatStatus(task.status)}</span>
+        <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {summaryMetrics.map(item => (
+            <div key={item.label}>
+              {renderDetailStat(item.label, item.value, item.helper, item.accentClass)}
             </div>
-          </Badge>
+          ))}
         </div>
 
         {/* 标签管理 */}
-        <div className="mb-6">
-          <h3 className="text-sm font-medium mb-2">标签</h3>
+        <div className="mb-6 rounded-2xl border border-border/70 bg-background/80 p-4">
+          <h3 className="text-sm font-medium mb-3">标签</h3>
           <div className="flex flex-wrap gap-2">
             {tags.map(tag => {
               const isActive = recordTags.some(t => t.id === tag.id)
@@ -836,121 +1183,185 @@ export default function HistoryPage() {
 
         {/* 详细信息 */}
         <div className="space-y-4">
-          <div>
-            <h3 className="text-sm font-medium mb-2">基本信息</h3>
-            <div className="space-y-2 text-sm">
+          <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+            <h3 className="text-sm font-medium mb-3">基本信息</h3>
+            <div className="space-y-3 text-sm">
               {parsedInfo?.author && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">作者:</span>
-                  <span>{parsedInfo.author}</span>
+                  <span className="text-right">{parsedInfo.author}</span>
                 </div>
               )}
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-4">
                 <span className="text-muted-foreground">创建时间:</span>
-                <span>{new Date(selectedRecord.createdAt).toLocaleString()}</span>
+                <span className="text-right">{formatDateTime(selectedRecord.createdAt)}</span>
               </div>
               {task.completedAt && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">完成时间:</span>
-                  <span>{new Date(task.completedAt).toLocaleString()}</span>
+                  <span className="text-right">{formatDateTime(task.completedAt)}</span>
                 </div>
               )}
               {parsedInfo?.duration && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">时长:</span>
-                  <span>{Math.floor(parsedInfo.duration / 60)}:{(parsedInfo.duration % 60).toString().padStart(2, '0')}</span>
+                  <span className="text-right">{formatDuration(parsedInfo.duration)}</span>
+                </div>
+              )}
+              {parsedInfo?.fileSize && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">文件大小:</span>
+                  <span className="text-right">{formatFileSize(parsedInfo.fileSize)}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {selectedRecord.type === 'single' && (
-            <div>
-              <h3 className="text-sm font-medium mb-2">视频链接</h3>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={task.videoUrl}
-                  readOnly
-                  className="flex-1 text-sm"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCopyUrl(task.videoUrl)}
-                  title="复制链接"
-                >
-                  <Copy className="w-4 h-4" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleRetryTask(selectedRecord)}
-                  title="重新解析视频"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                </Button>
-              </div>
-              {task.status === TaskStatus.SUCCESS && parsedInfo?.url && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
-                  提示：视频直链可能有时效性，如无法播放请点击重新解析
+          <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Link2 className="w-4 h-4 text-emerald-600" />
+              <h3 className="text-sm font-medium">链接与入口</h3>
+            </div>
+            <div className="space-y-3">
+              {sourceUrl && (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">
+                    {selectedRecord.type === 'single' ? '原始链接' : '用户主页链接'}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={sourceUrl}
+                      readOnly
+                      className="flex-1 text-sm"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCopyUrl(sourceUrl)}
+                      title="复制链接"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleOpenExternalLink(sourceUrl)}
+                      title="新窗口打开"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {directMediaUrl && (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">
+                    可用媒体直链
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={directMediaUrl}
+                      readOnly
+                      className="flex-1 text-sm"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCopyUrl(directMediaUrl)}
+                      title="复制媒体链接"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleOpenExternalLink(directMediaUrl)}
+                      title="打开媒体链接"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {selectedRecord.type === 'single' && task.status === TaskStatus.SUCCESS && parsedInfo?.url && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  提示：解析得到的视频直链通常存在时效，失效后请重新解析。
                 </p>
               )}
             </div>
-          )}
+          </div>
 
-          {/* {{ AURA: Add - 批量任务信息显示 }} */}
           {selectedRecord.type === 'batch' && (
-            <div>
-              <h3 className="text-sm font-medium mb-2">批量任务信息</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <h3 className="text-sm font-medium mb-3">批量任务信息</h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">任务总数:</span>
-                  <span>{task.totalTasks} 个视频</span>
+                  <span className="text-right">{task.totalTasks || 0} 个视频</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">成功数量:</span>
-                  <span className="text-green-600">{task.completedTasks} 个</span>
+                  <span className="text-right text-green-600">{task.completedTasks || 0} 个</span>
                 </div>
-                {task.sourceUrl && (
-                  <div className="mt-3">
-                    <span className="text-muted-foreground block mb-1">用户主页链接:</span>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={task.sourceUrl}
-                        readOnly
-                        className="flex-1 text-sm"
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleCopyUrl(task.sourceUrl)}
-                      >
-                        <Copy className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           )}
 
-          {task.uploadResult?.filePath && (
-            <div>
-              <h3 className="text-sm font-medium mb-2">文件路径</h3>
-              <p className="text-sm text-green-600 dark:text-green-400 break-all">
-                {decodeURIComponent(task.uploadResult.filePath)}
-              </p>
+          {uploadFilePath && (
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-emerald-600" />
+                <h3 className="text-sm font-medium">上传结果路径</h3>
+              </div>
+              <div className="space-y-3">
+                <p className="text-sm text-green-600 dark:text-green-400 break-all">
+                  {uploadFilePath}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopyUrl(uploadFilePath)}
+                  >
+                    <Copy className="w-4 h-4 mr-1" />
+                    复制路径
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 
           {task.error && (
-            <div>
+            <div className="rounded-2xl border border-red-200/70 bg-red-50/70 p-4 dark:border-red-900 dark:bg-red-950/20">
               <h3 className="text-sm font-medium mb-2 text-red-600">错误信息</h3>
               <p className="text-sm text-red-600 dark:text-red-400">
                 {task.error}
               </p>
             </div>
           )}
+
+          <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <StickyNote className="w-4 h-4 text-emerald-600" />
+              <h3 className="text-sm font-medium">备注</h3>
+            </div>
+            <Textarea
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              placeholder="补充这条记录的用途、问题现象、重试结果或后续待办。"
+              className="min-h-[120px]"
+            />
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                备注会随历史记录一起保存，适合记录复盘信息和问题上下文。
+              </p>
+              <Button size="sm" onClick={handleSaveNote} disabled={!noteChanged}>
+                保存备注
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -965,9 +1376,14 @@ export default function HistoryPage() {
             <div className="p-2 bg-gradient-to-br from-emerald-500/10 to-emerald-600/10 rounded-lg">
               <History className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
             </div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">
-              历史记录
-            </h1>
+            <div>
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">
+                历史记录
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                管理解析结果、回看失败原因、快速重新进入转存流程。
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1012,9 +1428,32 @@ export default function HistoryPage() {
           </Card>
         )}
 
+        {stats && !showStats && (
+          <div className="mb-6">
+            <Button variant="outline" size="sm" onClick={() => setShowStats(true)}>
+              <BarChart3 className="w-4 h-4 mr-2" />
+              展开统计概览
+            </Button>
+          </div>
+        )}
+
+        {stats && (
+          <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
+            {renderOverviewStat('总记录', stats.totalRecords)}
+            {renderOverviewStat('成功率', `${stats.successRate}%`, 'text-emerald-600')}
+            {renderOverviewStat('成功', stats.totalSuccess, 'text-emerald-600')}
+            {renderOverviewStat('失败', stats.totalFailed, 'text-red-600')}
+            {renderOverviewStat('收藏', stats.favoriteCount, 'text-amber-600')}
+          </div>
+        )}
+
         {/* 工具栏 */}
         <Card className="mb-6 border-2">
           <CardContent className="p-4">
+            <div className="mb-4">
+              {renderSelectedContext()}
+            </div>
+
             {/* 搜索和视图切换 */}
             <div className="flex flex-col md:flex-row gap-3 mb-4">
               <div className="flex-1 relative">
@@ -1134,9 +1573,27 @@ export default function HistoryPage() {
               </div>
             )}
 
+            {activeFilterBadges.length > 0 && (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {activeFilterBadges.map(item => (
+                  <Badge key={item.key} variant="outline" className="gap-1 px-2 py-1 text-xs">
+                    {item.label}
+                    <button
+                      type="button"
+                      onClick={item.onRemove}
+                      className="ml-1 rounded-sm text-muted-foreground hover:text-foreground"
+                      aria-label={`移除筛选 ${item.label}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+
             {/* 操作按钮 */}
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span>
                   显示 {filteredAndSortedRecords.length} / {records.length} 条记录
                 </span>
@@ -1148,7 +1605,7 @@ export default function HistoryPage() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button variant={batchSelectMode ? 'default' : 'outline'} size="sm" onClick={handleToggleBatchSelect}>
                   {batchSelectMode ? '退出多选' : '批量选择'}
                 </Button>
@@ -1172,12 +1629,6 @@ export default function HistoryPage() {
                 )}
 
                 <Dialog open={showTagDialog} onOpenChange={setShowTagDialog}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <TagIcon className="w-4 h-4 mr-1" />
-                      管理标签
-                    </Button>
-                  </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>管理标签</DialogTitle>
@@ -1240,29 +1691,45 @@ export default function HistoryPage() {
                   </DialogContent>
                 </Dialog>
 
-                <Button variant="outline" size="sm" onClick={handleExportCSV}>
-                  <Download className="w-4 h-4 mr-1" />
-                  CSV
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleExportJSON}>
-                  <Download className="w-4 h-4 mr-1" />
-                  JSON
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRefresh}
-                  disabled={refreshingCloud || authLoading}
-                >
-                  <RefreshCw className="w-4 h-4 mr-1" />
-                  {refreshingCloud ? '云端同步中...' : '刷新'}
-                </Button>
-                {records.length > 0 && (
-                  <Button variant="destructive" size="sm" onClick={handleClearHistory}>
-                    <Trash2 className="w-4 h-4 mr-1" />
-                    清空
-                  </Button>
-                )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <MoreHorizontal className="w-4 h-4 mr-1" />
+                      更多操作
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>历史记录工具</DropdownMenuLabel>
+                    <DropdownMenuItem onClick={() => setShowTagDialog(true)}>
+                      <TagIcon className="w-4 h-4 mr-2" />
+                      管理标签
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportCSV}>
+                      <Download className="w-4 h-4 mr-2" />
+                      导出 CSV
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportJSON}>
+                      <FileJson className="w-4 h-4 mr-2" />
+                      导出 JSON
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleRefresh}
+                      disabled={refreshingCloud || authLoading}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      {refreshingCloud ? '云端同步中...' : '刷新记录'}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={handleClearHistory}
+                      disabled={records.length === 0}
+                      className="text-red-600 focus:text-red-600"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      清空历史
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           </CardContent>
@@ -1292,6 +1759,12 @@ export default function HistoryPage() {
             {/* 左侧列表 */}
             <Card className="border-2 shadow-lg h-[calc(100vh-250px)] min-h-[600px]">
               <CardContent className="p-0 h-full flex flex-col">
+                <div className="border-b px-4 py-3">
+                  <div className="text-sm font-medium">记录列表</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    选择记录后，右侧会同步更新预览和详情。
+                  </div>
+                </div>
                 <div className="flex-1 overflow-y-auto">
                   {paginatedRecords.map(record => renderListItem(record))}
                 </div>
@@ -1333,6 +1806,9 @@ export default function HistoryPage() {
         ) : (
           /* 网格布局 */
           <div>
+            <div className="mb-4 rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+              网格视图更适合快速扫缩略图和封面。点击任意卡片即可在当前页锁定选中状态。
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {paginatedRecords.map(record => renderGridItem(record))}
             </div>
