@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PreviewParseResponse, VideoParserConfig, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
-import { extractFirstUrlFromText } from '@/lib/url/extract'
+import { PreviewParseResponse, ParsedVideoInfo, MediaType, ImageInfo } from '@/types'
 import { requireRouteAuth } from '@/lib/api/route-auth'
 import {
   readResponseTextLimited,
-  resolveAndValidateHttpUrl,
-  sanitizeCustomHeaders,
 } from '@/lib/api/parser-security'
+import { prepareCustomParserRequest } from '@/lib/api/custom-parser-request'
 import {
-  normalizeDouyinInputUrl as normalizeDouyinInputUrlShared,
-  resolveShareUrlIfNeeded as resolveShareUrlIfNeededShared,
-} from '@/lib/api/douyin-parser'
-
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+  extractAuthorProfile,
+  extractDescription,
+  extractMediaPayload,
+  extractTime,
+  safeParseJsonBody,
+} from '@/lib/api/custom-parser-response'
 
 export async function POST(request: NextRequest) {
   const auth = await requireRouteAuth(request)
@@ -31,82 +29,20 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    const cleanedVideoUrl = String(videoUrl || '').trim()
-    const extractedUrl = extractFirstUrlFromText(cleanedVideoUrl) || cleanedVideoUrl
-    const initialNormalizedUrl = normalizeDouyinInputUrlShared(extractedUrl)
-    const resolvedUrl = await resolveShareUrlIfNeededShared(initialNormalizedUrl, 10000)
-    const normalizedVideoUrl = normalizeDouyinInputUrlShared(resolvedUrl)
-
-    // {{ AURA: Modify - 重构请求构建逻辑以支持自定义参数 }}
-    // 构建请求到第三方解析API
-    const validatedApiUrl = resolveAndValidateHttpUrl(String(parserConfig.apiUrl || '').trim(), request.url, {
-      allowRelativeApi: true,
+    const prepared = await prepareCustomParserRequest({
+      requestUrl: request.url,
+      videoUrl,
+      parserConfig,
     })
-    if (!validatedApiUrl.ok) {
+    if (!prepared.ok) {
       return NextResponse.json({
         success: false,
-        error: validatedApiUrl.error
+        error: prepared.error
       }, { status: 400 })
     }
-    const upstreamUrl = validatedApiUrl.url
-
-    let finalApiUrl = upstreamUrl.toString();
-    let method = parserConfig.requestMethod || 'POST'; // 使用配置的请求方法
-    const headers = sanitizeCustomHeaders(parserConfig.customHeaders, {
-      'User-Agent': DEFAULT_USER_AGENT
-    })
-
-    // 根据请求方法构建最终请求
-    if (method === 'GET') {
-      // 构建GET请求的查询参数
-      // {{ AURA: Fix - 修复GET请求URL重复参数的问题 }}
-      const url = new URL(finalApiUrl, request.url);
-      
-      // 添加视频URL参数
-      const urlParamName = parserConfig.urlParamName || 'url';
-      // {{ AURA: Fix - 使用 .set 覆盖可能已存在的URL参数，而不是 .append }}
-      url.searchParams.set(urlParamName, normalizedVideoUrl);
-      
-      // 添加自定义查询参数
-      const customQueryParams =
-        parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
-          ? parserConfig.customQueryParams
-          : {}
-      if (customQueryParams) {
-        Object.entries(customQueryParams).forEach(([key, value]) => {
-          url.searchParams.append(key, String(value));
-        });
-      }
-      
-      finalApiUrl = url.toString();
-    } else {
-      // POST请求设置Content-Type
-      headers['Content-Type'] = 'application/json';
-    }
-
-    // 添加API密钥
-    if (parserConfig.apiKey) {
-      headers['Authorization'] = `Bearer ${parserConfig.apiKey}`
-      headers['X-API-Key'] = parserConfig.apiKey
-    }
-
-    // {{ AURA: Fix - 修复POST请求自定义Body无效的问题 }}
-    let body: any = {};
-    if (method === 'POST') {
-      const urlParamName = parserConfig.urlParamName || 'url';
-      body[urlParamName] = normalizedVideoUrl;
-      if (parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object') {
-        Object.assign(body, parserConfig.customBodyParams);
-      }
-    }
-
-    const requestOptions: RequestInit = {
-      method,
-      headers,
-      ...(method === 'POST' && {
-        body: JSON.stringify(body)
-      })
-    };
+    const normalizedVideoUrl = prepared.value.normalizedVideoUrl
+    const finalApiUrl = prepared.value.finalApiUrl
+    const requestOptions = prepared.value.requestOptions
 
     console.log('[预览解析] 发送第三方解析请求')
 
@@ -169,10 +105,13 @@ export async function POST(request: NextRequest) {
     let parsedInfo: ParsedVideoInfo
     
     try {
-      if (finalApiUrl.includes('jxcxin') || parserConfig.name.includes('jxcxin')) {
-        if (data.code === 200 || data.code === 0) {
-          const jxData = data.data || {};
-          const authorInfo = extractAuthor(jxData);
+      const dataRecord = typeof data === 'object' && data ? data as Record<string, any> : {}
+      const parserNameForDetection = parserConfig.name || prepared.value.parserName
+
+      if (finalApiUrl.includes('jxcxin') || parserNameForDetection.includes('jxcxin')) {
+        if (dataRecord.code === 200 || dataRecord.code === 0) {
+          const jxData = dataRecord.data || {};
+          const authorInfo = extractAuthorProfile(jxData);
           
           if (jxData.url && Array.isArray(jxData.url)) {
             const images = jxData.url.map((url: string, index: number) => ({
@@ -222,18 +161,18 @@ export async function POST(request: NextRequest) {
           });
         } else {
           // {{ AURA: Modify - 改进jxcxin API的错误处理 }}
-          let errorMessage = data.msg || '解析失败';
-          if (data.code === 404) {
-            errorMessage = `解析失败：视频链接无效或已失效 (${data.msg || '404错误'})`;
-          } else if (data.code === 500) {
-            errorMessage = `解析失败：服务器内部错误 (${data.msg || '500错误'})`;
+          let errorMessage = dataRecord.msg || '解析失败';
+          if (dataRecord.code === 404) {
+            errorMessage = `解析失败：视频链接无效或已失效 (${dataRecord.msg || '404错误'})`;
+          } else if (dataRecord.code === 500) {
+            errorMessage = `解析失败：服务器内部错误 (${dataRecord.msg || '500错误'})`;
           } else {
-            errorMessage = `解析失败：${data.msg || '未知错误'} (错误代码: ${data.code})`;
+            errorMessage = `解析失败：${dataRecord.msg || '未知错误'} (错误代码: ${dataRecord.code})`;
           }
           
           console.error('[预览解析] jxcxin API返回错误:', {
-            code: data.code,
-            msg: data.msg,
+            code: dataRecord.code,
+            msg: dataRecord.msg,
             url: normalizedVideoUrl,
             fullResponse: data
           });
@@ -244,20 +183,20 @@ export async function POST(request: NextRequest) {
       
       // {{ AURA: Add - 添加对xiazaitool等API格式的错误处理 }}
       // 检查xiazaitool等API的错误格式
-      if (data.success === false && (data.status || data.message)) {
-        let errorMessage = data.message || '解析失败';
-        if (data.status === 500) {
-          errorMessage = `解析失败：${data.message || '服务器内部错误'}`;
-        } else if (data.status === 404) {
-          errorMessage = `解析失败：${data.message || '资源未找到'}`;
-        } else if (data.status) {
-          errorMessage = `解析失败：${data.message || '未知错误'} (状态码: ${data.status})`;
+      if (dataRecord.success === false && (dataRecord.status || dataRecord.message)) {
+        let errorMessage = dataRecord.message || '解析失败';
+        if (dataRecord.status === 500) {
+          errorMessage = `解析失败：${dataRecord.message || '服务器内部错误'}`;
+        } else if (dataRecord.status === 404) {
+          errorMessage = `解析失败：${dataRecord.message || '资源未找到'}`;
+        } else if (dataRecord.status) {
+          errorMessage = `解析失败：${dataRecord.message || '未知错误'} (状态码: ${dataRecord.status})`;
         }
         
         console.error('[预览解析] xiazaitool类API返回错误:', {
-          status: data.status,
-          success: data.success,
-          message: data.message,
+          status: dataRecord.status,
+          success: dataRecord.success,
+          message: dataRecord.message,
           url: normalizedVideoUrl,
           fullResponse: data
         });
@@ -265,53 +204,13 @@ export async function POST(request: NextRequest) {
         throw new Error(errorMessage);
       }
       
-      if (data.success === true || data.code === 200 || data.code === 0) {
-        const dataSource = data.data || data.result || data
-        
-        let videoUrl = null
-        let images: ImageInfo[] = []
-        let detectedMediaType = MediaType.VIDEO
-
-        const mediaDetectionResult = detectMediaTypeAndExtractData(dataSource)
-        detectedMediaType = mediaDetectionResult.mediaType
-        
-        if (detectedMediaType === MediaType.VIDEO) {
-          videoUrl = mediaDetectionResult.videoUrl
-        } else if (detectedMediaType === MediaType.IMAGE_ALBUM) {
-          images = mediaDetectionResult.images || []
-        }
-        
-        if (!videoUrl && images.length === 0) {
-          const possibleUrlFields = ['url', 'download_url', 'play_url', 'downloadUrl', 'playUrl', 
-                                    'video_url', 'videoUrl', 'media_url', 'mediaUrl', 'mp4', 
-                                    'src', 'source', 'link', 'content', 'video', 'hd', 'sd', 'playAddr']
-          
-          for (const field of possibleUrlFields) {
-            if (dataSource[field] && typeof dataSource[field] === 'string' && dataSource[field].startsWith('http')) {
-              videoUrl = dataSource[field]
-              detectedMediaType = MediaType.VIDEO
-              break
-            }
-          }
-          
-          if (!videoUrl) {
-            for (const key in dataSource) {
-              if (typeof dataSource[key] === 'object' && dataSource[key]) {
-                for (const field of possibleUrlFields) {
-                  if (dataSource[key][field] && typeof dataSource[key][field] === 'string' && 
-                      dataSource[key][field].startsWith('http')) {
-                    videoUrl = dataSource[key][field]
-                    detectedMediaType = MediaType.VIDEO
-                    break
-                  }
-                }
-                if (videoUrl) break
-              }
-            }
-          }
-        }
-        
-        const authorInfo = extractAuthor(dataSource);
+      if (dataRecord.success === true || dataRecord.code === 200 || dataRecord.code === 0) {
+        const dataSource = dataRecord.data || dataRecord.result || data
+        const mediaDetectionResult = extractMediaPayload(dataSource)
+        const detectedMediaType = mediaDetectionResult.mediaType
+        const videoUrl = mediaDetectionResult.videoUrl || null
+        const images: ImageInfo[] = mediaDetectionResult.images || []
+        const authorInfo = extractAuthorProfile(dataSource);
 
         if (detectedMediaType === MediaType.VIDEO && videoUrl) {
           parsedInfo = {
@@ -345,7 +244,7 @@ export async function POST(request: NextRequest) {
           throw new Error('无法解析媒体内容：既没有视频URL也没有图片')
         }
       } else {
-        const errorMsg = data.message || data.error || data.msg || 
+        const errorMsg = dataRecord.message || dataRecord.error || dataRecord.msg || 
                         (typeof data === 'string' ? data : '解析失败，无法识别API返回格式')
         throw new Error(errorMsg)
       }
@@ -393,227 +292,4 @@ export async function POST(request: NextRequest) {
       error: error instanceof Error ? error.message : '解析过程中发生未知错误'
     }, { status: 500 })
   }
-}
-
-function normalizeDouyinInputUrl(input: string): string {
-  const url = String(input || '').trim()
-  if (!url) return ''
-
-  if (/^[0-9]{10,25}$/.test(url)) {
-    return `https://www.iesdouyin.com/share/video/${url}`
-  }
-
-  if (!/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(url)) {
-    return url
-  }
-
-  const awemeMatch = url.match(/\/video\/([0-9]{10,25})/i)
-  if (awemeMatch && awemeMatch[1]) {
-    return `https://www.iesdouyin.com/share/video/${awemeMatch[1]}`
-  }
-
-  return url
-}
-
-function shouldResolveShareUrl(url: string): boolean {
-  const source = String(url || '').trim()
-  if (!source) return false
-  if (!/^https?:\/\//i.test(source)) return false
-  return /^https?:\/\/v\.douyin\.com\//i.test(source)
-}
-
-async function resolveShareUrlIfNeeded(url: string, timeoutMs: number): Promise<string> {
-  if (!shouldResolveShareUrl(url)) {
-    return url
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: {
-        'User-Agent': DEFAULT_USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      signal: controller.signal
-    })
-    return response.url || url
-  } catch {
-    return url
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-function detectMediaTypeAndExtractData(dataSource: any): {
-  mediaType: MediaType,
-  videoUrl?: string,
-  images?: ImageInfo[]
-} {
-  const imageArrayFields = ['images', 'pics', 'pictures', 'photos', 'image_list', 'pic_list']
-  
-  for (const field of imageArrayFields) {
-    if (dataSource[field] && Array.isArray(dataSource[field]) && dataSource[field].length > 0) {
-      const images = dataSource[field].map((item: any, index: number) => {
-        let imageUrl = ''
-        
-        if (typeof item === 'string') {
-          imageUrl = item
-        } else if (typeof item === 'object' && item) {
-          const urlFields = ['url', 'src', 'image_url', 'pic_url', 'photo_url', 'link', 'href']
-          for (const urlField of urlFields) {
-            if (item[urlField] && typeof item[urlField] === 'string') {
-              imageUrl = item[urlField]
-              break
-            }
-          }
-        }
-        
-        if (imageUrl && imageUrl.startsWith('http')) {
-          return {
-            url: imageUrl,
-            filename: `image_${(index + 1).toString().padStart(3, '0')}.jpg`
-          } as ImageInfo
-        }
-        return null
-      }).filter((item): item is ImageInfo => item !== null)
-      
-      if (images.length > 0) {
-        return {
-          mediaType: MediaType.IMAGE_ALBUM,
-          images: images
-        }
-      }
-    }
-  }
-  
-  const videoUrlFields = ['url', 'video_url', 'videoUrl', 'play_url', 'playAddr', 'download_url', 'downloadUrl']
-  
-  for (const field of videoUrlFields) {
-    if (dataSource[field] && typeof dataSource[field] === 'string' && dataSource[field].startsWith('http')) {
-      return {
-        mediaType: MediaType.VIDEO,
-        videoUrl: dataSource[field]
-      }
-    }
-  }
-  
-  for (const key in dataSource) {
-    if (typeof dataSource[key] === 'object' && dataSource[key]) {
-      const nestedResult = detectMediaTypeAndExtractData(dataSource[key])
-      if (nestedResult.mediaType === MediaType.IMAGE_ALBUM && nestedResult.images?.length ||
-          nestedResult.mediaType === MediaType.VIDEO && nestedResult.videoUrl) {
-        return nestedResult
-      }
-    }
-  }
-  
-  return {
-    mediaType: MediaType.VIDEO
-  }
-}
-
-function safeParseJsonBody(body: string): any | null {
-  if (!body || !body.trim()) {
-    return null
-  }
-
-  try {
-    return JSON.parse(body)
-  } catch {
-    const start = body.indexOf('{')
-    const end = body.lastIndexOf('}')
-    if (start !== -1 && end !== -1 && end > start) {
-      try {
-        return JSON.parse(body.substring(start, end + 1))
-      } catch {
-        return null
-      }
-    }
-  }
-
-  return null
-}
-
-function extractAuthor(dataSource: any): { name?: string; avatar?: string; signature?: string } | undefined {
-  let result: { name?: string; avatar?: string; signature?: string } = {};
-
-  const authorObjectFields = ['author', 'creator', 'user', 'author_info', 'user_info'];
-  for (const field of authorObjectFields) {
-    if (typeof dataSource[field] === 'object' && dataSource[field]) {
-      const authorData = dataSource[field];
-      result.name = authorData.name || authorData.nickname || authorData.username || authorData.title;
-      result.avatar = authorData.avatar || authorData.avatar_url || authorData.icon || authorData.head_url;
-      result.signature = authorData.signature || authorData.sign || authorData.desc || authorData.description;
-      if (result.name) {
-        return result;
-      }
-    }
-  }
-
-  const nameFields = ['author', 'creator', 'user', 'username', 'nickname', 'name', 'author_name', 'user_name'];
-  for (const field of nameFields) {
-    if (typeof dataSource[field] === 'string' && !result.name) {
-      result.name = dataSource[field];
-      break;
-    }
-  }
-
-  const avatarFields = ['avatar', 'author_avatar', 'avatar_url', 'icon', 'head_url'];
-  for (const field of avatarFields) {
-    if (typeof dataSource[field] === 'string' && !result.avatar) {
-      result.avatar = dataSource[field];
-      break;
-    }
-  }
-
-  const signatureFields = ['signature', 'sign', 'desc', 'description', 'author_signature'];
-  for (const field of signatureFields) {
-    if (typeof dataSource[field] === 'string' && !result.signature) {
-      result.signature = dataSource[field];
-      break;
-    }
-  }
-  
-  if (Object.keys(result).length > 0) {
-    return result;
-  }
-
-  return undefined;
-}
-
-function extractDescription(dataSource: any, fallbackTitle?: string): string | undefined {
-  const descFields = ['description', 'desc', 'content', 'text', 'caption', 'summary', 'detail']
-  
-  for (const field of descFields) {
-    if (dataSource[field] && typeof dataSource[field] === 'string' && dataSource[field].trim()) {
-      return dataSource[field].trim()
-    }
-  }
-  
-  return fallbackTitle
-}
-
-function extractTime(dataSource: any): number | string | undefined {
-  const timeFields = ['time', 'timestamp', 'create_time', 'created_at', 'publish_time', 'release_time', 'date']
-  
-  for (const field of timeFields) {
-    if (dataSource[field]) {
-      const value = dataSource[field]
-      if (typeof value === 'number') {
-        return value < 10000000000 ? value * 1000 : value
-      }
-      if (typeof value === 'string') {
-        const timestamp = Date.parse(value)
-        if (!isNaN(timestamp)) {
-          return timestamp
-        }
-        return value
-      }
-    }
-  }
-  
-  return undefined
 }
