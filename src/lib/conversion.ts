@@ -7,7 +7,6 @@ import {
   WebDAVConfig, 
   ParsedVideoInfo, 
   MediaType, 
-  VideoParseResponse,
   PreviewParseResponse, 
   BatchInputMode, 
   ExtendedBatchTask, 
@@ -15,7 +14,6 @@ import {
   ParserCapability,
   SupportedPlatform,
   ParserAttemptResult,
-  ParseExecutionTrace
 } from '@/types'
 import { CleanupService } from './cleanup'
 import { FilenameSanitizer } from './filename-sanitizer'
@@ -30,38 +28,32 @@ import {
   recordParserAttempt,
   scoreParserHealth,
 } from './parser-health'
-import { getWebdavProxyEndpoint } from './runtime-endpoints'
+import {
+  extractErrorMessageFromResponse,
+  UploadCancelledError,
+  type UploadRuntimeControl,
+  uploadToWebDAV,
+} from './conversion-upload'
+import {
+  buildFallbackFailureMessage,
+  extractRealVideoUrl,
+  isValidVideoInputUrl,
+  parseVideoWithFallback,
+} from './conversion-parse'
+import {
+  type BatchRuntimeCallbacks,
+  convertBatchTask,
+  convertDouyinUserBatchTask,
+  convertSingleTask,
+} from './conversion-batch'
 
-export type BatchPoolStage = 'normal_batch' | 'douyin_upload'
-
-export type BatchPoolEvent =
-  | 'init'
-  | 'task_started'
-  | 'task_settled'
-  | 'scale_up'
-  | 'scale_down'
-
-export interface BatchPoolState {
-  stage: BatchPoolStage
-  event: BatchPoolEvent
-  currentConcurrency: number
-  maxConcurrency: number
-  inFlight: number
-  processed: number
-  total: number
-}
+export type { BatchPoolEvent, BatchPoolStage, BatchPoolState } from './conversion-batch'
 
 export class ConversionCancelledError extends Error {
   constructor(message = '任务已停止') {
     super(message)
     this.name = 'ConversionCancelledError'
   }
-}
-
-type BatchRuntimeCallbacks = {
-  onPoolState?: (state: BatchPoolState) => void
-  isCancelled?: () => boolean
-  getAbortSignal?: () => AbortSignal | undefined
 }
 
 export class ConversionService {
@@ -106,65 +98,24 @@ export class ConversionService {
     return Math.max(0, Math.floor(fromEnv))
   })()
 
-  private static async maybeDelayBetweenTasks() {
-    if (this.INTER_TASK_DELAY_MS <= 0) {
-      return
-    }
-    await new Promise(resolve => setTimeout(resolve, this.INTER_TASK_DELAY_MS))
-  }
-
-  private static isCancellationRequested(callbacks?: BatchRuntimeCallbacks): boolean {
-    return Boolean(callbacks?.isCancelled?.())
-  }
-
-  private static ensureNotCancelled(callbacks?: BatchRuntimeCallbacks) {
-    if (this.isCancellationRequested(callbacks)) {
-      throw new ConversionCancelledError('用户已停止批量任务')
-    }
-  }
-
   static isCancellationError(error: unknown): boolean {
     if (error instanceof ConversionCancelledError) {
       return true
     }
+    if (error instanceof UploadCancelledError) {
+      return true
+    }
     if (!(error instanceof Error)) {
       return false
+    }
+    if (error.name === UploadCancelledError.name) {
+      return true
     }
     if (error.name === 'AbortError') {
       return true
     }
     const message = String(error.message || '').toLowerCase()
     return message.includes('abort') || message.includes('stopped')
-  }
-
-  private static async waitFor(ms: number, signal?: AbortSignal): Promise<void> {
-    if (ms <= 0) {
-      return
-    }
-
-    if (!signal) {
-      await new Promise(resolve => setTimeout(resolve, ms))
-      return
-    }
-
-    if (signal.aborted) {
-      throw new ConversionCancelledError('用户已停止批量任务')
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        signal.removeEventListener('abort', onAbort)
-        resolve()
-      }, ms)
-
-      const onAbort = () => {
-        clearTimeout(timeoutId)
-        signal.removeEventListener('abort', onAbort)
-        reject(new ConversionCancelledError('用户已停止批量任务'))
-      }
-
-      signal.addEventListener('abort', onAbort, { once: true })
-    })
   }
 
   private static cloneParsedInfo(data: ParsedVideoInfo): ParsedVideoInfo {
@@ -214,140 +165,34 @@ export class ConversionService {
     })
   }
 
-  private static prewarmBatchParse(tasks: ConversionTask[], parserConfig: VideoParserConfig) {
-    const seen = new Set<string>()
-    const warmCount = Math.min(tasks.length, Math.max(2, this.BATCH_CONCURRENCY * 2))
-
-    for (let i = 0; i < warmCount; i++) {
-      const task = tasks[i]
-      if (!task?.videoUrl) continue
-      try {
-        const extracted = this.extractRealUrl(task.videoUrl)
-        const key = this.buildParseCacheKey(extracted, parserConfig)
-        if (seen.has(key)) continue
-        seen.add(key)
-        void this.parseVideo(task.videoUrl, parserConfig).catch(() => undefined)
-      } catch {
-        // ignore invalid urls during prewarm
-      }
+  private static getBatchOrchestratorDeps() {
+    return {
+      batchConcurrency: this.BATCH_CONCURRENCY,
+      douyinUploadConcurrency: this.DOUYIN_UPLOAD_CONCURRENCY,
+      interTaskDelayMs: this.INTER_TASK_DELAY_MS,
+      parseVideo: (videoUrl: string, parserConfig: VideoParserConfig) => this.parseVideo(videoUrl, parserConfig),
+      parseDouyinUser: (
+        userUrl: string,
+        limit: number,
+        parsers?: EnhancedVideoParserConfig[],
+        preferredParserId?: string
+      ) => this.parseDouyinUser(userUrl, limit, parsers, preferredParserId),
+      uploadToWebDAV: (
+        mediaInfo: ParsedVideoInfo,
+        webdavConfig: WebDAVConfig,
+        folderPath?: string,
+        onProgress?: (progress: number, hint: string) => void,
+        sourceUrl?: string,
+        runtimeControl?: UploadRuntimeControl
+      ) => this.uploadToWebDAV(mediaInfo, webdavConfig, folderPath, onProgress, sourceUrl, runtimeControl),
+      extractRealUrl: extractRealVideoUrl,
+      isValidVideoInputUrl,
+      isCancellationError: (error: unknown) => this.isCancellationError(error),
+      createCancellationError: (message?: string) => new ConversionCancelledError(message),
+      cleanupAfterTaskCompletion: (task: ConversionTask | BatchTask | ExtendedBatchTask) =>
+        CleanupService.cleanupAfterTaskCompletion(task),
+      generateTaskId: () => this.generateTaskId(),
     }
-  }
-
-  private static async runAdaptivePool(
-    stage: BatchPoolStage,
-    totalTasks: number,
-    runTask: (index: number) => Promise<boolean>,
-    onTaskSettled?: (index: number, processed: number) => void,
-    onPoolState?: (state: BatchPoolState) => void,
-    isCancelled?: () => boolean
-  ) {
-    if (totalTasks <= 0) {
-      return
-    }
-
-    let nextIndex = 0
-    let inFlight = 0
-    let processed = 0
-
-    const stageConcurrencyCap = stage === 'douyin_upload'
-      ? Math.min(this.BATCH_CONCURRENCY, this.DOUYIN_UPLOAD_CONCURRENCY)
-      : this.BATCH_CONCURRENCY
-    const initialConcurrency = Math.min(stageConcurrencyCap, totalTasks)
-    let currentConcurrency = initialConcurrency
-
-    const emitPoolState = (event: BatchPoolEvent) => {
-      onPoolState?.({
-        stage,
-        event,
-        currentConcurrency,
-        maxConcurrency: initialConcurrency,
-        inFlight,
-        processed,
-        total: totalTasks,
-      })
-    }
-
-    emitPoolState('init')
-
-    let failureStreak = 0
-    let successStreak = 0
-    const cancelled = () => Boolean(isCancelled?.())
-
-    let launchChain = Promise.resolve()
-
-    const withLaunchDelay = async () => {
-      if (this.INTER_TASK_DELAY_MS <= 0) {
-        return
-      }
-      launchChain = launchChain.then(() => this.maybeDelayBetweenTasks())
-      await launchChain
-    }
-
-    await new Promise<void>(resolve => {
-      const pump = () => {
-        if (cancelled() && inFlight === 0) {
-          resolve()
-          return
-        }
-
-        while (!cancelled() && inFlight < currentConcurrency && nextIndex < totalTasks) {
-          const index = nextIndex++
-          inFlight++
-          emitPoolState('task_started')
-
-          void (async () => {
-            await withLaunchDelay()
-
-            let success = false
-            try {
-              if (!cancelled()) {
-                success = await runTask(index)
-              }
-            } catch {
-              success = false
-            }
-
-            if (success) {
-              successStreak++
-              failureStreak = 0
-              if (currentConcurrency < initialConcurrency && successStreak >= 3) {
-                currentConcurrency++
-                successStreak = 0
-                console.log(`[批量转存] 连续成功，恢复并发到 ${currentConcurrency}`)
-                emitPoolState('scale_up')
-              }
-            } else {
-              failureStreak++
-              successStreak = 0
-              if (currentConcurrency > 1 && failureStreak >= 2) {
-                currentConcurrency--
-                failureStreak = 0
-                console.warn(`[批量转存] 连续失败，降并发到 ${currentConcurrency}`)
-                emitPoolState('scale_down')
-              }
-            }
-
-            inFlight--
-            processed++
-            emitPoolState('task_settled')
-            onTaskSettled?.(index, processed)
-
-            if (processed >= totalTasks || (cancelled() && inFlight === 0)) {
-              resolve()
-              return
-            }
-
-            pump()
-          })()
-        }
-
-        if (cancelled() && inFlight === 0) {
-          resolve()
-        }
-      }
-
-      pump()
-    })
   }
 
   // {{ AURA: Modify - 使用多API适配器系统的抖音用户主页解析方法 }}
@@ -500,7 +345,7 @@ export class ConversionService {
         }
         attempts.push(failedAttempt)
         recordParserAttempt(failedAttempt)
-        throw new Error(this.buildFallbackFailureMessage(attempts))
+        throw new Error(buildFallbackFailureMessage(attempts))
       }
       
       const result = await response.json()
@@ -520,7 +365,7 @@ export class ConversionService {
         }
         attempts.push(failedAttempt)
         recordParserAttempt(failedAttempt)
-        throw new Error(this.buildFallbackFailureMessage(attempts))
+        throw new Error(buildFallbackFailureMessage(attempts))
       }
 
       const successAttempt: ParserAttemptResult = {
@@ -592,7 +437,12 @@ export class ConversionService {
   ): Promise<ExtendedBatchTask> {
     
     if (batchTask.inputMode === BatchInputMode.DOUYIN_USER) {
-      return await this.convertDouyinUserBatch(batchTask, onProgress, callbacks)
+      return await convertDouyinUserBatchTask(
+        batchTask,
+        this.getBatchOrchestratorDeps(),
+        onProgress,
+        callbacks
+      )
     } else {
       // 使用原有的批量转存方法
       const originalBatch = await this.convertBatch(batchTask, onProgress, callbacks)
@@ -600,150 +450,6 @@ export class ConversionService {
         ...originalBatch,
         inputMode: BatchInputMode.NORMAL
       }
-    }
-  }
-
-  // {{ AURA: Add - 抖音用户批量转存方法 }}
-  private static async convertDouyinUserBatch(
-    batchTask: ExtendedBatchTask,
-    onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
-    callbacks?: BatchRuntimeCallbacks
-  ): Promise<ExtendedBatchTask> {
-    this.ensureNotCancelled(callbacks)
-    batchTask.status = TaskStatus.PARSING
-    
-    try {
-      // 第一阶段：解析用户主页获取视频列表
-      onProgress?.(10, undefined)
-      this.ensureNotCancelled(callbacks)
-      
-      if (!batchTask.sourceUrl) {
-        throw new Error('缺少用户主页URL')
-      }
-      
-      console.log(`[抖音用户批量转存] 开始解析用户主页: ${batchTask.sourceUrl}`)
-      
-      // 根据任务数量确定解析限制
-      const limit = batchTask.totalTasks || 20
-      const userVideos = await this.parseDouyinUser(
-        batchTask.sourceUrl,
-        limit,
-        undefined,
-        batchTask.parserConfig?.id
-      )
-      this.ensureNotCancelled(callbacks)
-      
-      // 更新批量任务信息
-      batchTask.totalSourceVideos = userVideos.length
-      batchTask.totalTasks = userVideos.length
-      
-      // 创建任务列表
-      batchTask.tasks = userVideos.map((video, index) => ({
-        id: this.generateTaskId(),
-        videoUrl: video.url || '', // 使用解析后的视频URL
-        videoTitle: video.title,
-        status: TaskStatus.PENDING,
-        createdAt: new Date(),
-        parsedVideoInfo: video // 预先设置解析信息
-      }))
-      
-      onProgress?.(20, undefined)
-      console.log(`[抖音用户批量转存] 获取到 ${userVideos.length} 个视频，开始批量转存`)
-      
-      // 第二阶段：批量上传
-      const totalTasks = batchTask.tasks.length
-      let completedTasks = 0
-      const userFolderPath = this.buildDouyinUserFolderPath(userVideos)
-
-      if (totalTasks > 0) {
-        await this.runAdaptivePool(
-          'douyin_upload',
-          totalTasks,
-          async (index) => {
-            if (this.isCancellationRequested(callbacks)) {
-              return false
-            }
-            const task = batchTask.tasks[index]
-
-            try {
-              task.status = TaskStatus.UPLOADING
-              console.log(`[抖音用户批量转存] 上传视频 ${index + 1}/${totalTasks}: ${task.videoTitle}`)
-
-              const filePath = await this.uploadToWebDAV(
-                task.parsedVideoInfo!,
-                batchTask.webdavConfig,
-                userFolderPath,
-                undefined,
-                task.videoUrl,
-                {
-                  signal: callbacks?.getAbortSignal?.(),
-                  isCancelled: callbacks?.isCancelled,
-                  fileNameOverride: this.buildStableBatchVideoFileName(task.parsedVideoInfo!, task.videoUrl)
-                }
-              )
-
-              task.status = TaskStatus.SUCCESS
-              task.completedAt = new Date()
-              task.uploadResult = {
-                success: true,
-                filePath
-              }
-
-              completedTasks++
-              console.log(`[抖音用户批量转存] 上传成功: ${task.videoTitle}`)
-              return true
-            } catch (error) {
-              console.error(`[抖音用户批量转存] 任务失败:`, error)
-              if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
-                return false
-              }
-              task.status = TaskStatus.FAILED
-              task.completedAt = new Date()
-              task.error = error instanceof Error ? error.message : '上传失败'
-              task.uploadResult = {
-                success: false,
-                error: task.error
-              }
-              return false
-            }
-          },
-          (_index, processed) => {
-            batchTask.completedTasks = completedTasks
-            const progress = 20 + (processed / totalTasks) * 70
-            onProgress?.(progress, batchTask.tasks[_index])
-          },
-          callbacks?.onPoolState,
-          callbacks?.isCancelled
-        )
-      }
-
-      this.ensureNotCancelled(callbacks)
-      
-      // 更新最终状态
-      batchTask.completedAt = new Date()
-      
-      if (completedTasks === totalTasks) {
-        batchTask.status = TaskStatus.SUCCESS
-        await CleanupService.cleanupAfterTaskCompletion(batchTask);
-      } else if (completedTasks === 0) {
-        batchTask.status = TaskStatus.FAILED
-      } else {
-        batchTask.status = TaskStatus.SUCCESS // 部分成功也标记为成功
-      }
-      
-      onProgress?.(100, undefined)
-      console.log(`[抖音用户批量转存] 批量转存完成，成功: ${completedTasks}/${totalTasks}`)
-      
-      return batchTask
-      
-    } catch (error) {
-      console.error('[抖音用户批量转存] 批量转存失败:', error)
-      if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
-        throw new ConversionCancelledError('用户已停止批量任务')
-      }
-      batchTask.status = TaskStatus.FAILED
-      batchTask.completedAt = new Date()
-      throw error
     }
   }
 
@@ -810,8 +516,8 @@ export class ConversionService {
       const trimmed = line.trim()
       if (trimmed) {
         // 尝试从包含其他文字的输入中提取URL
-        const extractedUrl = this.extractRealUrl(trimmed)
-        if (extractedUrl && this.isValidUrl(extractedUrl)) {
+        const extractedUrl = extractRealVideoUrl(trimmed)
+        if (extractedUrl && isValidVideoInputUrl(extractedUrl)) {
           urls.push(extractedUrl)
         }
       }
@@ -932,7 +638,7 @@ export class ConversionService {
       try {
         result = JSON.parse(responseText)
       } catch {
-        const message = this.extractErrorMessageFromResponse(responseText) ?? 'WebDAV测试返回非JSON响应'
+        const message = extractErrorMessageFromResponse(responseText) ?? 'WebDAV测试返回非JSON响应'
         return { success: false, message }
       }
 
@@ -952,41 +658,6 @@ export class ConversionService {
     }
   }
 
-  // 验证URL格式
-  private static isValidUrl(url: string): boolean {
-    try {
-      // 首先提取抖音等平台的真实链接
-      const extractedUrl = this.extractRealUrl(url)
-      new URL(extractedUrl)
-      return true
-    } catch {
-      return false
-    }
-  }
-  
-  // 处理短视频分享文本，提取真实URL
-  private static extractRealUrl(input: string): string {
-    const source = String(input || '').trim()
-    if (!source) {
-      return ''
-    }
-
-    const extracted = extractFirstUrlFromText(source)
-    if (extracted) {
-      return extracted
-    }
-
-    // 如果已经是有效URL，直接返回
-    try {
-      new URL(source)
-      return source
-    } catch {
-      // 不是有效URL，尝试提取
-    }
-
-    return source
-  }
-
   // 上传媒体到WebDAV
   static async uploadToWebDAV(
     mediaInfo: ParsedVideoInfo,
@@ -994,169 +665,9 @@ export class ConversionService {
     folderPath?: string,
     onProgress?: (progress: number, hint: string) => void,
     sourceUrl?: string,
-    runtimeControl?: {
-      signal?: AbortSignal
-      isCancelled?: () => boolean
-      fileNameOverride?: string
-    }
+    runtimeControl?: UploadRuntimeControl
   ): Promise<string> {
-    const maxRetries = 5
-    let attempt = 0
-    let lastError
-    let lastProgress = 60
-    const startedAt = Date.now()
-
-    const formatElapsed = (ms: number) => {
-      const seconds = Math.max(0, Math.floor(ms / 1000))
-      if (seconds < 60) return `${seconds}s`
-      const minutes = Math.floor(seconds / 60)
-      const rest = seconds % 60
-      return `${minutes}m${String(rest).padStart(2, '0')}s`
-    }
-
-    const emit = (progress: number, hint: string) => {
-      if (!onProgress) return
-      const clamped = Math.max(0, Math.min(99, Math.floor(progress)))
-      lastProgress = Math.max(lastProgress, clamped)
-      onProgress(clamped, hint)
-    }
-
-    const ensureActive = () => {
-      if (runtimeControl?.isCancelled?.() || runtimeControl?.signal?.aborted) {
-        throw new ConversionCancelledError('用户已停止批量任务')
-      }
-    }
-    
-    // 根据媒体类型生成文件名
-    ensureActive()
-    let fileName = String(runtimeControl?.fileNameOverride || '').trim()
-    if (!fileName) {
-      if (mediaInfo.mediaType === MediaType.VIDEO && mediaInfo.url) {
-        const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url)
-        fileName = this.generateFileName(mediaInfo.title, format)
-      } else if (mediaInfo.mediaType === MediaType.IMAGE_ALBUM && mediaInfo.images && mediaInfo.images.length > 0) {
-        fileName = this.generateFolderName(mediaInfo.title)
-      }
-    }
-    
-    while (attempt < maxRetries) {
-      try {
-        ensureActive()
-        attempt++
-        emit(
-          Math.min(90, 60 + attempt * 2),
-          `服务器上传中（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
-        )
-        console.log(`[转存] WebDAV上传尝试 ${attempt}/${maxRetries}: ${mediaInfo.mediaType === MediaType.VIDEO ? '视频' : '图集'}`)
-
-        const controller = new AbortController()
-        let removeAbortListener: (() => void) | null = null
-        if (runtimeControl?.signal) {
-          const onAbort = () => controller.abort()
-          if (runtimeControl.signal.aborted) {
-            controller.abort()
-          } else {
-            runtimeControl.signal.addEventListener('abort', onAbort, { once: true })
-            removeAbortListener = () => runtimeControl.signal?.removeEventListener('abort', onAbort)
-          }
-        }
-        const timeoutMs = Number(process.env.NEXT_PUBLIC_WEBDAV_PROXY_TIMEOUT_MS ?? '180000')
-        const timeoutId = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 180000)
-
-        // Keep ticking while the server is doing download/upload work.
-        const progressCeiling = Math.max(70, Math.min(95, 92 + attempt))
-        const ticker = setInterval(() => {
-          if (lastProgress >= progressCeiling) return
-          emit(
-            lastProgress + 1,
-            `服务器上传中（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
-          )
-        }, 900)
-        
-        let response: Response
-        try {
-          response = await fetch(getWebdavProxyEndpoint(), {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              videoUrl: mediaInfo.mediaType === MediaType.VIDEO ? mediaInfo.url : undefined,
-              sourceUrl: sourceUrl || undefined,
-              images: mediaInfo.mediaType === MediaType.IMAGE_ALBUM ? mediaInfo.images : undefined,
-              webdavConfig,
-              fileName,
-              folderPath: folderPath || ''
-            }),
-            signal: controller.signal
-          })
-        } finally {
-          removeAbortListener?.()
-          clearTimeout(timeoutId)
-          clearInterval(ticker)
-        }
-
-        const responseText = await response.text()
-        if (!responseText.trim()) {
-          throw new Error(`服务器返回空响应 (HTTP ${response.status})`)
-        }
-
-        if (!response.ok) {
-          const message = this.extractErrorMessageFromResponse(responseText)
-          throw new Error(message
-            ? `上传服务错误 (${response.status}): ${message}`
-            : `上传服务错误 (HTTP ${response.status})`)
-        }
-
-        let result: any
-        try {
-          result = JSON.parse(responseText)
-        } catch {
-          const message = this.extractErrorMessageFromResponse(responseText)
-          throw new Error(message
-            ? `上传服务返回非JSON响应: ${message}`
-            : '上传服务返回了无法解析的响应')
-        }
-        
-        if (!result.success) {
-          throw new Error(result.error || '媒体上传失败')
-        }
-
-        if (!result.filePath) {
-          throw new Error('上传成功但未返回文件路径')
-        }
-
-        console.log(`[转存] 上传成功，尝试次数: ${attempt}`)
-        emit(99, `上传完成，正在收尾（已用时 ${formatElapsed(Date.now() - startedAt)}）`)
-        return result.filePath
-        
-      } catch (error) {
-        if (this.isCancellationError(error) || runtimeControl?.isCancelled?.() || runtimeControl?.signal?.aborted) {
-          throw new ConversionCancelledError('用户已停止批量任务')
-        }
-        lastError = error
-        console.error(`[转存] 上传尝试 ${attempt} 失败:`, error)
-        emit(
-          Math.max(60, lastProgress),
-          `上传失败（第 ${attempt}/${maxRetries} 次，已用时 ${formatElapsed(Date.now() - startedAt)}）`
-        )
-        
-        if (attempt < maxRetries) {
-          const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000)
-          console.log(`[转存] 等待 ${waitTime/1000} 秒后重试...`)
-          emit(
-            Math.max(60, lastProgress),
-            `等待 ${Math.round(waitTime / 1000)} 秒后重试（第 ${attempt + 1}/${maxRetries} 次）`
-          )
-          await this.waitFor(waitTime, runtimeControl?.signal)
-        } else {
-          break
-        }
-      }
-    }
-    
-    console.error('[转存] 所有上传尝试均失败')
-    throw lastError || new Error('视频上传失败，已达到最大重试次数')
+    return await uploadToWebDAV(mediaInfo, webdavConfig, folderPath, onProgress, sourceUrl, runtimeControl)
   }
 
   // 批量转存
@@ -1165,93 +676,7 @@ export class ConversionService {
     onProgress?: (batchProgress: number, currentTask?: ConversionTask) => void,
     callbacks?: BatchRuntimeCallbacks
   ): Promise<BatchTask> {
-    this.ensureNotCancelled(callbacks)
-    batchTask.status = TaskStatus.PARSING
-    
-    const totalTasks = batchTask.tasks.length
-    let completedTasks = 0
-
-    if (totalTasks > 0) {
-      this.prewarmBatchParse(batchTask.tasks, batchTask.parserConfig)
-
-      const inFlightProgress = new Map<string, number>()
-
-      const emitOverallProgress = (currentTask?: ConversionTask) => {
-        const partial = Array.from(inFlightProgress.values()).reduce((sum, value) => sum + value, 0) / 100
-        const overall = ((completedTasks + partial) / totalTasks) * 100
-        onProgress?.(Math.min(99.9, overall), currentTask)
-      }
-
-      await this.runAdaptivePool(
-        'normal_batch',
-        totalTasks,
-        async (index) => {
-          if (this.isCancellationRequested(callbacks)) {
-            return false
-          }
-          const task = batchTask.tasks[index]
-
-          inFlightProgress.set(task.id, 0)
-          emitOverallProgress(task)
-
-          try {
-            const updatedTask = await this.convertSingle(
-              task,
-              batchTask.parserConfig,
-              batchTask.webdavConfig,
-              (progress, status) => {
-                task.status = status
-                inFlightProgress.set(task.id, Math.max(0, Math.min(99, progress)))
-                emitOverallProgress(task)
-              },
-              callbacks
-            )
-
-            batchTask.tasks[index] = updatedTask
-
-            if (updatedTask.status === TaskStatus.SUCCESS) {
-              completedTasks++
-              return true
-            }
-
-            return false
-          } catch (error) {
-            if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
-              return false
-            }
-            console.error(`批量任务中的单个任务失败:`, error)
-            task.status = TaskStatus.FAILED
-            task.completedAt = new Date()
-            task.error = error instanceof Error ? error.message : '任务失败'
-            batchTask.tasks[index] = task
-            return false
-          } finally {
-            inFlightProgress.delete(task.id)
-            batchTask.completedTasks = completedTasks
-          }
-        },
-        (index, processed) => {
-          onProgress?.((processed / totalTasks) * 100, batchTask.tasks[index])
-        },
-        callbacks?.onPoolState,
-        callbacks?.isCancelled
-      )
-    }
-
-    this.ensureNotCancelled(callbacks)
-
-    batchTask.completedAt = new Date()
-    
-    if (completedTasks === totalTasks) {
-      batchTask.status = TaskStatus.SUCCESS
-      await CleanupService.cleanupAfterTaskCompletion(batchTask)
-    } else if (completedTasks === 0) {
-      batchTask.status = TaskStatus.FAILED
-    } else {
-      batchTask.status = TaskStatus.SUCCESS
-    }
-
-    return batchTask
+    return await convertBatchTask(batchTask, this.getBatchOrchestratorDeps(), onProgress, callbacks)
   }
 
   // 单个视频转存
@@ -1262,90 +687,14 @@ export class ConversionService {
     onProgress?: (progress: number, status: TaskStatus) => void,
     callbacks?: BatchRuntimeCallbacks
   ): Promise<ConversionTask> {
-    try {
-      this.ensureNotCancelled(callbacks)
-      task.status = TaskStatus.PARSING
-      onProgress?.(20, TaskStatus.PARSING)
-      
-      console.log(`[转存] 开始解析视频: ${task.videoUrl}`)
-      console.log(`[转存] 使用解析器: ${parserConfig.name} (${parserConfig.apiUrl})`)
-
-      // 解析视频
-      try {
-        if (!this.isValidUrl(task.videoUrl)) {
-          throw new Error('视频链接格式无效，请确保以http://或https://开头')
-        }
-        
-        const parsedInfo = await this.parseVideo(task.videoUrl, parserConfig)
-        this.ensureNotCancelled(callbacks)
-        console.log(`[转存] 解析成功，媒体类型: ${parsedInfo.mediaType}`)
-        
-        task.parsedVideoInfo = parsedInfo
-        task.videoTitle = parsedInfo.title
-        console.log(`[转存] 解析完成: ${parsedInfo.title}`)
-      } catch (error) {
-        console.error('[转存] 视频解析失败:', error)
-        if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
-          throw new ConversionCancelledError('用户已停止批量任务')
-        }
-        task.status = TaskStatus.FAILED
-        let errorMsg = error instanceof Error ? error.message : '视频解析失败'
-        
-        if (errorMsg.includes('URL为空')) {
-          errorMsg = 'URL为空 - 解析API无法提取视频URL，请尝试其他解析API或检查链接'
-        }
-        
-        task.error = errorMsg
-        task.completedAt = new Date()
-        return task
-      }
-
-      onProgress?.(50, TaskStatus.PARSING)
-      
-      task.status = TaskStatus.UPLOADING
-      onProgress?.(60, TaskStatus.UPLOADING)
-      this.ensureNotCancelled(callbacks)
-
-      const filePath = await this.uploadToWebDAV(
-        task.parsedVideoInfo!, 
-        webdavConfig,
-        undefined,
-        undefined,
-        task.videoUrl,
-        {
-          signal: callbacks?.getAbortSignal?.(),
-          isCancelled: callbacks?.isCancelled
-        }
-      )
-
-      task.status = TaskStatus.SUCCESS
-      task.completedAt = new Date()
-      task.uploadResult = {
-        success: true,
-        filePath
-      }
-
-      onProgress?.(100, TaskStatus.SUCCESS)
-
-      await CleanupService.cleanupAfterTaskCompletion(task)
-      return task
-    } catch (error) {
-      if (this.isCancellationError(error) || this.isCancellationRequested(callbacks)) {
-        throw new ConversionCancelledError('用户已停止批量任务')
-      }
-      task.status = TaskStatus.FAILED
-      task.completedAt = new Date()
-      task.error = error instanceof Error ? error.message : '转存过程中发生未知错误'
-      task.uploadResult = {
-        success: false,
-        error: task.error
-      }
-
-      await CleanupService.cleanupAfterTaskCompletion(task)
-      onProgress?.(0, TaskStatus.FAILED)
-
-      return task
-    }
+    return await convertSingleTask(
+      task,
+      parserConfig,
+      webdavConfig,
+      this.getBatchOrchestratorDeps(),
+      onProgress,
+      callbacks
+    )
   }
 
   // 仅解析视频链接（不上传）
@@ -1365,199 +714,6 @@ export class ConversionService {
     return await this.uploadToWebDAV(parsedInfo, webdavConfig, folderPath, onProgress, sourceUrl)
   }
 
-  private static buildParserFallbackChain(
-    selectedParser: VideoParserConfig,
-    extractedUrl: string,
-    capability: ParserCapability
-  ): VideoParserConfig[] {
-    const chain: VideoParserConfig[] = []
-    const seen = new Set<string>()
-    const push = (parser: VideoParserConfig | null | undefined) => {
-      if (!parser || !parser.id || seen.has(parser.id)) return
-      seen.add(parser.id)
-      chain.push(parser)
-    }
-
-    push(selectedParser)
-
-    if (typeof window === 'undefined') {
-      return chain
-    }
-
-    const platform = this.inferPlatformFromUrl(extractedUrl)
-    const allParsers = ConfigManager.getParsers()
-      .filter(parser => parser?.id && parser.apiUrl && !parser.disabled)
-      .filter(parser => {
-        if (capability === ParserCapability.USER_PAGE) {
-          return parser.capabilities?.includes(ParserCapability.USER_PAGE)
-        }
-        const capabilityOk = !parser.capabilities
-          || parser.capabilities.length === 0
-          || parser.capabilities.includes(ParserCapability.SINGLE_VIDEO)
-        const platformOk = !parser.supportedPlatforms
-          || parser.supportedPlatforms.length === 0
-          || parser.supportedPlatforms.includes(SupportedPlatform.UNIVERSAL)
-          || parser.supportedPlatforms.includes(platform)
-        return capabilityOk && platformOk
-      })
-      .sort((a, b) => {
-        const snapshotA = getParserHealthSnapshot(a.id)
-        const snapshotB = getParserHealthSnapshot(b.id)
-        const scoreA = scoreParserHealth(snapshotA) + (a.isDefault ? 15 : 0)
-        const scoreB = scoreParserHealth(snapshotB) + (b.isDefault ? 15 : 0)
-        return scoreB - scoreA
-      })
-
-    for (const parser of allParsers) {
-      push(parser)
-    }
-
-    return chain
-  }
-
-  private static inferPlatformFromUrl(url: string): SupportedPlatform {
-    const source = String(url || '').toLowerCase()
-    if (/bilibili\.com|b23\.tv|\/bv[0-9a-z]+/i.test(source)) {
-      return SupportedPlatform.BILIBILI
-    }
-    if (/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(source)) {
-      return SupportedPlatform.DOUYIN
-    }
-    return SupportedPlatform.UNIVERSAL
-  }
-
-  private static async requestParseWithParser(
-    sourceInput: string,
-    extractedUrl: string,
-    parserConfig: VideoParserConfig
-  ): Promise<{ parsedInfo: ParsedVideoInfo; status: number }> {
-    console.log(`[转存] 使用解析器尝试: ${parserConfig.name} (${parserConfig.apiUrl})`)
-
-    const apiUrl = String(parserConfig.apiUrl || '').trim()
-    const isLocalParserEndpoint = /^\/api\//i.test(apiUrl)
-    const endpoint = isLocalParserEndpoint ? apiUrl : '/api/proxy/parser'
-    const payload = isLocalParserEndpoint
-      ? { url: extractedUrl, videoUrl: extractedUrl, text: sourceInput }
-      : { videoUrl: extractedUrl, parserConfig }
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-
-    const responseText = await response.text()
-    if (!responseText.trim()) {
-      throw new Error(`解析服务器返回空响应 (HTTP ${response.status})`)
-    }
-
-    if (!response.ok) {
-      const upstreamError = ConversionService.extractErrorMessageFromResponse(responseText)
-      throw new Error(upstreamError
-        ? `解析接口调用失败 (${response.status}): ${upstreamError}`
-        : `解析接口调用失败 (HTTP ${response.status})`)
-    }
-
-    const parsedInfo = this.handleParseResponseText(responseText)
-    return {
-      parsedInfo,
-      status: response.status,
-    }
-  }
-
-  private static async parseWithFallbackChain(
-    sourceInput: string,
-    extractedUrl: string,
-    parserConfig: VideoParserConfig
-  ): Promise<{
-    parsedInfo: ParsedVideoInfo
-    usedParser: VideoParserConfig
-    trace: ParseExecutionTrace
-  }> {
-    const parserChain = this.buildParserFallbackChain(
-      parserConfig,
-      extractedUrl,
-      ParserCapability.SINGLE_VIDEO
-    )
-    const traceId = this.generateTaskId()
-    const trace: ParseExecutionTrace = {
-      traceId,
-      input: sourceInput,
-      capability: ParserCapability.SINGLE_VIDEO,
-      selectedParserId: parserConfig.id,
-      attempts: [],
-      startedAt: new Date().toISOString(),
-      success: false,
-    }
-
-    for (const parser of parserChain) {
-      if (parser.id !== parserConfig.id && isParserCoolingDown(parser.id)) {
-        continue
-      }
-
-      const started = Date.now()
-      try {
-        const { parsedInfo, status } = await this.requestParseWithParser(sourceInput, extractedUrl, parser)
-        const attempt: ParserAttemptResult = {
-          parserId: parser.id,
-          parserName: parser.name,
-          parserUrl: parser.apiUrl,
-          success: true,
-          latencyMs: Date.now() - started,
-          status,
-          checkedAt: new Date().toISOString(),
-          traceId,
-        }
-        trace.attempts.push(attempt)
-        recordParserAttempt(attempt)
-        trace.success = true
-        trace.finishedAt = new Date().toISOString()
-        return { parsedInfo, usedParser: parser, trace }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        const attempt: ParserAttemptResult = {
-          parserId: parser.id,
-          parserName: parser.name,
-          parserUrl: parser.apiUrl,
-          success: false,
-          latencyMs: Date.now() - started,
-          errorClass: classifyParserFailure({ error, message }),
-          errorMessage: message,
-          checkedAt: new Date().toISOString(),
-          traceId,
-        }
-        trace.attempts.push(attempt)
-        recordParserAttempt(attempt)
-        console.error(`[转存] 解析器失败: ${parser.name} -> ${message}`)
-      }
-    }
-
-    trace.finishedAt = new Date().toISOString()
-    throw new Error(this.buildFallbackFailureMessage(trace.attempts))
-  }
-
-  private static buildFallbackFailureMessage(attempts: ParserAttemptResult[]): string {
-    if (!attempts.length) {
-      return '解析失败：没有可用解析器'
-    }
-
-    const details = attempts
-      .filter(item => !item.success)
-      .slice(0, 3)
-      .map(item => {
-        const cls = item.errorClass ? `/${item.errorClass}` : ''
-        return `${item.parserName || item.parserId}${cls}: ${item.errorMessage || '未知错误'}`
-      })
-
-    if (!details.length) {
-      return '解析失败：所有解析器不可用'
-    }
-
-    return `解析失败，已尝试 ${attempts.length} 个解析器。${details.join(' | ')}`
-  }
-
   // 解析视频链接
   static async parseVideo(videoUrl: string, parserConfig: VideoParserConfig): Promise<ParsedVideoInfo> {
     if (!videoUrl || typeof videoUrl !== 'string' || !videoUrl.trim()) {
@@ -1568,7 +724,7 @@ export class ConversionService {
       throw new Error('解析API配置无效')
     }
     
-    const extractedUrl = this.extractRealUrl(videoUrl)
+    const extractedUrl = extractRealVideoUrl(videoUrl)
     const cacheKey = this.buildParseCacheKey(extractedUrl, parserConfig)
 
     const cached = this.getParseCache(cacheKey)
@@ -1583,7 +739,7 @@ export class ConversionService {
     }
 
     const parsePromise = (async () => {
-      const { parsedInfo, usedParser } = await this.parseWithFallbackChain(videoUrl, extractedUrl, parserConfig)
+      const { parsedInfo, usedParser } = await parseVideoWithFallback(videoUrl, parserConfig)
       this.setParseCache(cacheKey, parsedInfo)
 
       if (usedParser.id !== parserConfig.id) {
@@ -1601,217 +757,5 @@ export class ConversionService {
     } finally {
       this.parseInFlight.delete(cacheKey)
     }
-  }
-
-  private static handleParseResponseText(responseText: string): ParsedVideoInfo {
-    let result: VideoParseResponse
-    try {
-      result = JSON.parse(responseText)
-    } catch (parseError) {
-      console.error('[转存] 无法解析解析API响应JSON:', parseError)
-      const snippet = responseText.substring(0, 300)
-      throw new Error(`解析服务返回了无法解析的内容: ${snippet}`)
-    }
-
-    if (!result.success) {
-      throw new Error(result.error || '视频解析失败')
-    }
-
-    if (!result.data) {
-      throw new Error('API返回的数据为空')
-    }
-
-    if (result.data.mediaType === MediaType.VIDEO && !result.data.url) {
-      throw new Error('视频解析成功但未返回有效的视频URL')
-    }
-
-    if (result.data.mediaType === MediaType.VIDEO && result.data.url) {
-      try {
-        new URL(result.data.url)
-      } catch {
-        throw new Error(`返回的URL无效: ${result.data.url}`)
-      }
-    }
-
-    if (result.data.mediaType === MediaType.IMAGE_ALBUM) {
-      if (!result.data.images || result.data.images.length === 0) {
-        throw new Error('图集解析成功但没有找到任何图片')
-      }
-      console.log(`[转存] 图集解析成功，包含 ${result.data.images.length} 张图片`)
-    }
-
-    return result.data
-  }
-
-  // 生成文件名
-  private static generateFileName(title: string, format: string): string {
-    console.log(`[文件名生成] 原始标题: "${title}"`)
-    
-    const specialChars = FilenameSanitizer.detectSpecialChars(title)
-    if (specialChars.length > 0) {
-      console.log(`[文件名生成] 检测到特殊字符: ${specialChars.join(', ')}`)
-    }
-    
-    const sanitizedTitle = FilenameSanitizer.sanitize(title, {
-      replacement: '_',
-      maxLength: 80,
-      preserveExtension: false,
-      addTimestamp: true
-    })
-
-    const nameWithoutExt = sanitizedTitle.replace(/\.[^.]*$/, '')
-    const finalName = `${nameWithoutExt}.${format}`
-    
-    console.log(`[文件名生成] 最终文件名: "${finalName}"`)
-    return finalName
-  }
-
-  // 生成文件夹名（用于图集）
-  private static generateFolderName(title: string): string {
-    return FilenameSanitizer.sanitize(title, {
-      replacement: '_',
-      maxLength: 100,
-      preserveExtension: false,
-      addTimestamp: false
-    })
-  }
-
-  private static buildDouyinUserFolderPath(videos: ParsedVideoInfo[]): string {
-    const first = videos.find(video => video && (video.author || video.uid || video.short_id))
-    const author = String(first?.author || '抖音用户').trim()
-    const stableId = String(first?.uid || first?.short_id || '').trim()
-    const raw = stableId ? `${author}_${stableId}` : author
-    return this.generateFolderName(raw || '抖音用户')
-  }
-
-  private static buildStableBatchVideoFileName(mediaInfo: ParsedVideoInfo, sourceUrl?: string): string {
-    const format = this.inferVideoFormat(mediaInfo.format, mediaInfo.url || sourceUrl)
-    const stableId = this.extractStableVideoId(mediaInfo, sourceUrl)
-    const authorPart = FilenameSanitizer.sanitize(String(mediaInfo.author || '').trim() || '用户', {
-      replacement: '_',
-      maxLength: 32,
-      preserveExtension: false,
-      addTimestamp: false
-    }).replace(/\.[^.]*$/, '')
-    const titlePart = FilenameSanitizer.sanitize(String(mediaInfo.title || '').trim() || '视频', {
-      replacement: '_',
-      maxLength: 80,
-      preserveExtension: false,
-      addTimestamp: false
-    }).replace(/\.[^.]*$/, '')
-
-    const baseName = stableId
-      ? `${authorPart}_${stableId}`
-      : `${authorPart}_${titlePart}`
-    return `${baseName}.${format}`
-  }
-
-  private static extractStableVideoId(mediaInfo: ParsedVideoInfo, sourceUrl?: string): string {
-    const directId = String(mediaInfo.short_id || mediaInfo.uid || '').trim()
-    if (directId) {
-      return directId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
-    }
-
-    const candidates = [
-      String(mediaInfo.url || ''),
-      String(sourceUrl || ''),
-      String(mediaInfo.title || '')
-    ]
-    const patterns = [
-      /[?&](?:aweme_id|video_id)=([a-zA-Z0-9_-]{6,})/i,
-      /\/video\/([0-9]{8,})/i,
-      /\b(v[0-9a-z]{8,})\b/i,
-      /[（(]([a-zA-Z0-9_-]{8,})[）)]/i
-    ]
-
-    for (const candidate of candidates) {
-      if (!candidate) continue
-      for (const pattern of patterns) {
-        const matched = candidate.match(pattern)?.[1]
-        if (!matched) continue
-        const cleaned = matched.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
-        if (cleaned && !/^https?$/i.test(cleaned)) {
-          return cleaned
-        }
-      }
-    }
-
-    const fallback = this.simpleStringHash(String(mediaInfo.url || sourceUrl || mediaInfo.title || 'video'))
-    return `vid_${fallback}`
-  }
-
-  private static simpleStringHash(input: string): string {
-    let hash = 0
-    for (let i = 0; i < input.length; i++) {
-      hash = (hash * 31 + input.charCodeAt(i)) >>> 0
-    }
-    return hash.toString(36)
-  }
-
-  // 智能视频格式推断方法
-  private static inferVideoFormat(providedFormat: string | undefined, videoUrl?: string): string {
-    const validFormats = [
-      'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v',
-      '3gp', 'f4v', 'asf', 'rm', 'rmvb', 'vob', 'ogv', 'm2ts', 'mts'
-    ]
-    
-    if (providedFormat && validFormats.includes(providedFormat.toLowerCase())) {
-      return providedFormat.toLowerCase()
-    }
-    
-    if (videoUrl) {
-      const urlFormat = this.extractFormatFromUrl(videoUrl)
-      if (urlFormat && validFormats.includes(urlFormat.toLowerCase())) {
-        return urlFormat.toLowerCase()
-      }
-    }
-    
-    return 'mp4'
-  }
-  
-  // 从URL提取格式扩展名
-  private static extractFormatFromUrl(url: string): string | null {
-    try {
-      const urlObj = new URL(url)
-      const pathname = urlObj.pathname
-      const lastDotIndex = pathname.lastIndexOf('.')
-      
-      if (lastDotIndex !== -1) {
-        const extension = pathname.substring(lastDotIndex + 1)
-        return extension.toLowerCase()
-      }
-    } catch (e) {
-      // URL解析失败，忽略错误
-    }
-    
-    return null
-  }
-
-  private static extractErrorMessageFromResponse(body: string): string | null {
-    if (!body) {
-      return null
-    }
-
-    try {
-      const parsed = JSON.parse(body)
-      if (parsed && typeof parsed === 'object') {
-        const fields = ['error', 'message', 'msg', 'detail', 'reason'] as const
-        for (const field of fields) {
-          const value = (parsed as Record<string, unknown>)[field]
-          if (typeof value === 'string' && value.trim()) {
-            return value.trim()
-          }
-        }
-      }
-    } catch (error) {
-      // body不是JSON，忽略解析错误
-    }
-
-    const sanitized = body.replace(/\s+/g, ' ').trim()
-    if (!sanitized) {
-      return null
-    }
-
-    return sanitized.length > 300 ? `${sanitized.substring(0, 300)}…` : sanitized
   }
 }
