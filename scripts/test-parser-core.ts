@@ -11,11 +11,44 @@ import {
   resolveAndValidateHttpUrl,
   sanitizeCustomHeaders,
 } from '../src/lib/api/parser-security'
+import { prepareCustomParserRequest } from '../src/lib/api/custom-parser-request'
+import {
+  extractAuthorProfile,
+  extractMediaPayload,
+  safeParseJsonBody,
+} from '../src/lib/api/custom-parser-response'
+import {
+  buildDouyinUserFolderPath,
+  buildStableBatchVideoFileName,
+  extractErrorMessageFromResponse,
+  inferVideoFormat,
+} from '../src/lib/conversion-upload'
+import {
+  extractRealVideoUrl,
+  isValidVideoInputUrl,
+  parseVideoResponseText,
+} from '../src/lib/conversion-parse'
+import {
+  createExportedAppData,
+  getDefaultCleanupConfig,
+  parseImportedAppData,
+  serializeExportedAppData,
+} from '../src/lib/storage/maintenance-core'
+import {
+  normalizeHistoryRecord,
+  rewriteHistoryTagIds,
+} from '../src/lib/storage/history-tag-core'
 
 async function main() {
   testUrlSanitizer()
   await testParserRace()
   testSecurityGuards()
+  await testCustomParserRequest()
+  testCustomParserResponseHelpers()
+  testConversionUploadHelpers()
+  testConversionParseHelpers()
+  testStorageMaintenanceHelpers()
+  testHistoryTagHelpers()
   await testDouyinCore()
   console.log('parser-core tests passed')
 }
@@ -103,6 +136,248 @@ function testSecurityGuards() {
   assert.equal(headers['X-Forwarded-For'], undefined)
   assert.equal(headers.Authorization, 'Bearer keep-me')
   assert.equal(headers['X-Custom'], 'ok')
+}
+
+async function testCustomParserRequest() {
+  const prepared = await prepareCustomParserRequest({
+    requestUrl: 'https://videojx.example.com/api/preview/parse',
+    videoUrl: '1234567890123456789',
+    parserConfig: {
+      id: 'test-get',
+      name: 'GET parser',
+      apiUrl: 'https://parser.example.com/parse?foo=1&url=old',
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      customHeaders: {
+        Cookie: 'blocked=true',
+        Authorization: 'Bearer keep',
+      },
+      customQueryParams: {
+        token: 'abc',
+      },
+      apiKey: 'secret',
+    },
+  })
+
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+
+  assert.equal(prepared.value.method, 'GET')
+  assert.equal(
+    prepared.value.normalizedVideoUrl,
+    'https://www.iesdouyin.com/share/video/1234567890123456789'
+  )
+
+  const finalUrl = new URL(prepared.value.finalApiUrl)
+  assert.equal(finalUrl.searchParams.get('url'), 'https://www.iesdouyin.com/share/video/1234567890123456789')
+  assert.equal(finalUrl.searchParams.get('token'), 'abc')
+
+  const headers = prepared.value.requestOptions.headers as Record<string, string>
+  assert.equal(headers.Cookie, undefined)
+  assert.equal(headers.Authorization, 'Bearer keep')
+  assert.equal(headers['X-API-Key'], 'secret')
+}
+
+function testCustomParserResponseHelpers() {
+  const parsed = safeParseJsonBody('prefix {"ok":true,"value":1} suffix')
+  assert.deepEqual(parsed, { ok: true, value: 1 })
+
+  const mediaFromNestedVideo = extractMediaPayload({
+    result: {
+      media: {
+        playUrl: 'https://cdn.example.com/video.mp4',
+      },
+    },
+  })
+  assert.equal(mediaFromNestedVideo.mediaType, MediaType.VIDEO)
+  assert.equal(mediaFromNestedVideo.videoUrl, 'https://cdn.example.com/video.mp4')
+
+  const mediaFromAlbum = extractMediaPayload({
+    payload: {
+      images: [
+        { src: 'https://cdn.example.com/1.jpg' },
+        'https://cdn.example.com/2.jpg',
+      ],
+    },
+  })
+  assert.equal(mediaFromAlbum.mediaType, MediaType.IMAGE_ALBUM)
+  assert.equal(mediaFromAlbum.images?.length, 2)
+
+  const author = extractAuthorProfile({
+    user: {
+      nickname: 'tester',
+      avatar_url: 'https://cdn.example.com/avatar.jpg',
+      sign: 'hello',
+    },
+  })
+  assert.equal(author?.name, 'tester')
+  assert.equal(author?.avatar, 'https://cdn.example.com/avatar.jpg')
+  assert.equal(author?.signature, 'hello')
+}
+
+function testConversionUploadHelpers() {
+  assert.equal(
+    buildDouyinUserFolderPath([
+      {
+        title: 'x',
+        mediaType: MediaType.VIDEO,
+        author: '测试作者',
+        uid: '123456',
+      },
+    ]),
+    '测试作者_123456'
+  )
+
+  const filename = buildStableBatchVideoFileName(
+    {
+      title: '复杂标题 / with slash',
+      mediaType: MediaType.VIDEO,
+      author: 'tester',
+      url: 'https://www.douyin.com/video/7654321098765432101',
+    },
+    'https://www.douyin.com/video/7654321098765432101'
+  )
+  assert.equal(filename, 'tester_7654321098765432101.mp4')
+
+  assert.equal(
+    inferVideoFormat(undefined, 'https://cdn.example.com/path/video.webm?token=1'),
+    'webm'
+  )
+
+  assert.equal(
+    extractErrorMessageFromResponse('{"detail":"upstream exploded"}'),
+    'upstream exploded'
+  )
+  assert.equal(
+    extractErrorMessageFromResponse('  plain text   error body  '),
+    'plain text error body'
+  )
+}
+
+function testConversionParseHelpers() {
+  assert.equal(
+    extractRealVideoUrl('文案 https://www.douyin.com/video/1234567890123456789 更多文字'),
+    'https://www.douyin.com/video/1234567890123456789'
+  )
+  assert.equal(isValidVideoInputUrl('https://www.douyin.com/video/1234567890123456789'), true)
+  assert.equal(isValidVideoInputUrl('not-a-url'), false)
+
+  const parsedVideo = parseVideoResponseText(JSON.stringify({
+    success: true,
+    data: {
+      title: 'ok',
+      mediaType: MediaType.VIDEO,
+      url: 'https://cdn.example.com/test.mp4',
+    },
+  }))
+  assert.equal(parsedVideo.title, 'ok')
+  assert.equal(parsedVideo.url, 'https://cdn.example.com/test.mp4')
+
+  assert.throws(
+    () => parseVideoResponseText(JSON.stringify({
+      success: true,
+      data: {
+        title: 'bad',
+        mediaType: MediaType.IMAGE_ALBUM,
+        images: [],
+      },
+    })),
+    /图集解析成功但没有找到任何图片/
+  )
+}
+
+function testStorageMaintenanceHelpers() {
+  const payload = createExportedAppData({
+    config: {
+      parsers: [],
+      webdavServers: [],
+      theme: 'system',
+    },
+    parsers: [],
+    webdavServers: [],
+    history: [],
+    tags: [
+      {
+        id: 'tag-1',
+        name: '重要',
+        color: 'red',
+        createdAt: new Date('2026-06-09T00:00:00.000Z'),
+      },
+    ],
+    cleanupConfig: {
+      ...getDefaultCleanupConfig(),
+      retainDays: 14,
+    },
+  })
+
+  assert.equal(payload.version, '1.1.0')
+  assert.equal(payload.tags?.length, 1)
+  assert.equal(payload.cleanupConfig?.retainDays, 14)
+
+  const parsed = parseImportedAppData(serializeExportedAppData(payload))
+  assert.equal(parsed.tags?.[0]?.name, '重要')
+  assert.equal(parsed.cleanupConfig?.retainDays, 14)
+
+  const legacy = parseImportedAppData(JSON.stringify({
+    version: '1.0.0',
+    exportTime: '2026-06-09T00:00:00.000Z',
+    config: {
+      parsers: [],
+      webdavServers: [],
+      theme: 'light',
+    },
+    parsers: [],
+    webdavServers: [],
+    history: [],
+  }))
+  assert.equal(legacy.version, '1.0.0')
+  assert.equal(legacy.tags, undefined)
+
+  assert.throws(
+    () => parseImportedAppData(JSON.stringify({ version: '1.0.0' })),
+    /无效的数据格式/
+  )
+}
+
+function testHistoryTagHelpers() {
+  const normalized = normalizeHistoryRecord({
+    id: 'legacy-id',
+    type: 'single',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    lastViewedAt: '2026-06-02T00:00:00.000Z',
+    task: {
+      status: 'success',
+      createdAt: 'invalid-date',
+      completedAt: '2026-06-03T00:00:00.000Z',
+    },
+  })
+
+  assert.match(normalized.id, /^[0-9a-f-]{36}$/i)
+  assert.equal(normalized.createdAt instanceof Date, true)
+  assert.equal(normalized.lastViewedAt instanceof Date, true)
+  assert.equal(normalized.task.createdAt instanceof Date, true)
+  assert.equal(normalized.task.completedAt instanceof Date, true)
+
+  const rewritten = rewriteHistoryTagIds(
+    [
+      {
+        id: 'record-1',
+        type: 'single',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        tags: ['legacy-tag', 'keep-tag'],
+        task: {
+          id: 'task-1',
+          videoUrl: 'https://example.com/video.mp4',
+          status: 'success' as any,
+          createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        },
+      },
+    ],
+    new Map([['legacy-tag', 'uuid-tag']])
+  )
+
+  assert.equal(rewritten.changed, true)
+  assert.deepEqual(rewritten.records[0].tags, ['uuid-tag', 'keep-tag'])
 }
 
 async function testDouyinCore() {

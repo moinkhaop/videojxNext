@@ -16,6 +16,9 @@
     "../src/lib/parser-race.ts",
     "../src/lib/api/douyin-parser.ts",
     "../src/lib/api/parser-security.ts",
+    "../src/lib/storage/config-core.ts",
+    "../src/lib/storage/history-tag-core.ts",
+    "../src/lib/storage/maintenance-core.ts",
     "../src/types/index.ts"
   ]
 }
