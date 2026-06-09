@@ -67,6 +67,7 @@ export function PreviewArea({
                 videoUrl={mediaInfo.url}
                 thumbnail={mediaInfo.thumbnail}
                 title={mediaInfo.title}
+                format={mediaInfo.format}
                 className="w-full aspect-video"
                 useProxy={true}
               />

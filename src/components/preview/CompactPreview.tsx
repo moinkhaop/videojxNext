@@ -50,7 +50,6 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
 
       {/* {{ AURA: Add - 紧凑媒体预览区域 }} */}
       <div className="space-y-3">
-        {/* {{ AURA: Modify - 添加点击放大功能的媒体预览 }}
         {/* 媒体内容预览 */}
         {isVideo && mediaInfo.url ? (
           <VideoPreview
@@ -58,6 +57,7 @@ export function CompactPreview({ mediaInfo, className = '' }: CompactPreviewProp
             videoUrl={mediaInfo.url}
             thumbnail={mediaInfo.thumbnail}
             title={mediaInfo.title}
+            format={mediaInfo.format}
             className="w-full aspect-video rounded-lg hover:opacity-90 transition-opacity cursor-pointer"
             onClick={handleVideoClick}
           />

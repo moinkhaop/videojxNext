@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
+import { cn } from '@/lib/utils'
+import { getMediaPreviewLabel, getMediaStageHeightClass, isAnimatedImageMedia } from './media-helpers'
 import {
   Play,
   Image,
@@ -114,6 +116,9 @@ export function TwoColumnPreview({
 }: TwoColumnPreviewProps) {
   const isVideo = mediaInfo.mediaType === MediaType.VIDEO
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
+  const isAnimatedImage = isAnimatedImageMedia(mediaInfo)
+  const mediaLabel = getMediaPreviewLabel(mediaInfo)
+  const mediaStageHeightClass = getMediaStageHeightClass(mediaInfo)
   
   // {{ AURA: Add - 智能显示模式选择 }}
   const useEnhancedGallery = isImageAlbum && mediaInfo.images && mediaInfo.images.length > 3
@@ -186,15 +191,47 @@ export function TwoColumnPreview({
               />
             </div>
           ) : (
-            // 标准视频/图集预览 - 自适应高度
+            // 标准视频/图集预览 - 固定媒体舞台，避免播放后重排
             <div className="h-full flex flex-col">
-              <div className="flex-1 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800 shadow-md">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                  {isAnimatedImage ? (
+                    <ImageIcon className="w-4 h-4 text-emerald-500" />
+                  ) : isVideo ? (
+                    <Play className="w-4 h-4 text-blue-500" />
+                  ) : (
+                    <Image className="w-4 h-4 text-green-500" />
+                  )}
+                  <span>{mediaLabel}预览</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'border-white/20 bg-white/70 text-xs shadow-sm dark:bg-gray-900/80',
+                    isAnimatedImage && 'border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300',
+                    !isAnimatedImage && isVideo && 'border-blue-200 text-blue-700 dark:border-blue-900 dark:text-blue-300',
+                    isImageAlbum && 'border-green-200 text-green-700 dark:border-green-900 dark:text-green-300',
+                  )}
+                >
+                  {isAnimatedImage ? '自动播放' : isVideo ? '点击控件播放' : `${mediaInfo.imageCount || mediaInfo.images?.length || 0} 张`}
+                </Badge>
+              </div>
+
+              <div
+                className={cn(
+                  'relative overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800 shadow-md',
+                  'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800',
+                  mediaStageHeightClass
+                )}
+              >
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/25 to-transparent" />
                 {isVideo && mediaInfo.url ? (
                   <VideoPreview
                     key={mediaInfo.url}
                     videoUrl={mediaInfo.url}
                     thumbnail={mediaInfo.thumbnail}
                     title={mediaInfo.title}
+                    format={mediaInfo.format}
                     className="w-full h-full"
                   />
                 ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
@@ -210,7 +247,7 @@ export function TwoColumnPreview({
                       <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
                       <p className="text-lg font-medium mb-2">无法预览内容</p>
                       <p className="text-sm opacity-75">
-                        {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
+                        {isAnimatedImage ? '动图地址无效或不可访问' : isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
                       </p>
                     </div>
                   </div>
@@ -268,7 +305,7 @@ export function TwoColumnPreview({
                       {mediaInfo.title || '未知标题'}
                     </h3>
                     <Badge variant={isVideo ? "default" : "secondary"} className="font-medium flex-shrink-0 text-xs">
-                      {isVideo ? '视频' : '图集'}
+                      {mediaLabel}
                     </Badge>
                   </div>
                   {mediaInfo.author && (
@@ -295,7 +332,7 @@ export function TwoColumnPreview({
             <div className="p-4">
               <div className="grid grid-cols-2 gap-3">
                 {/* 时长/图片数量 */}
-                {isVideo && mediaInfo.duration && (
+                {isVideo && mediaInfo.duration && !isAnimatedImage && (
                   <div className="flex flex-col p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900">
                     <div className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 mb-1">
                       <Clock className="w-3.5 h-3.5" />
@@ -344,8 +381,8 @@ export function TwoColumnPreview({
                 {isVideo && mediaInfo.format && (
                   <div className="flex flex-col p-3 bg-orange-50 dark:bg-orange-950/20 rounded-lg border border-orange-100 dark:border-orange-900">
                     <div className="flex items-center gap-1.5 text-orange-600 dark:text-orange-400 mb-1">
-                      <FileVideo className="w-3.5 h-3.5" />
-                      <span className="text-xs font-medium">格式</span>
+                      {isAnimatedImage ? <ImageIcon className="w-3.5 h-3.5" /> : <FileVideo className="w-3.5 h-3.5" />}
+                      <span className="text-xs font-medium">{isAnimatedImage ? '动图格式' : '格式'}</span>
                     </div>
                     <span className="text-sm font-bold text-gray-900 dark:text-white uppercase">{mediaInfo.format}</span>
                   </div>

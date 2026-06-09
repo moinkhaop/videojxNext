@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { Play, Pause, Volume2, VolumeX, Maximize, AlertCircle, Zap } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { AlertCircle, Zap } from 'lucide-react'
+import { MediaType } from '@/types'
+import { isAnimatedImageMedia } from './media-helpers'
 
 interface VideoPreviewProps {
   videoUrl: string
@@ -12,15 +13,28 @@ interface VideoPreviewProps {
   onClick?: () => void
   onError?: () => void // 添加错误回调
   useProxy?: boolean // 是否使用代理（默认true）
+  format?: string
 }
 
-export function VideoPreview({ videoUrl, thumbnail, title, className = '', onClick, onError, useProxy = true }: VideoPreviewProps) {
+export function VideoPreview({
+  videoUrl,
+  thumbnail,
+  title,
+  className = '',
+  onClick,
+  onError,
+  useProxy = true,
+  format,
+}: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
-  const [isFullscreen, setIsFullscreen] = useState(false)
   const [hasError, setHasError] = useState(false)
-  const [showProxyTip, setShowProxyTip] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const isAnimatedImage = isAnimatedImageMedia({
+    mediaType: MediaType.VIDEO,
+    format,
+    url: videoUrl,
+  })
 
   // {{ AURA: Add - 当videoUrl改变时重置播放状态和视频元素 }}
   useEffect(() => {
@@ -30,7 +44,6 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
       videoRef.current.pause()
       setIsPlaying(false)
       setHasError(false)
-      setShowProxyTip(false)
       setIsMuted(false)
     }
   }, [videoUrl])
@@ -62,42 +75,39 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
 
   const handleVideoError = () => {
     setHasError(true)
-    // 如果已经使用了代理还是失败，显示提示
-    if (useProxy) {
-      setShowProxyTip(true)
-    }
     if (onError) {
       onError()
     }
   }
 
-  // {{ AURA: Add - 尝试不使用代理重新加载 }}
-  const handleRetryWithoutProxy = () => {
-    setHasError(false)
-    setShowProxyTip(false)
-    // 这需要通过prop重新渲染，或者可以在父组件中处理
-  }
-
-  // {{ AURA: Delete - 移除自定义控制逻辑，因为现在使用原生控件 }}
-
   return (
     <div className={`relative bg-black rounded-lg overflow-hidden ${className}`} onClick={onClick}>
-      {/* 视频元素 */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-contain"
-        src={proxiedVideoUrl}
-        poster={thumbnail}
-        preload="auto"
-        controls
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
-        onVolumeChange={(e) => setIsMuted((e.target as HTMLVideoElement).muted)}
-        onError={handleVideoError}
-      >
-        您的浏览器不支持视频播放。
-      </video>
+      {isAnimatedImage ? (
+        <img
+          className="w-full h-full object-contain"
+          src={proxiedVideoUrl}
+          alt={title || '动图预览'}
+          loading="eager"
+          onError={handleVideoError}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain"
+          src={proxiedVideoUrl}
+          poster={thumbnail}
+          preload="metadata"
+          playsInline
+          controls
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          onVolumeChange={(e) => setIsMuted((e.target as HTMLVideoElement).muted)}
+          onError={handleVideoError}
+        >
+          您的浏览器不支持视频播放。
+        </video>
+      )}
 
       {/* {{ AURA: Modify - 改进视频加载失败提示，增加代理和直链选项 }} */}
       {hasError && (
@@ -109,7 +119,9 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
               </div>
             </div>
             
-            <h3 className="text-lg font-semibold mb-4">视频加载失败</h3>
+            <h3 className="text-lg font-semibold mb-4">
+              {isAnimatedImage ? '动图加载失败' : '视频加载失败'}
+            </h3>
             
             {/* 当前使用的加载方式提示 */}
             <div className="bg-blue-900/30 border border-blue-500/30 rounded-lg p-3 mb-4">
@@ -119,8 +131,8 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
               </div>
               <p className="text-xs text-blue-200/70">
                 {useProxy 
-                  ? '正在通过服务器代理访问视频。如问题仍未解决，请尝试直链模式。'
-                  : '正在直接访问视频链接。某些视频可能需要服务器代理才能正常加载。'
+                  ? `正在通过服务器代理访问${isAnimatedImage ? '动图' : '视频'}。如问题仍未解决，请尝试直链模式。`
+                  : `正在直接访问${isAnimatedImage ? '动图' : '视频'}链接。某些资源可能需要服务器代理才能正常加载。`
                 }
               </p>
             </div>
@@ -131,9 +143,9 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
                 <strong>可能原因：</strong>
               </p>
               <ul className="text-xs text-amber-200/80 space-y-1 list-disc list-inside">
-                <li>视频直链已过期（通常有时效性限制）</li>
+                <li>{isAnimatedImage ? '动图直链已过期（通常有时效性限制）' : '视频直链已过期（通常有时效性限制）'}</li>
                 <li>网络连接不稳定或被限制</li>
-                <li>浏览器不支持该视频格式</li>
+                <li>{isAnimatedImage ? '浏览器不支持该动图格式' : '浏览器不支持该视频格式'}</li>
                 <li>服务器拒绝访问</li>
               </ul>
             </div>
@@ -146,7 +158,7 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
               <ol className="text-xs text-green-200/80 space-y-2">
                 <li className="flex gap-2">
                   <span className="font-bold min-w-fit">1.</span>
-                  <span>点击页面上方的"重新解析"按钮获取最新的视频链接</span>
+                  <span>点击页面上方的"重新解析"按钮获取最新的{isAnimatedImage ? '动图' : '视频'}链接</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold min-w-fit">2.</span>
@@ -154,7 +166,7 @@ export function VideoPreview({ videoUrl, thumbnail, title, className = '', onCli
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold min-w-fit">3.</span>
-                  <span>如果问题仍未解决，可能是视频已被删除或不再可用</span>
+                  <span>如果问题仍未解决，可能是原始资源已被删除或不再可用</span>
                 </li>
               </ol>
             </div>
