@@ -5,8 +5,7 @@ import type { Session, User } from '@supabase/supabase-js'
 import { getCurrentUser, getCurrentSession, onAuthStateChange } from '@/lib/supabase/auth'
 import { assertSupabaseEnabled, SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { createClient as createSupabaseClient } from '@/lib/supabase/client'
-
-const ACTIVE_USER_STORAGE_KEY = 'dyjx_active_user_id'
+import { ACTIVE_USER_STORAGE_KEY } from '@/lib/storage/config-core'
 
 const setActiveUserStorageScope = (userId: string | null) => {
   if (typeof window === 'undefined') {

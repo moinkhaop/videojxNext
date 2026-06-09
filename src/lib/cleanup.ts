@@ -1,5 +1,12 @@
-import { ConversionTask, BatchTask, CleanupConfig, CleanupLogEntry } from '@/types';
-import { CleanupConfigManager, CleanupLogManager } from './storage';
+import { ConversionTask, BatchTask, CleanupConfig, CleanupLogEntry, HistoryRecord } from '@/types';
+import { CleanupConfigManager, CleanupLogManager, HistoryManager } from './storage';
+import { getScopedStorageItem, removeScopedStorageItem, setScopedStorageItem } from './storage/config-core';
+
+const CACHE_KEYS = [
+  'dyjx_parser_cache',
+  'dyjx_download_cache',
+  'dyjx_temp_data',
+]
 
 // 清理服务类
 export class CleanupService {
@@ -40,100 +47,20 @@ export class CleanupService {
     let spaceFreed = 0;
     
     try {
-      // 获取历史记录
-      const historyKey = 'dyjx_history_records';
-      const storedHistory = localStorage.getItem(historyKey);
-      
-      if (storedHistory) {
-        const history = JSON.parse(storedHistory);
-        const originalLength = history.length;
-        
-        // 过滤掉过期的记录
-        const filteredHistory = history.filter((record: any) => {
-          const recordDate = new Date(record.createdAt);
-          
-          // 如果记录日期在保留日期之前，则应该删除
-          if (recordDate < cutoffDate) {
-            // 检查是否应该保留该记录
-            if (record.task) {
-              const task = record.task;
-              
-              // 根据配置决定是否保留成功或失败的任务
-              if (task.status === 'success' && config.retainSuccessfulTasks) {
-                return true; // 保留成功任务
-              }
-              if (task.status === 'failed' && config.retainFailedTasks) {
-                return true; // 保留失败任务
-              }
-              
-              // 检查文件扩展名
-              if (record.task.videoUrl) {
-                const url = record.task.videoUrl;
-                const extension = this.getFileExtension(url);
-                if (config.retainExtensions.includes(extension)) {
-                  return true; // 保留指定扩展名的文件
-                }
-              }
-            }
-            
-            // 如果没有满足保留条件，则删除
-            return false;
-          }
-          
-          // 保留日期在保留范围内的记录
-          return true;
-        });
-        
-        // 计算删除的记录数
-        filesDeleted = originalLength - filteredHistory.length;
-        
-        // 估算释放的空间（简化计算）
-        spaceFreed = filesDeleted * 1024; // 假设每个记录约1KB
-        
-        // 保存过滤后的历史记录
-        localStorage.setItem(historyKey, JSON.stringify(filteredHistory));
+      const history = HistoryManager.getHistory();
+      const originalLength = history.length;
+      const filteredHistory = history.filter(record => this.shouldRetainHistoryRecord(record, config, cutoffDate));
+      filesDeleted = originalLength - filteredHistory.length;
+      spaceFreed = filesDeleted * 1024;
+
+      if (filesDeleted > 0) {
+        HistoryManager.saveHistory(filteredHistory);
       }
-      
-      // 清理其他可能的缓存数据
-      const cacheKeys = [
-        'dyjx_parser_cache', // 解析器缓存
-        'dyjx_download_cache', // 下载缓存
-        'dyjx_temp_data' // 临时数据
-      ];
-      
-      for (const key of cacheKeys) {
-        const stored = localStorage.getItem(key);
-        if (stored) {
-          const cacheData = JSON.parse(stored);
-          const originalLength = Array.isArray(cacheData) ? cacheData.length : 1;
-          
-          // 清理过期的缓存数据
-          if (Array.isArray(cacheData)) {
-            const filteredCache = cacheData.filter((item: any) => {
-              if (item.timestamp) {
-                const itemDate = new Date(item.timestamp);
-                return itemDate >= cutoffDate;
-              }
-              return true; // 没有时间戳的数据保留
-            });
-            
-            const deletedCount = originalLength - filteredCache.length;
-            filesDeleted += deletedCount;
-            spaceFreed += deletedCount * 512; // 假设每个缓存项约512字节
-            
-            localStorage.setItem(key, JSON.stringify(filteredCache));
-          } else {
-            // 对于非数组数据，检查是否有时间戳
-            if (cacheData.timestamp) {
-              const itemDate = new Date(cacheData.timestamp);
-              if (itemDate < cutoffDate) {
-                localStorage.removeItem(key);
-                filesDeleted += 1;
-                spaceFreed += 1024; // 假设每个缓存项约1KB
-              }
-            }
-          }
-        }
+
+      for (const key of CACHE_KEYS) {
+        const deletedCount = this.cleanupCacheKey(key, cutoffDate);
+        filesDeleted += deletedCount;
+        spaceFreed += deletedCount * 512;
       }
       
       // 记录清理日志
@@ -192,7 +119,13 @@ export class CleanupService {
         ];
         
         for (const key of taskCacheKeys) {
-          localStorage.removeItem(key);
+          removeScopedStorageItem(key);
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.removeItem(key)
+            } catch {
+            }
+          }
         }
         
         // 记录清理日志
@@ -233,6 +166,82 @@ export class CleanupService {
     const lastDotIndex = filename.lastIndexOf('.');
     if (lastDotIndex === -1) return '';
     return filename.substring(lastDotIndex).toLowerCase();
+  }
+
+  private static shouldRetainHistoryRecord(record: HistoryRecord, config: CleanupConfig, cutoffDate: Date): boolean {
+    const recordDate = new Date(record.createdAt);
+    if (recordDate >= cutoffDate) {
+      return true;
+    }
+
+    if (record.task) {
+      const task = record.task as any;
+      if (task.status === 'success' && config.retainSuccessfulTasks) {
+        return true;
+      }
+      if (task.status === 'failed' && config.retainFailedTasks) {
+        return true;
+      }
+
+      const candidateUrl = task.videoUrl || task.sourceUrl || task.uploadResult?.filePath || '';
+      const extension = this.getFileExtension(String(candidateUrl));
+      if (extension && config.retainExtensions.includes(extension)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static cleanupCacheKey(key: string, cutoffDate: Date): number {
+    const scopedStored = getScopedStorageItem(key);
+    const legacyStored = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
+    const stored = scopedStored ?? legacyStored;
+
+    if (!stored) {
+      return 0;
+    }
+
+    const cacheData = JSON.parse(stored);
+    const originalLength = Array.isArray(cacheData) ? cacheData.length : 1;
+
+    if (Array.isArray(cacheData)) {
+      const filteredCache = cacheData.filter((item: any) => {
+        if (item?.timestamp) {
+          const itemDate = new Date(item.timestamp);
+          return itemDate >= cutoffDate;
+        }
+        return true;
+      });
+
+      const deletedCount = originalLength - filteredCache.length;
+      if (deletedCount > 0) {
+        setScopedStorageItem(key, JSON.stringify(filteredCache));
+        if (legacyStored !== null && typeof window !== 'undefined') {
+          try {
+            window.localStorage.removeItem(key);
+          } catch {
+          }
+        }
+      }
+      return deletedCount;
+    }
+
+    if (cacheData?.timestamp) {
+      const itemDate = new Date(cacheData.timestamp);
+      if (itemDate < cutoffDate) {
+        removeScopedStorageItem(key);
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.removeItem(key);
+          } catch {
+          }
+        }
+        return 1;
+      }
+    }
+
+    return 0;
   }
 
   // 格式化文件大小

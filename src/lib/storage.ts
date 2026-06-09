@@ -6,17 +6,56 @@ import {
   CleanupConfig,
   CleanupLogEntry,
   HistoryStats,
-  TaskStatus,
   Tag,
   ParserCapability,
   SupportedPlatform,
+  TemplateProfilesConfig,
   RetryPolicyConfig,
   NotificationSettings,
-  TemplateProfilesConfig,
-  NamingTemplateProfile,
 } from '@/types'
 import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
 import { markSyncError, markSyncOk } from '@/lib/supabase/sync-status'
+import {
+  DEFAULT_TEMPLATE_PROFILES,
+  DEFAULT_TEMPLATE_PROFILE_ID,
+  DEFAULT_UPLOAD_FILE_TEMPLATE,
+  DEFAULT_UPLOAD_FOLDER_TEMPLATE,
+  getScopedStorageItem,
+  normalizeAppConfig,
+  normalizeNotificationSettings,
+  normalizeRetryPolicy,
+  normalizeTemplateProfiles,
+  removeScopedStorageItem,
+  setScopedStorageItem,
+} from '@/lib/storage/config-core'
+import {
+  createDefaultTags,
+  createTagRecord,
+  exportHistoryRecordsToCSV,
+  exportHistoryRecordsToJSON,
+  filterFavoriteHistoryRecords,
+  filterHistoryRecordsByAuthor,
+  filterHistoryRecordsByDateRange,
+  filterHistoryRecordsByTag,
+  getHistoryStatistics,
+  matchesHistoryRecordKeyword,
+  readHistoryRecords,
+  readStoredTags,
+  rewriteHistoryTagIds,
+  writeHistoryRecords,
+  writeTags,
+} from '@/lib/storage/history-tag-core'
+import {
+  appendCleanupLog,
+  clearCleanupLogs as clearStoredCleanupLogs,
+  createExportedAppData,
+  getDefaultCleanupConfig,
+  parseImportedAppData,
+  readCleanupConfig,
+  readCleanupLogs,
+  serializeExportedAppData,
+  writeCleanupConfig,
+} from '@/lib/storage/maintenance-core'
 
 let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
 let suppressCloudSync = false
@@ -29,277 +68,7 @@ export function runWithCloudSyncSuppressed<T>(fn: () => T): T {
     suppressCloudSync = false
   }
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value)
 const builtinEdgeOneParserUrl = process.env.NEXT_PUBLIC_EDGEONE_PARSER_API_URL?.trim() || ''
-const ACTIVE_USER_STORAGE_KEY = 'dyjx_active_user_id'
-const GUEST_STORAGE_SCOPE = 'guest'
-
-const createUuid = (): string => {
-  const uuid = (globalThis as any)?.crypto?.randomUUID
-  if (typeof uuid === 'function') {
-    return uuid.call((globalThis as any).crypto)
-  }
-
-  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-const DEFAULT_TEMPLATE_PROFILES: NamingTemplateProfile[] = [
-  {
-    id: 'safe',
-    name: '保守模式',
-    folderTemplate: '{author}',
-    fileTemplate: '{title}',
-  },
-  {
-    id: 'balanced',
-    name: '信息丰富',
-    folderTemplate: '{author}',
-    fileTemplate: '{awemeId}_{title}',
-  },
-  {
-    id: 'by_date',
-    name: '按日期归档',
-    folderTemplate: '{date}/{author}',
-    fileTemplate: '{awemeId}_{title}',
-  },
-]
-const DEFAULT_TEMPLATE_PROFILE_ID = 'balanced'
-const DEFAULT_UPLOAD_FOLDER_TEMPLATE = '{author}'
-const DEFAULT_UPLOAD_FILE_TEMPLATE = '{awemeId}_{title}'
-
-const DEFAULT_RETRY_POLICY: RetryPolicyConfig = {
-  retryableClasses: ['timeout', 'network', 'http5xx'],
-  maxRetries: 2,
-  baseDelayMs: 600,
-  maxDelayMs: 12000,
-}
-
-const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  enabled: true,
-  success: false,
-  failure: true,
-  batchDone: true,
-  quietHoursStart: '23:00',
-  quietHoursEnd: '08:00',
-}
-
-function normalizeTemplateProfiles(input: unknown): TemplateProfilesConfig {
-  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
-  const rawProfiles = Array.isArray(source.profiles) ? source.profiles : DEFAULT_TEMPLATE_PROFILES
-  const profiles: NamingTemplateProfile[] = []
-  const seen = new Set<string>()
-
-  for (const raw of rawProfiles) {
-    const id = String(raw?.id || '').trim() || createUuid()
-    if (seen.has(id)) continue
-    seen.add(id)
-    profiles.push({
-      id,
-      name: String(raw?.name || '未命名模板').trim() || '未命名模板',
-      folderTemplate: String(raw?.folderTemplate || '{author}').trim() || '{author}',
-      fileTemplate: String(raw?.fileTemplate || '{awemeId}_{title}').trim() || '{awemeId}_{title}',
-    })
-  }
-
-  const safeProfiles = profiles.length > 0 ? profiles : [...DEFAULT_TEMPLATE_PROFILES]
-  const activeProfileId = String(source.activeProfileId || '').trim()
-  const preferredActiveId = safeProfiles.some(item => item.id === DEFAULT_TEMPLATE_PROFILE_ID)
-    ? DEFAULT_TEMPLATE_PROFILE_ID
-    : safeProfiles[0].id
-  const hasActive = safeProfiles.some(item => item.id === activeProfileId)
-  return {
-    activeProfileId: hasActive ? activeProfileId : preferredActiveId,
-    profiles: safeProfiles,
-  }
-}
-
-function normalizeRetryPolicy(input: unknown): RetryPolicyConfig {
-  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
-  const classes = Array.isArray(source.retryableClasses) ? source.retryableClasses : DEFAULT_RETRY_POLICY.retryableClasses
-  const allowed = new Set(['timeout', 'network', 'http4xx', 'http5xx', 'invalid_payload', 'unknown'])
-  const retryableClasses = Array.from(new Set(classes.map(item => String(item || '').trim()).filter(item => allowed.has(item))))
-  return {
-    retryableClasses: (retryableClasses.length > 0 ? retryableClasses : DEFAULT_RETRY_POLICY.retryableClasses) as RetryPolicyConfig['retryableClasses'],
-    maxRetries: Math.max(0, Math.min(5, Number(source.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries))),
-    baseDelayMs: Math.max(150, Math.min(60000, Number(source.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs))),
-    maxDelayMs: Math.max(300, Math.min(120000, Number(source.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs))),
-  }
-}
-
-function normalizeNotificationSettings(input: unknown): NotificationSettings {
-  const source = input && typeof input === 'object' ? (input as Record<string, any>) : {}
-  const quietHoursStart = /^\d{2}:\d{2}$/.test(String(source.quietHoursStart || ''))
-    ? String(source.quietHoursStart)
-    : DEFAULT_NOTIFICATION_SETTINGS.quietHoursStart
-  const quietHoursEnd = /^\d{2}:\d{2}$/.test(String(source.quietHoursEnd || ''))
-    ? String(source.quietHoursEnd)
-    : DEFAULT_NOTIFICATION_SETTINGS.quietHoursEnd
-  return {
-    enabled: source.enabled !== false,
-    success: source.success === true,
-    failure: source.failure !== false,
-    batchDone: source.batchDone !== false,
-    quietHoursStart,
-    quietHoursEnd,
-  }
-}
-
-function asObject(value: unknown): Record<string, any> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {}
-  }
-  return value as Record<string, any>
-}
-
-function ensureTemplateProfile(
-  config: TemplateProfilesConfig,
-  profileId: string,
-  folderTemplate: string,
-  fileTemplate: string
-): TemplateProfilesConfig {
-  const next = normalizeTemplateProfiles(config)
-  const targetIndex = next.profiles.findIndex(item => item.id === profileId)
-  const patched = [...next.profiles]
-  const nextProfile: NamingTemplateProfile = {
-    id: profileId,
-    name: targetIndex >= 0 ? patched[targetIndex].name : '当前模板',
-    folderTemplate,
-    fileTemplate,
-  }
-  if (targetIndex >= 0) {
-    patched[targetIndex] = {
-      ...patched[targetIndex],
-      ...nextProfile,
-    }
-  } else {
-    patched.unshift(nextProfile)
-  }
-  return normalizeTemplateProfiles({
-    activeProfileId: profileId,
-    profiles: patched,
-  })
-}
-
-function normalizeAppConfig(input: unknown): AppConfig {
-  const source = asObject(input)
-  const themeCandidate = String(source.theme || 'system')
-  const theme: AppConfig['theme'] =
-    themeCandidate === 'light' || themeCandidate === 'dark' || themeCandidate === 'system'
-      ? themeCandidate
-      : 'system'
-
-  const rawLegacyFolder = String(source.uploadFolderTemplate || '').trim()
-  const rawLegacyFile = String(source.uploadFileTemplate || '').trim()
-  const hasLegacyTemplates = Boolean(rawLegacyFolder || rawLegacyFile)
-  const folderTemplate = rawLegacyFolder || DEFAULT_UPLOAD_FOLDER_TEMPLATE
-  const fileTemplate = rawLegacyFile || DEFAULT_UPLOAD_FILE_TEMPLATE
-
-  const hasTemplateProfiles =
-    source.templateProfiles &&
-    typeof source.templateProfiles === 'object' &&
-    !Array.isArray(source.templateProfiles)
-  let templateProfiles = normalizeTemplateProfiles(source.templateProfiles)
-  if (!hasTemplateProfiles && hasLegacyTemplates) {
-    templateProfiles = ensureTemplateProfile(templateProfiles, 'legacy_current', folderTemplate, fileTemplate)
-  }
-
-  const activeProfile = templateProfiles.profiles.find(item => item.id === templateProfiles.activeProfileId) || null
-  const normalizedFolderTemplate = folderTemplate || activeProfile?.folderTemplate || DEFAULT_UPLOAD_FOLDER_TEMPLATE
-  const normalizedFileTemplate = fileTemplate || activeProfile?.fileTemplate || DEFAULT_UPLOAD_FILE_TEMPLATE
-  if (activeProfile && (
-    activeProfile.folderTemplate !== normalizedFolderTemplate ||
-    activeProfile.fileTemplate !== normalizedFileTemplate
-  )) {
-    templateProfiles = ensureTemplateProfile(
-      templateProfiles,
-      templateProfiles.activeProfileId,
-      normalizedFolderTemplate,
-      normalizedFileTemplate
-    )
-  }
-
-  return {
-    parsers: Array.isArray(source.parsers) ? source.parsers : [],
-    webdavServers: Array.isArray(source.webdavServers) ? source.webdavServers : [],
-    theme,
-    uploadFolderTemplate: normalizedFolderTemplate,
-    uploadFileTemplate: normalizedFileTemplate,
-    retryPolicy: normalizeRetryPolicy(source.retryPolicy),
-    notifications: normalizeNotificationSettings(source.notifications),
-    templateProfiles,
-  }
-}
-
-function resolveStorageScope() {
-  if (typeof window === 'undefined') {
-    return GUEST_STORAGE_SCOPE
-  }
-
-  try {
-    const activeUserId = window.localStorage.getItem(ACTIVE_USER_STORAGE_KEY)
-    if (isUuid(activeUserId)) {
-      return `user:${activeUserId}`
-    }
-  } catch {
-  }
-
-  return GUEST_STORAGE_SCOPE
-}
-
-function getScopedStorageKey(baseKey: string, scope = resolveStorageScope()) {
-  return `${baseKey}::${scope}`
-}
-
-function getScopedStorageItem(baseKey: string): string | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const scope = resolveStorageScope()
-  const scopedKey = getScopedStorageKey(baseKey, scope)
-
-  const scopedValue = window.localStorage.getItem(scopedKey)
-  if (scopedValue !== null) {
-    return scopedValue
-  }
-
-  // 兼容旧版本未分桶数据，仅在游客桶下读取一次。
-  if (scope === GUEST_STORAGE_SCOPE) {
-    return window.localStorage.getItem(baseKey)
-  }
-
-  return null
-}
-
-function setScopedStorageItem(baseKey: string, value: string) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  const scope = resolveStorageScope()
-  const scopedKey = getScopedStorageKey(baseKey, scope)
-  window.localStorage.setItem(scopedKey, value)
-}
-
-function removeScopedStorageItem(baseKey: string) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  const scope = resolveStorageScope()
-  const scopedKey = getScopedStorageKey(baseKey, scope)
-  window.localStorage.removeItem(scopedKey)
-
-  if (scope === GUEST_STORAGE_SCOPE) {
-    window.localStorage.removeItem(baseKey)
-  }
-}
 
 const scheduleConfigSyncToSupabase = () => {
   if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
@@ -1011,31 +780,19 @@ export class CleanupConfigManager {
 
   // 获取清理配置
   static getCleanupConfig(): CleanupConfig {
-    const defaultConfig: CleanupConfig = {
-      enabled: true,
-      retainDays: 7,
-      retainSuccessfulTasks: true,
-      retainFailedTasks: false,
-      retainExtensions: ['.mp4', '.mov', '.avi', '.mkv', '.jpg', '.png', '.webp'],
-      cleanupSchedule: '0 2 * * *'
-    }
-
     try {
-      const stored = getScopedStorageItem(this.CLEANUP_CONFIG_KEY)
-      if (stored) {
-        return { ...defaultConfig, ...JSON.parse(stored) }
-      }
+      return readCleanupConfig(this.CLEANUP_CONFIG_KEY)
     } catch (error) {
       console.error('获取清理配置失败:', error)
     }
 
-    return defaultConfig
+    return getDefaultCleanupConfig()
   }
 
   // 保存清理配置
   static saveCleanupConfig(config: CleanupConfig): void {
     try {
-      setScopedStorageItem(this.CLEANUP_CONFIG_KEY, JSON.stringify(config))
+      writeCleanupConfig(this.CLEANUP_CONFIG_KEY, config)
     } catch (error) {
       console.error('保存清理配置失败:', error)
     }
@@ -1056,15 +813,7 @@ export class CleanupLogManager {
   // 获取清理日志
   static getCleanupLogs(): CleanupLogEntry[] {
     try {
-      const stored = getScopedStorageItem(this.CLEANUP_LOGS_KEY)
-      if (stored) {
-        const logs = JSON.parse(stored)
-        // 转换时间戳为Date对象
-        return logs.map((log: any) => ({
-          ...log,
-          timestamp: new Date(log.timestamp)
-        }))
-      }
+      return readCleanupLogs(this.CLEANUP_LOGS_KEY)
     } catch (error) {
       console.error('获取清理日志失败:', error)
     }
@@ -1074,16 +823,7 @@ export class CleanupLogManager {
   // 保存清理日志
   static saveCleanupLog(log: CleanupLogEntry): void {
     try {
-      const logs = this.getCleanupLogs()
-      logs.unshift(log) // 最新的日志在前面
-      
-      // 限制日志数量，避免localStorage过大
-      const maxLogs = 100
-      if (logs.length > maxLogs) {
-        logs.splice(maxLogs)
-      }
-      
-      setScopedStorageItem(this.CLEANUP_LOGS_KEY, JSON.stringify(logs))
+      appendCleanupLog(this.CLEANUP_LOGS_KEY, log)
     } catch (error) {
       console.error('保存清理日志失败:', error)
     }
@@ -1092,7 +832,7 @@ export class CleanupLogManager {
   // 清空清理日志
   static clearCleanupLogs(): void {
     try {
-      removeScopedStorageItem(this.CLEANUP_LOGS_KEY)
+      clearStoredCleanupLogs(this.CLEANUP_LOGS_KEY)
     } catch (error) {
       console.error('清空清理日志失败:', error)
     }
@@ -1104,56 +844,14 @@ export class HistoryManager {
   private static readonly HISTORY_KEY = 'dyjx_history_records'
   private static readonly lastViewedSyncMap = new Map<string, number>()
 
-  private static normalizeDate(value: unknown, fallback: Date): Date {
-    const parsed = value instanceof Date ? value : new Date(value as any)
-    return Number.isNaN(parsed.getTime()) ? fallback : parsed
-  }
-
-  private static normalizeRecord(record: any): HistoryRecord {
-    const createdAt = this.normalizeDate(record?.createdAt, new Date())
-    const rawTask = record?.task && typeof record.task === 'object' ? record.task : {}
-    const taskCreatedAt = this.normalizeDate(rawTask.createdAt, createdAt)
-
-    return {
-      ...record,
-      id: isUuid(record?.id) ? record.id : createUuid(),
-      createdAt,
-      task: {
-        ...rawTask,
-        createdAt: taskCreatedAt,
-        completedAt: rawTask.completedAt
-          ? this.normalizeDate(rawTask.completedAt, taskCreatedAt)
-          : undefined
-      },
-      lastViewedAt: record?.lastViewedAt
-        ? this.normalizeDate(record.lastViewedAt, createdAt)
-        : undefined
-    } as HistoryRecord
-  }
-
   // 获取历史记录
   static getHistory(): HistoryRecord[] {
     try {
-      const stored = getScopedStorageItem(this.HISTORY_KEY)
-      if (stored) {
-        const records = JSON.parse(stored)
-        if (!Array.isArray(records)) {
-          return []
-        }
-        let changed = false
-        const normalized = records.map((record: any) => {
-          if (!isUuid(record?.id)) {
-            changed = true
-          }
-          return this.normalizeRecord(record)
-        })
-
-        if (changed) {
-          this.saveHistory(normalized)
-        }
-
-        return normalized
+      const result = readHistoryRecords(this.HISTORY_KEY)
+      if (result.changed) {
+        this.saveHistory(result.records)
       }
+      return result.records
     } catch (error) {
       console.error('获取历史记录失败:', error)
     }
@@ -1163,7 +861,7 @@ export class HistoryManager {
   // 保存历史记录
   static saveHistory(records: HistoryRecord[]): void {
     try {
-      setScopedStorageItem(this.HISTORY_KEY, JSON.stringify(records))
+      writeHistoryRecords(this.HISTORY_KEY, records)
     } catch (error) {
       console.error('保存历史记录失败:', error)
     }
@@ -1217,22 +915,7 @@ export class HistoryManager {
   }
 
   static matchesKeyword(record: HistoryRecord, keyword: string): boolean {
-    const lowerKeyword = keyword.trim().toLowerCase()
-    if (!lowerKeyword) {
-      return true
-    }
-
-    const task = record.task as any
-    const targets = [
-      task.videoTitle,
-      task.videoUrl,
-      task.name,
-      task.parsedVideoInfo?.author,
-      task.sourceUrl,
-      task.uploadResult?.filePath,
-    ]
-
-    return targets.some(value => String(value ?? '').toLowerCase().includes(lowerKeyword))
+    return matchesHistoryRecordKeyword(record, keyword)
   }
 
   // {{ AURA: Add - 切换收藏状态 }}
@@ -1271,114 +954,32 @@ export class HistoryManager {
   // {{ AURA: Add - 获取历史记录统计数据 }}
   static getStatistics(sourceRecords?: HistoryRecord[]): HistoryStats {
     const records = sourceRecords ?? this.getHistory()
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-
-    let totalSuccess = 0
-    let totalFailed = 0
-    let totalPending = 0
-    let todayRecords = 0
-    let thisWeekRecords = 0
-    let thisMonthRecords = 0
-    let favoriteCount = 0
-    const tagUsage: Record<string, number> = {}
-
-    records.forEach(record => {
-      const task = record.task
-
-      // 统计状态
-      if (task.status === TaskStatus.SUCCESS) totalSuccess++
-      else if (task.status === TaskStatus.FAILED) totalFailed++
-      else totalPending++
-
-      // 统计时间范围
-      const recordDate = new Date(record.createdAt)
-      if (recordDate >= today) todayRecords++
-      if (recordDate >= weekAgo) thisWeekRecords++
-      if (recordDate >= monthStart) thisMonthRecords++
-
-      // 统计收藏
-      if (record.isFavorite) favoriteCount++
-
-      // 统计标签使用
-      if (record.tags && record.tags.length > 0) {
-        record.tags.forEach(tagId => {
-          tagUsage[tagId] = (tagUsage[tagId] || 0) + 1
-        })
-      }
-    })
-
-    const successRate = records.length > 0
-      ? Math.round((totalSuccess / records.length) * 100)
-      : 0
-
-    return {
-      totalRecords: records.length,
-      totalSuccess,
-      totalFailed,
-      totalPending,
-      successRate,
-      todayRecords,
-      thisWeekRecords,
-      thisMonthRecords,
-      favoriteCount,
-      tagUsage
-    }
+    return getHistoryStatistics(records)
   }
 
   // {{ AURA: Add - 导出历史记录为CSV }}
   static exportToCSV(): string {
-    const records = this.getHistory()
-    const headers = ['ID', '类型', '标题', '链接', '状态', '创建时间', '完成时间', '错误信息', '文件路径']
-
-    const rows = records.map(record => {
-      const task = record.task as any
-      return [
-        record.id,
-        record.type === 'single' ? '单链接' : '批量',
-        task.videoTitle || task.name || '',
-        task.videoUrl || '',
-        task.status,
-        record.createdAt.toLocaleString(),
-        task.completedAt ? task.completedAt.toLocaleString() : '',
-        task.error || '',
-        task.uploadResult?.filePath || ''
-      ].map(field => `"${String(field).replace(/"/g, '""')}"`)
-    })
-
-    return [headers.join(','), ...rows.map(row => row.join(','))].join('\n')
+    return exportHistoryRecordsToCSV(this.getHistory())
   }
 
   // {{ AURA: Add - 导出历史记录为JSON }}
   static exportToJSON(): string {
-    const records = this.getHistory()
-    return JSON.stringify(records, null, 2)
+    return exportHistoryRecordsToJSON(this.getHistory())
   }
 
   // {{ AURA: Add - 按日期范围筛选 }}
   static filterByDateRange(startDate: Date, endDate: Date): HistoryRecord[] {
-    const records = this.getHistory()
-    return records.filter(record => {
-      const recordDate = new Date(record.createdAt)
-      return recordDate >= startDate && recordDate <= endDate
-    })
+    return filterHistoryRecordsByDateRange(this.getHistory(), startDate, endDate)
   }
 
   // {{ AURA: Add - 按作者筛选 }}
   static filterByAuthor(author: string): HistoryRecord[] {
-    const records = this.getHistory()
-    return records.filter(record => {
-      const task = record.task as any
-      return task.parsedVideoInfo?.author?.toLowerCase().includes(author.toLowerCase())
-    })
+    return filterHistoryRecordsByAuthor(this.getHistory(), author)
   }
 
   // {{ AURA: Add - 获取收藏的历史记录 }}
   static getFavorites(): HistoryRecord[] {
-    const records = this.getHistory()
-    return records.filter(record => record.isFavorite)
+    return filterFavoriteHistoryRecords(this.getHistory())
   }
 
   // {{ AURA: Add - 为记录添加标签 }}
@@ -1410,8 +1011,7 @@ export class HistoryManager {
 
   // {{ AURA: Add - 按标签筛选记录 }}
   static filterByTag(tagId: string): HistoryRecord[] {
-    const records = this.getHistory()
-    return records.filter(record => record.tags && record.tags.includes(tagId))
+    return filterHistoryRecordsByTag(this.getHistory(), tagId)
   }
 
   // {{ AURA: Add - 更新记录的最后查看时间 }}
@@ -1448,51 +1048,18 @@ export class TagManager {
   // 获取所有标签
   static getTags(): Tag[] {
     try {
-      const stored = getScopedStorageItem(this.TAGS_KEY)
-      if (stored) {
-        const raw = JSON.parse(stored)
-        const idMap = new Map<string, string>()
-        let changed = false
-        const tags = raw.map((tag: any) => {
-          const originalId = tag?.id
-          const normalizedId = isUuid(originalId)
-            ? originalId
-            : (idMap.get(String(originalId)) ?? (() => {
-                const next = createUuid()
-                idMap.set(String(originalId), next)
-                return next
-              })())
+      const result = readStoredTags(this.TAGS_KEY)
+      if (result.tags) {
+        if (result.changed) {
+          this.saveTags(result.tags)
 
-          if (normalizedId !== originalId) {
-            changed = true
-          }
-
-          return {
-            ...tag,
-            id: normalizedId,
-            createdAt: new Date(tag.createdAt)
-          }
-        })
-
-        if (changed) {
-          this.saveTags(tags)
-
-          const records = HistoryManager.getHistory()
-          let historyChanged = false
-          const updatedRecords = records.map(record => {
-            if (!record.tags || record.tags.length === 0) return record
-            const nextTags = record.tags.map(tagId => idMap.get(tagId) ?? tagId)
-            const different = nextTags.some((value, index) => value !== record.tags![index])
-            if (!different) return record
-            historyChanged = true
-            return { ...record, tags: nextTags }
-          })
-          if (historyChanged) {
-            HistoryManager.saveHistory(updatedRecords)
+          const historyRewrite = rewriteHistoryTagIds(HistoryManager.getHistory(), result.idMap)
+          if (historyRewrite.changed) {
+            HistoryManager.saveHistory(historyRewrite.records)
           }
         }
 
-        return tags
+        return result.tags
       }
     } catch (error) {
       console.error('获取标签失败:', error)
@@ -1504,38 +1071,13 @@ export class TagManager {
 
   // 获取默认标签
   static getDefaultTags(): Tag[] {
-    return [
-      {
-        id: createUuid(),
-        name: '工作',
-        color: 'blue',
-        createdAt: new Date()
-      },
-      {
-        id: createUuid(),
-        name: '个人',
-        color: 'green',
-        createdAt: new Date()
-      },
-      {
-        id: createUuid(),
-        name: '重要',
-        color: 'red',
-        createdAt: new Date()
-      },
-      {
-        id: createUuid(),
-        name: '归档',
-        color: 'gray',
-        createdAt: new Date()
-      }
-    ]
+    return createDefaultTags()
   }
 
   // 保存标签
   static saveTags(tags: Tag[]): void {
     try {
-      setScopedStorageItem(this.TAGS_KEY, JSON.stringify(tags))
+      writeTags(this.TAGS_KEY, tags)
     } catch (error) {
       console.error('保存标签失败:', error)
     }
@@ -1544,11 +1086,7 @@ export class TagManager {
   // 添加标签
   static addTag(tag: Omit<Tag, 'id' | 'createdAt'>): Tag {
     const tags = this.getTags()
-    const newTag: Tag = {
-      id: createUuid(),
-      ...tag,
-      createdAt: new Date()
-    }
+    const newTag = createTagRecord(tag)
     tags.push(newTag)
     this.saveTags(tags)
     scheduleTagsSyncToSupabase('upsert', newTag)
@@ -1600,27 +1138,22 @@ export class TagManager {
 export class DataManager {
   // 导出所有数据
   static exportData(): string {
-    const data = {
+    const data = createExportedAppData({
       config: ConfigManager.getAppConfig(),
       parsers: ConfigManager.getParsers(),
       webdavServers: ConfigManager.getWebDAVServers(),
       history: HistoryManager.getHistory(),
-      exportTime: new Date().toISOString(),
-      version: '1.0.0'
-    }
-    
-    return JSON.stringify(data, null, 2)
+      tags: TagManager.getTags(),
+      cleanupConfig: CleanupConfigManager.getCleanupConfig(),
+    })
+
+    return serializeExportedAppData(data)
   }
 
   // 导入数据
   static importData(jsonData: string): { success: boolean; message: string } {
     try {
-      const data = JSON.parse(jsonData)
-      
-      // 验证数据格式
-      if (!data.version || !data.exportTime) {
-        return { success: false, message: '无效的数据格式' }
-      }
+      const data = parseImportedAppData(jsonData)
 
       // 导入配置
       if (data.config) {
@@ -1640,6 +1173,15 @@ export class DataManager {
       // 导入历史记录
       if (data.history && Array.isArray(data.history)) {
         HistoryManager.saveHistory(data.history)
+      }
+
+      // 兼容旧备份：新字段存在时才恢复标签与清理配置。
+      if (data.tags && Array.isArray(data.tags)) {
+        TagManager.saveTags(data.tags)
+      }
+
+      if (data.cleanupConfig) {
+        CleanupConfigManager.saveCleanupConfig(data.cleanupConfig)
       }
 
       return { success: true, message: '数据导入成功' }
