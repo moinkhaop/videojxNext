@@ -11,9 +11,16 @@ interface ImageCarouselProps {
   title?: string
   className?: string
   onImageClick?: (index: number) => void
+  showThumbnailStrip?: boolean
 }
 
-export function ImageCarousel({ images, title, className = '', onImageClick }: ImageCarouselProps) {
+export function ImageCarousel({
+  images,
+  title,
+  className = '',
+  onImageClick,
+  showThumbnailStrip,
+}: ImageCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isImageLoaded, setIsImageLoaded] = useState<boolean[]>(new Array(images.length).fill(false))
   const [touchStart, setTouchStart] = useState<number | null>(null)
@@ -21,6 +28,13 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
   const [imageTransition, setImageTransition] = useState(false)
   const carouselRef = useRef<HTMLDivElement>(null)
   const thumbnailRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    // 当图集切换到新的记录时，重置选中图片和加载状态，避免沿用上一条记录的游标。
+    setCurrentIndex(0)
+    setImageTransition(false)
+    setIsImageLoaded(new Array(images.length).fill(false))
+  }, [images.length, images[0]?.url, images[images.length - 1]?.url])
 
   const goToPrevious = () => {
     setImageTransition(true)
@@ -41,9 +55,11 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
     setCurrentIndex(index)
   }
 
+  const activeIndex = currentIndex >= images.length ? 0 : currentIndex
+
   useEffect(() => {
-    if (thumbnailRef.current && thumbnailRef.current.children[currentIndex]) {
-      const thumbnail = thumbnailRef.current.children[currentIndex] as HTMLElement
+    if (thumbnailRef.current && thumbnailRef.current.children[activeIndex]) {
+      const thumbnail = thumbnailRef.current.children[activeIndex] as HTMLElement
       thumbnail.scrollIntoView({
         behavior: 'smooth',
         block: 'nearest',
@@ -52,7 +68,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
     }
     const timer = setTimeout(() => setImageTransition(false), 300)
     return () => clearTimeout(timer)
-  }, [currentIndex])
+  }, [activeIndex])
 
   const handleImageLoad = (index: number) => {
     setIsImageLoaded(prev => {
@@ -93,7 +109,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
 
   const handleImageClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    onImageClick?.(currentIndex)
+    onImageClick?.(activeIndex)
   }
 
   if (!images || images.length === 0) {
@@ -109,17 +125,25 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
     )
   }
 
-  const currentImage = images[currentIndex]
+  const currentImage = images[activeIndex]
 
-  // 检查是否使用自适应高度
   const isFullHeight = className?.includes('h-full')
+  const shouldShowThumbnailStrip = images.length > 1 && (showThumbnailStrip ?? !isFullHeight)
+  const rootClassName = isFullHeight && shouldShowThumbnailStrip
+    ? `w-full h-full flex flex-col ${className || ''}`
+    : `w-full ${className || ''}`
+  const stageClassName = isFullHeight
+    ? shouldShowThumbnailStrip
+      ? 'relative bg-black overflow-hidden rounded-xl flex-1 min-h-0'
+      : 'relative bg-black overflow-hidden h-full'
+    : 'relative bg-black overflow-hidden rounded-xl'
 
   return (
-    <div className={`w-full ${className || ''}`}>
-      {/* 主图展示区 */}
+    <div className={rootClassName}>
+      {/* 固定媒体舞台和缩略导航拆分后，可在 h-full 场景下保留缩略条而不压缩主图区域。 */}
       <div
         ref={carouselRef}
-        className={`relative bg-black overflow-hidden ${isFullHeight ? 'h-full' : 'rounded-xl'}`}
+        className={stageClassName}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
@@ -133,16 +157,16 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
           >
             <img
               src={currentImage.url}
-              alt={`图片 ${currentIndex + 1}`}
+              alt={`图片 ${activeIndex + 1}`}
               className={`max-w-full max-h-full object-contain transition-all duration-300 ${
-                isImageLoaded[currentIndex] ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
+                isImageLoaded[activeIndex] ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
               }`}
-              onLoad={() => handleImageLoad(currentIndex)}
-              onError={() => handleImageError(currentIndex)}
+              onLoad={() => handleImageLoad(activeIndex)}
+              onError={() => handleImageError(activeIndex)}
               draggable={false}
             />
 
-            {!isImageLoaded[currentIndex] && (
+            {!isImageLoaded[activeIndex] && (
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin mb-3"></div>
                 <p className="text-sm text-white/70">加载中...</p>
@@ -178,7 +202,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
 
               <div className="absolute bottom-4 right-4">
                 <Badge className="bg-black/60 text-white text-sm font-medium py-1.5 px-3 rounded-full backdrop-blur-sm">
-                  {currentIndex + 1} / {images.length}
+                  {activeIndex + 1} / {images.length}
                 </Badge>
               </div>
             </>
@@ -186,9 +210,8 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
         </div>
       </div>
 
-      {/* 缩略图导航 - 非全高模式下显示 */}
-      {images.length > 1 && !isFullHeight && (
-        <div className="mt-4">
+      {shouldShowThumbnailStrip && (
+        <div className={isFullHeight ? 'mt-3 shrink-0' : 'mt-4'}>
           <div
             ref={thumbnailRef}
             className="flex gap-2 overflow-x-auto pb-2 scroll-smooth image-carousel-thumbnails"
@@ -197,7 +220,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
               <button
                 key={index}
                 className={`relative flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all duration-200 ${
-                  index === currentIndex
+                  index === activeIndex
                     ? 'border-blue-500 ring-2 ring-blue-200 shadow-md'
                     : 'border-gray-300 hover:border-blue-400'
                 }`}
@@ -210,7 +233,7 @@ export function ImageCarousel({ images, title, className = '', onImageClick }: I
                   src={image.url}
                   alt={`缩略图 ${index + 1}`}
                   className={`w-full h-full object-cover transition-opacity duration-200 ${
-                    index === currentIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100'
+                    index === activeIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100'
                   }`}
                 />
               </button>

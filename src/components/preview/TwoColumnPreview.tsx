@@ -1,9 +1,9 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { ParsedVideoInfo, MediaType, ConversionTask, TaskStatus } from '@/types'
 import { VideoPreview } from './VideoPreview'
 import { ImageCarousel } from './ImageCarousel'
-import { ImageGallery } from './ImageGallery'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -31,6 +31,17 @@ import {
   List,
   Heart
 } from 'lucide-react'
+
+const ImageGallery = dynamic(
+  () => import('./ImageGallery').then(mod => mod.ImageGallery),
+  {
+    loading: () => (
+      <div className="flex min-h-[320px] items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-gray-900/60 dark:text-gray-300">
+        图集工作台加载中...
+      </div>
+    ),
+  }
+)
 
 interface TwoColumnPreviewProps {
   mediaInfo: ParsedVideoInfo
@@ -239,6 +250,7 @@ export function TwoColumnPreview({
                     images={mediaInfo.images}
                     title={mediaInfo.title}
                     className="h-full"
+                    showThumbnailStrip={true}
                   />
                 ) : (
                   // 错误状态

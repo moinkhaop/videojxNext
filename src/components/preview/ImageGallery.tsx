@@ -139,6 +139,16 @@ export function ImageGallery({
   const [touchStart, setTouchStart] = useState<number | null>(null)
   const [touchEnd, setTouchEnd] = useState<number | null>(null)
   const galleryRef = useRef<HTMLDivElement>(null)
+  const activeIndex = currentIndex >= images.length ? 0 : currentIndex
+
+  // 当切换到另一条图集记录时，清空上一条记录的轮播索引与批量选择状态。
+  useEffect(() => {
+    setCurrentIndex(0)
+    setFullscreenIndex(0)
+    setSelectedImages(new Set())
+    setIsModalOpen(false)
+    setModalIndex(0)
+  }, [images.length, images[0]?.url, images[images.length - 1]?.url])
 
   // {{ AURA: Add - 自动选择最佳显示模式 }}
   useEffect(() => {
@@ -292,10 +302,10 @@ export function ImageGallery({
       >
         <div className="absolute inset-0 flex items-center justify-center cursor-pointer">
           <LazyImage
-            src={images[currentIndex].url}
-            alt={`图片 ${currentIndex + 1}`}
+            src={images[activeIndex].url}
+            alt={`图片 ${activeIndex + 1}`}
             className="max-w-full max-h-full object-contain rounded shadow-sm transition-transform duration-200 hover:scale-[1.02]"
-            onClick={() => handleImageClick(currentIndex)}
+            onClick={() => handleImageClick(activeIndex)}
           />
         </div>
 
@@ -330,7 +340,7 @@ export function ImageGallery({
 
         {/* 图片计数 */}
         <Badge className="absolute bottom-2 right-2 bg-black/60 text-white text-sm font-medium py-1 px-3 rounded-full z-10">
-          {currentIndex + 1} / {images.length}
+          {activeIndex + 1} / {images.length}
         </Badge>
       </div>
 
@@ -342,7 +352,7 @@ export function ImageGallery({
               <button
                 key={index}
                 className={`flex-shrink-0 w-20 h-20 rounded-md border-2 overflow-hidden transition-all duration-200 transform hover:scale-105 ${
-                  index === currentIndex
+                  index === activeIndex
                     ? 'border-blue-600 ring-2 ring-blue-300'
                     : 'border-gray-300 hover:border-blue-400'
                 }`}
