@@ -1,4 +1,170 @@
-import { AppConfig, VideoParserConfig, WebDAVConfig, HistoryRecord, CleanupConfig, CleanupLogEntry } from '@/types'
+import {
+  AppConfig,
+  VideoParserConfig,
+  WebDAVConfig,
+  HistoryRecord,
+  CleanupConfig,
+  CleanupLogEntry,
+  HistoryStats,
+  Tag,
+  ParserCapability,
+  SupportedPlatform,
+  TemplateProfilesConfig,
+  RetryPolicyConfig,
+  NotificationSettings,
+} from '@/types'
+import { SUPABASE_ENABLED } from '@/lib/supabase/enabled'
+import { markSyncError, markSyncOk } from '@/lib/supabase/sync-status'
+import {
+  DEFAULT_TEMPLATE_PROFILES,
+  DEFAULT_TEMPLATE_PROFILE_ID,
+  DEFAULT_UPLOAD_FILE_TEMPLATE,
+  DEFAULT_UPLOAD_FOLDER_TEMPLATE,
+  getScopedStorageItem,
+  normalizeAppConfig,
+  normalizeNotificationSettings,
+  normalizeRetryPolicy,
+  normalizeTemplateProfiles,
+  removeScopedStorageItem,
+  setScopedStorageItem,
+} from '@/lib/storage/config-core'
+import {
+  createDefaultTags,
+  createTagRecord,
+  exportHistoryRecordsToCSV,
+  exportHistoryRecordsToJSON,
+  filterFavoriteHistoryRecords,
+  filterHistoryRecordsByAuthor,
+  filterHistoryRecordsByDateRange,
+  filterHistoryRecordsByTag,
+  getHistoryStatistics,
+  matchesHistoryRecordKeyword,
+  readHistoryRecords,
+  readStoredTags,
+  rewriteHistoryTagIds,
+  writeHistoryRecords,
+  writeTags,
+} from '@/lib/storage/history-tag-core'
+import {
+  appendCleanupLog,
+  clearCleanupLogs as clearStoredCleanupLogs,
+  createExportedAppData,
+  getDefaultCleanupConfig,
+  parseImportedAppData,
+  readCleanupConfig,
+  readCleanupLogs,
+  serializeExportedAppData,
+  writeCleanupConfig,
+} from '@/lib/storage/maintenance-core'
+
+let pendingConfigSyncTimer: ReturnType<typeof setTimeout> | null = null
+let suppressCloudSync = false
+
+export function runWithCloudSyncSuppressed<T>(fn: () => T): T {
+  suppressCloudSync = true
+  try {
+    return fn()
+  } finally {
+    suppressCloudSync = false
+  }
+}
+const builtinEdgeOneParserUrl = process.env.NEXT_PUBLIC_EDGEONE_PARSER_API_URL?.trim() || ''
+
+const scheduleConfigSyncToSupabase = () => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
+    return
+  }
+
+  if (pendingConfigSyncTimer) {
+    clearTimeout(pendingConfigSyncTimer)
+  }
+
+  pendingConfigSyncTimer = setTimeout(() => {
+    pendingConfigSyncTimer = null
+
+    void (async () => {
+      try {
+        const { updateUserConfig } = await import('@/lib/supabase/database')
+        const current = ConfigManager.getAppConfig()
+        const payload = {
+          ...current,
+          parsers: ConfigManager.getParsers(),
+          webdavServers: ConfigManager.getWebDAVServers(),
+        }
+        await updateUserConfig(payload)
+        markSyncOk('config')
+      } catch (error) {
+        console.warn('[SupabaseSync] 配置同步失败:', error)
+        markSyncError('config', error)
+      }
+    })()
+  }, 500)
+}
+
+const scheduleHistoryUpsertToSupabase = (record: HistoryRecord | null) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || !record || suppressCloudSync) {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { updateHistoryRecord, addHistoryRecord } = await import('@/lib/supabase/database')
+      try {
+        await updateHistoryRecord(record.id, record)
+      } catch {
+        await addHistoryRecord(record)
+      }
+      markSyncOk('history')
+    } catch (error) {
+      console.warn('[SupabaseSync] 历史记录同步失败:', error)
+      markSyncError('history', error)
+    }
+  })()
+}
+
+const scheduleHistoryDeleteToSupabase = (id: string) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { deleteHistoryRecord } = await import('@/lib/supabase/database')
+      await deleteHistoryRecord(id)
+      markSyncOk('history')
+    } catch (error) {
+      console.warn('[SupabaseSync] 删除历史记录同步失败:', error)
+      markSyncError('history', error)
+    }
+  })()
+}
+
+const scheduleTagsSyncToSupabase = (action: 'upsert' | 'delete', payload: any) => {
+  if (!SUPABASE_ENABLED || typeof window === 'undefined' || suppressCloudSync) {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { addTag, updateTag, deleteTag } = await import('@/lib/supabase/database')
+      if (action === 'delete') {
+        await deleteTag(payload.id)
+        markSyncOk('tags')
+        return
+      }
+
+      try {
+        await updateTag(payload.id, payload)
+      } catch {
+        await addTag(payload)
+      }
+      markSyncOk('tags')
+    } catch (error) {
+      console.warn('[SupabaseSync] 标签同步失败:', error)
+      markSyncError('tags', error)
+    }
+  })()
+}
 
 
 // 加密相关工具
@@ -27,95 +193,373 @@ export class ConfigManager {
 
   // 获取应用配置
   static getAppConfig(): AppConfig {
-    const defaultConfig: AppConfig = {
-      parsers: [],
-      webdavServers: [],
-      theme: 'system'
-    }
-
     try {
-      const stored = localStorage.getItem(this.CONFIG_KEY)
+      const stored = getScopedStorageItem(this.CONFIG_KEY)
       if (stored) {
-        return { ...defaultConfig, ...JSON.parse(stored) }
+        return normalizeAppConfig(JSON.parse(stored))
       }
     } catch (error) {
       console.error('获取应用配置失败:', error)
     }
 
-    return defaultConfig
+    return normalizeAppConfig({})
   }
 
   // 保存应用配置
   static saveAppConfig(config: AppConfig): void {
     try {
-      localStorage.setItem(this.CONFIG_KEY, JSON.stringify(config))
+      const normalized = normalizeAppConfig(config)
+      setScopedStorageItem(this.CONFIG_KEY, JSON.stringify(normalized))
     } catch (error) {
       console.error('保存应用配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
-  // 获取解析器配置
+  static getTemplateProfilesConfig(): TemplateProfilesConfig {
+    const app = this.getAppConfig()
+    return normalizeTemplateProfiles(app.templateProfiles)
+  }
+
+  static saveTemplateProfilesConfig(templateProfiles: TemplateProfilesConfig): void {
+    const app = this.getAppConfig()
+    const normalizedProfiles = normalizeTemplateProfiles(templateProfiles)
+    const active = normalizedProfiles.profiles.find(item => item.id === normalizedProfiles.activeProfileId) || normalizedProfiles.profiles[0]
+    this.saveAppConfig({
+      ...app,
+      templateProfiles: normalizedProfiles,
+      uploadFolderTemplate: active?.folderTemplate || DEFAULT_UPLOAD_FOLDER_TEMPLATE,
+      uploadFileTemplate: active?.fileTemplate || DEFAULT_UPLOAD_FILE_TEMPLATE,
+    })
+  }
+
+  static resetTemplateProfilesToDefault(): void {
+    this.saveTemplateProfilesConfig(
+      normalizeTemplateProfiles({
+        activeProfileId: DEFAULT_TEMPLATE_PROFILE_ID,
+        profiles: DEFAULT_TEMPLATE_PROFILES,
+      })
+    )
+  }
+
+  static getRetryPolicyConfig(): RetryPolicyConfig {
+    const app = this.getAppConfig()
+    return normalizeRetryPolicy(app.retryPolicy)
+  }
+
+  static saveRetryPolicyConfig(retryPolicy: RetryPolicyConfig): void {
+    const app = this.getAppConfig()
+    this.saveAppConfig({
+      ...app,
+      retryPolicy: normalizeRetryPolicy(retryPolicy),
+    })
+  }
+
+  static getNotificationSettings(): NotificationSettings {
+    const app = this.getAppConfig()
+    return normalizeNotificationSettings(app.notifications)
+  }
+
+  static saveNotificationSettings(notifications: NotificationSettings): void {
+    const app = this.getAppConfig()
+    this.saveAppConfig({
+      ...app,
+      notifications: normalizeNotificationSettings(notifications),
+    })
+  }
+
+  // 获取解析器配置（合并内置默认配置和用户自定义配置，过滤禁用项）
   static getParsers(): VideoParserConfig[] {
+    const builtinParsers = this.getDefaultParsers()
+
     try {
-      const stored = localStorage.getItem(this.PARSERS_KEY)
+      const stored = getScopedStorageItem(this.PARSERS_KEY)
       if (stored) {
-        const parsers = JSON.parse(stored)
+        const userParsers = JSON.parse(stored)
         // 解密敏感信息
-        return parsers.map((parser: VideoParserConfig) => ({
+        const decryptedUserParsers = userParsers.map((parser: VideoParserConfig) => ({
           ...parser,
           apiKey: parser.apiKey ? StorageEncryption.decrypt(parser.apiKey) : undefined
         }))
+
+        // 合并内置配置和用户配置（用户配置可以覆盖内置配置）
+        const mergedParsers = [...builtinParsers]
+        const builtinIds = new Set(builtinParsers.map(p => p.id))
+
+        decryptedUserParsers.forEach((userParser: VideoParserConfig) => {
+          if (builtinIds.has(userParser.id)) {
+            // 用户配置覆盖内置配置
+            const index = mergedParsers.findIndex(p => p.id === userParser.id)
+            if (index !== -1) {
+              mergedParsers[index] = userParser
+            }
+          } else {
+            // 添加新的用户配置
+            mergedParsers.push(userParser)
+          }
+        })
+
+        // 过滤掉被禁用的配置
+        return mergedParsers.filter(p => !p.disabled)
       }
     } catch (error) {
       console.error('获取解析器配置失败:', error)
     }
+
+    // 如果没有用户配置，返回默认解析器
+    return builtinParsers
+  }
+
+  // {{ AURA: Add - 获取默认解析器配置 }}
+  static getDefaultParsers(): VideoParserConfig[] {
+    const parsers: VideoParserConfig[] = []
+
+    parsers.push({
+      id: 'builtin_parser_next_douyin',
+      name: '内置抖音解析器',
+      apiUrl: '/api/douyin/parse',
+      isDefault: !builtinEdgeOneParserUrl,
+      isBuiltin: true,
+      requestMethod: 'POST',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    if (builtinEdgeOneParserUrl) {
+      parsers.push({
+        id: 'builtin_parser_edgeone_douyin',
+        name: 'EdgeOne 抖音解析器',
+        apiUrl: builtinEdgeOneParserUrl,
+        isDefault: true,
+        isBuiltin: true,
+        requestMethod: 'POST',
+        urlParamName: 'url',
+        capabilities: [ParserCapability.SINGLE_VIDEO],
+        supportedPlatforms: [SupportedPlatform.DOUYIN]
+      })
+    }
+
+    parsers.push({
+      id: 'builtin_parser_jxcxin',
+      name: '默认抖音解析器',
+      apiUrl: 'https://apis.jxcxin.cn/api/douyin',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    // ===== Douyin / Universal public nodes (third-party) =====
+    parsers.push({
+      id: 'builtin_parser_douyin_wtf',
+      name: 'douyin.wtf（抖音/多平台）',
+      apiUrl: 'https://api.douyin.wtf/api/hybrid/video_data',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_mmp_dyhome',
+      name: 'MMP dyhome（抖音）',
+      apiUrl: 'https://api.mmp.cc/api/dyhome',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_yujn',
+      name: '遇见API（抖音/多平台）',
+      apiUrl: 'https://api.yujn.cn/api/dy_jx.php',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'msg',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_xzdx',
+      name: 'xzdx.top（多平台）',
+      apiUrl: 'https://xzdx.top/api/duan',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.UNIVERSAL]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_oick_douyin',
+      name: 'Oick（抖音）',
+      apiUrl: 'https://api.oick.cn/douyin/',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_pearktrue_douyin',
+      name: 'Pearktrue（抖音/多平台）',
+      apiUrl: 'https://api.pearktrue.cn/api/video/douyin/',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.DOUYIN]
+    })
+
+    // ===== Bilibili =====
+    parsers.push({
+      id: 'builtin_parser_next_bilibili',
+      name: '内置B站解析器',
+      apiUrl: '/api/bilibili/parse',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'POST',
+      urlParamName: 'url',
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.BILIBILI]
+    })
+
+    parsers.push({
+      id: 'builtin_parser_mir6_bilibili',
+      name: 'mir6（B站）',
+      apiUrl: 'https://api.mir6.com/api/bzjiexi',
+      isDefault: false,
+      isBuiltin: true,
+      requestMethod: 'GET',
+      urlParamName: 'url',
+      customQueryParams: { type: 'json' },
+      capabilities: [ParserCapability.SINGLE_VIDEO],
+      supportedPlatforms: [SupportedPlatform.BILIBILI]
+    })
+
+    return parsers
+  }
+
+  // {{ AURA: Add - 获取默认WebDAV服务器配置 }}
+  static getDefaultWebDAVServers(): WebDAVConfig[] {
     return []
   }
 
-  // 保存解析器配置
+  // 保存解析器配置（只保存用户自定义的配置和修改）
   static saveParsers(parsers: VideoParserConfig[]): void {
     try {
+      // 过滤掉未修改的内置配置，只保存用户配置
+      const builtinIds = new Set(this.getDefaultParsers().map(p => p.id))
+      const userParsers = parsers.filter(parser => {
+        // 保留：1) 非内置配置 2) 被修改或禁用的内置配置
+        if (!builtinIds.has(parser.id)) {
+          return true
+        }
+        // 检查内置配置是否被修改
+        const builtinParser = this.getDefaultParsers().find(p => p.id === parser.id)
+        if (!builtinParser) return true
+        // 如果配置被禁用或其他属性被修改，则保存
+        return parser.disabled || JSON.stringify(parser) !== JSON.stringify(builtinParser)
+      })
+
       // 加密敏感信息
-      const encryptedParsers = parsers.map(parser => ({
+      const encryptedParsers = userParsers.map(parser => ({
         ...parser,
         apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
       }))
-      localStorage.setItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
+      setScopedStorageItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
     } catch (error) {
       console.error('保存解析器配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
-  // 获取WebDAV配置
+  // 获取WebDAV配置（合并内置默认配置和用户自定义配置，过滤禁用项）
   static getWebDAVServers(): WebDAVConfig[] {
+    const builtinServers = this.getDefaultWebDAVServers()
+
     try {
-      const stored = localStorage.getItem(this.WEBDAV_KEY)
+      const stored = getScopedStorageItem(this.WEBDAV_KEY)
       if (stored) {
-        const servers = JSON.parse(stored)
+        const userServers = JSON.parse(stored)
         // 解密敏感信息
-        return servers.map((server: WebDAVConfig) => ({
+        const decryptedUserServers = userServers.map((server: WebDAVConfig) => ({
           ...server,
           password: StorageEncryption.decrypt(server.password)
         }))
+
+        // 合并内置配置和用户配置（用户配置可以覆盖内置配置）
+        const mergedServers = [...builtinServers]
+        const builtinIds = new Set(builtinServers.map(s => s.id))
+
+        decryptedUserServers.forEach((userServer: WebDAVConfig) => {
+          if (builtinIds.has(userServer.id)) {
+            // 用户配置覆盖内置配置
+            const index = mergedServers.findIndex(s => s.id === userServer.id)
+            if (index !== -1) {
+              mergedServers[index] = userServer
+            }
+          } else {
+            // 添加新的用户配置
+            mergedServers.push(userServer)
+          }
+        })
+
+        // 过滤掉被禁用的配置
+        return mergedServers.filter(s => !s.disabled)
       }
     } catch (error) {
       console.error('获取WebDAV配置失败:', error)
     }
-    return []
+
+    // 如果没有用户配置，返回默认服务器
+    return builtinServers
   }
 
-  // 保存WebDAV配置
+  // 保存WebDAV配置（只保存用户自定义的配置和修改）
   static saveWebDAVServers(servers: WebDAVConfig[]): void {
     try {
+      // 过滤掉未修改的内置配置，只保存用户配置
+      const builtinIds = new Set(this.getDefaultWebDAVServers().map(s => s.id))
+      const userServers = servers.filter(server => {
+        // 保留：1) 非内置配置 2) 被修改或禁用的内置配置
+        if (!builtinIds.has(server.id)) {
+          return true
+        }
+        // 检查内置配置是否被修改
+        const builtinServer = this.getDefaultWebDAVServers().find(s => s.id === server.id)
+        if (!builtinServer) return true
+        // 如果配置被禁用或其他属性被修改，则保存
+        return server.disabled || JSON.stringify(server) !== JSON.stringify(builtinServer)
+      })
+
       // 加密敏感信息
-      const encryptedServers = servers.map(server => ({
+      const encryptedServers = userServers.map(server => ({
         ...server,
         password: StorageEncryption.encrypt(server.password)
       }))
-      localStorage.setItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
+      setScopedStorageItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
     } catch (error) {
       console.error('保存WebDAV配置失败:', error)
     }
+
+    scheduleConfigSyncToSupabase()
   }
 
   // 添加解析器
@@ -143,10 +587,74 @@ export class ConfigManager {
     }
   }
 
-  // 删除解析器
+  // 删除解析器（内置配置将被标记为禁用，而不是真正删除）
   static deleteParser(id: string): void {
-    const parsers = this.getParsers().filter(p => p.id !== id)
-    this.saveParsers(parsers)
+    const builtinIds = new Set(this.getDefaultParsers().map(p => p.id))
+
+    if (builtinIds.has(id)) {
+      // 内置配置：保存一个禁用的版本到用户配置中
+      const parser = this.getParsers().find(p => p.id === id)
+      if (parser) {
+        const userParsers = this.getUserParsers()
+        const updatedParser = { ...parser, isDefault: false, disabled: true }
+        const existingIndex = userParsers.findIndex(p => p.id === id)
+        if (existingIndex !== -1) {
+          userParsers[existingIndex] = updatedParser
+        } else {
+          userParsers.push(updatedParser)
+        }
+        this.saveUserParsers(userParsers)
+      }
+    } else {
+      // 用户配置：直接删除
+      const userParsers = this.getUserParsers().filter(p => p.id !== id)
+      this.saveUserParsers(userParsers)
+    }
+  }
+
+  // 获取仅用户添加的解析器配置（不包括内置配置）
+  private static getUserParsers(): VideoParserConfig[] {
+    try {
+      const stored = getScopedStorageItem(this.PARSERS_KEY)
+      if (stored) {
+        const parsers = JSON.parse(stored)
+        return parsers.map((parser: VideoParserConfig) => ({
+          ...parser,
+          apiKey: parser.apiKey ? StorageEncryption.decrypt(parser.apiKey) : undefined
+        }))
+      }
+    } catch (error) {
+      console.error('获取用户解析器配置失败:', error)
+    }
+    return []
+  }
+
+  // 保存仅用户的解析器配置
+  private static saveUserParsers(parsers: VideoParserConfig[]): void {
+    try {
+      const encryptedParsers = parsers.map(parser => ({
+        ...parser,
+        apiKey: parser.apiKey ? StorageEncryption.encrypt(parser.apiKey) : undefined
+      }))
+      setScopedStorageItem(this.PARSERS_KEY, JSON.stringify(encryptedParsers))
+    } catch (error) {
+      console.error('保存用户解析器配置失败:', error)
+    }
+  }
+
+  // 检查是否为内置解析器
+  static isBuiltinParser(id: string): boolean {
+    return this.getDefaultParsers().some(p => p.id === id)
+  }
+
+  // 恢复内置解析器（删除用户的覆盖配置）
+  static restoreBuiltinParser(id: string): void {
+    if (!this.isBuiltinParser(id)) {
+      console.warn('无法恢复非内置解析器:', id)
+      return
+    }
+    const userParsers = this.getUserParsers().filter(p => p.id !== id)
+    this.saveUserParsers(userParsers)
   }
 
   // 添加WebDAV服务器
@@ -174,10 +682,74 @@ export class ConfigManager {
     }
   }
 
-  // 删除WebDAV服务器
+  // 删除WebDAV服务器（内置配置将被标记为禁用，而不是真正删除）
   static deleteWebDAVServer(id: string): void {
-    const servers = this.getWebDAVServers().filter(s => s.id !== id)
-    this.saveWebDAVServers(servers)
+    const builtinIds = new Set(this.getDefaultWebDAVServers().map(s => s.id))
+
+    if (builtinIds.has(id)) {
+      // 内置配置：保存一个禁用的版本到用户配置中
+      const server = this.getWebDAVServers().find(s => s.id === id)
+      if (server) {
+        const userServers = this.getUserWebDAVServers()
+        const updatedServer = { ...server, isDefault: false, disabled: true }
+        const existingIndex = userServers.findIndex(s => s.id === id)
+        if (existingIndex !== -1) {
+          userServers[existingIndex] = updatedServer
+        } else {
+          userServers.push(updatedServer)
+        }
+        this.saveUserWebDAVServers(userServers)
+      }
+    } else {
+      // 用户配置：直接删除
+      const userServers = this.getUserWebDAVServers().filter(s => s.id !== id)
+      this.saveUserWebDAVServers(userServers)
+    }
+  }
+
+  // 获取仅用户添加的WebDAV服务器配置（不包括内置配置）
+  private static getUserWebDAVServers(): WebDAVConfig[] {
+    try {
+      const stored = getScopedStorageItem(this.WEBDAV_KEY)
+      if (stored) {
+        const servers = JSON.parse(stored)
+        return servers.map((server: WebDAVConfig) => ({
+          ...server,
+          password: StorageEncryption.decrypt(server.password)
+        }))
+      }
+    } catch (error) {
+      console.error('获取用户WebDAV配置失败:', error)
+    }
+    return []
+  }
+
+  // 保存仅用户的WebDAV服务器配置
+  private static saveUserWebDAVServers(servers: WebDAVConfig[]): void {
+    try {
+      const encryptedServers = servers.map(server => ({
+        ...server,
+        password: StorageEncryption.encrypt(server.password)
+      }))
+      setScopedStorageItem(this.WEBDAV_KEY, JSON.stringify(encryptedServers))
+    } catch (error) {
+      console.error('保存用户WebDAV配置失败:', error)
+    }
+  }
+
+  // 检查是否为内置WebDAV服务器
+  static isBuiltinWebDAVServer(id: string): boolean {
+    return this.getDefaultWebDAVServers().some(s => s.id === id)
+  }
+
+  // 恢复内置WebDAV服务器（删除用户的覆盖配置）
+  static restoreBuiltinWebDAVServer(id: string): void {
+    if (!this.isBuiltinWebDAVServer(id)) {
+      console.warn('无法恢复非内置WebDAV服务器:', id)
+      return
+    }
+    const userServers = this.getUserWebDAVServers().filter(s => s.id !== id)
+    this.saveUserWebDAVServers(userServers)
   }
 
   // 获取默认解析器
@@ -208,31 +780,19 @@ export class CleanupConfigManager {
 
   // 获取清理配置
   static getCleanupConfig(): CleanupConfig {
-    const defaultConfig: CleanupConfig = {
-      enabled: true,
-      retainDays: 7,
-      retainSuccessfulTasks: true,
-      retainFailedTasks: false,
-      retainExtensions: ['.mp4', '.mov', '.avi', '.mkv', '.jpg', '.png', '.webp'],
-      cleanupSchedule: '0 2 * * *'
-    }
-
     try {
-      const stored = localStorage.getItem(this.CLEANUP_CONFIG_KEY)
-      if (stored) {
-        return { ...defaultConfig, ...JSON.parse(stored) }
-      }
+      return readCleanupConfig(this.CLEANUP_CONFIG_KEY)
     } catch (error) {
       console.error('获取清理配置失败:', error)
     }
 
-    return defaultConfig
+    return getDefaultCleanupConfig()
   }
 
   // 保存清理配置
   static saveCleanupConfig(config: CleanupConfig): void {
     try {
-      localStorage.setItem(this.CLEANUP_CONFIG_KEY, JSON.stringify(config))
+      writeCleanupConfig(this.CLEANUP_CONFIG_KEY, config)
     } catch (error) {
       console.error('保存清理配置失败:', error)
     }
@@ -253,15 +813,7 @@ export class CleanupLogManager {
   // 获取清理日志
   static getCleanupLogs(): CleanupLogEntry[] {
     try {
-      const stored = localStorage.getItem(this.CLEANUP_LOGS_KEY)
-      if (stored) {
-        const logs = JSON.parse(stored)
-        // 转换时间戳为Date对象
-        return logs.map((log: any) => ({
-          ...log,
-          timestamp: new Date(log.timestamp)
-        }))
-      }
+      return readCleanupLogs(this.CLEANUP_LOGS_KEY)
     } catch (error) {
       console.error('获取清理日志失败:', error)
     }
@@ -271,16 +823,7 @@ export class CleanupLogManager {
   // 保存清理日志
   static saveCleanupLog(log: CleanupLogEntry): void {
     try {
-      const logs = this.getCleanupLogs()
-      logs.unshift(log) // 最新的日志在前面
-      
-      // 限制日志数量，避免localStorage过大
-      const maxLogs = 100
-      if (logs.length > maxLogs) {
-        logs.splice(maxLogs)
-      }
-      
-      localStorage.setItem(this.CLEANUP_LOGS_KEY, JSON.stringify(logs))
+      appendCleanupLog(this.CLEANUP_LOGS_KEY, log)
     } catch (error) {
       console.error('保存清理日志失败:', error)
     }
@@ -289,7 +832,7 @@ export class CleanupLogManager {
   // 清空清理日志
   static clearCleanupLogs(): void {
     try {
-      localStorage.removeItem(this.CLEANUP_LOGS_KEY)
+      clearStoredCleanupLogs(this.CLEANUP_LOGS_KEY)
     } catch (error) {
       console.error('清空清理日志失败:', error)
     }
@@ -299,24 +842,16 @@ export class CleanupLogManager {
 // 历史记录管理
 export class HistoryManager {
   private static readonly HISTORY_KEY = 'dyjx_history_records'
+  private static readonly lastViewedSyncMap = new Map<string, number>()
 
   // 获取历史记录
   static getHistory(): HistoryRecord[] {
     try {
-      const stored = localStorage.getItem(this.HISTORY_KEY)
-      if (stored) {
-        const records = JSON.parse(stored)
-        // 转换日期字符串为Date对象
-        return records.map((record: any) => ({
-          ...record,
-          createdAt: new Date(record.createdAt),
-          task: {
-            ...record.task,
-            createdAt: new Date(record.task.createdAt),
-            completedAt: record.task.completedAt ? new Date(record.task.completedAt) : undefined
-          }
-        }))
+      const result = readHistoryRecords(this.HISTORY_KEY)
+      if (result.changed) {
+        this.saveHistory(result.records)
       }
+      return result.records
     } catch (error) {
       console.error('获取历史记录失败:', error)
     }
@@ -326,7 +861,7 @@ export class HistoryManager {
   // 保存历史记录
   static saveHistory(records: HistoryRecord[]): void {
     try {
-      localStorage.setItem(this.HISTORY_KEY, JSON.stringify(records))
+      writeHistoryRecords(this.HISTORY_KEY, records)
     } catch (error) {
       console.error('保存历史记录失败:', error)
     }
@@ -342,18 +877,26 @@ export class HistoryManager {
       records.splice(maxRecords)
     }
     this.saveHistory(records)
+    scheduleHistoryUpsertToSupabase(record)
   }
 
   // 删除历史记录
   static deleteRecord(id: string): void {
     const records = this.getHistory().filter(r => r.id !== id)
+    this.lastViewedSyncMap.delete(id)
     this.saveHistory(records)
+    scheduleHistoryDeleteToSupabase(id)
   }
 
   // 清空历史记录
   static clearHistory(): void {
+    const records = this.getHistory()
     try {
-      localStorage.removeItem(this.HISTORY_KEY)
+      removeScopedStorageItem(this.HISTORY_KEY)
+      this.lastViewedSyncMap.clear()
+      records.forEach(record => {
+        scheduleHistoryDeleteToSupabase(record.id)
+      })
     } catch (error) {
       console.error('清空历史记录失败:', error)
     }
@@ -362,16 +905,232 @@ export class HistoryManager {
   // 搜索历史记录
   static searchHistory(keyword: string): HistoryRecord[] {
     const records = this.getHistory()
-    const lowerKeyword = keyword.toLowerCase()
-    
-    return records.filter(record => {
-      const task = record.task as any
-      return (
-        task.videoTitle?.toLowerCase().includes(lowerKeyword) ||
-        task.videoUrl?.toLowerCase().includes(lowerKeyword) ||
-        task.name?.toLowerCase().includes(lowerKeyword)
-      )
+    const lowerKeyword = keyword.trim().toLowerCase()
+
+    if (!lowerKeyword) {
+      return records
+    }
+
+    return records.filter(record => this.matchesKeyword(record, lowerKeyword))
+  }
+
+  static matchesKeyword(record: HistoryRecord, keyword: string): boolean {
+    return matchesHistoryRecordKeyword(record, keyword)
+  }
+
+  // {{ AURA: Add - 切换收藏状态 }}
+  static toggleFavorite(id: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === id)
+    if (index !== -1) {
+      records[index].isFavorite = !records[index].isFavorite
+      this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
+    }
+  }
+
+  // {{ AURA: Add - 更新历史记录 }}
+  static updateRecord(id: string, updates: Partial<HistoryRecord>): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === id)
+    if (index !== -1) {
+      records[index] = { ...records[index], ...updates }
+      this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
+    }
+  }
+
+  // {{ AURA: Add - 批量删除历史记录 }}
+  static deleteRecords(ids: string[]): void {
+    const records = this.getHistory().filter(r => !ids.includes(r.id))
+    this.saveHistory(records)
+
+    ids.forEach(id => {
+      this.lastViewedSyncMap.delete(id)
+      scheduleHistoryDeleteToSupabase(id)
     })
+  }
+
+  // {{ AURA: Add - 获取历史记录统计数据 }}
+  static getStatistics(sourceRecords?: HistoryRecord[]): HistoryStats {
+    const records = sourceRecords ?? this.getHistory()
+    return getHistoryStatistics(records)
+  }
+
+  // {{ AURA: Add - 导出历史记录为CSV }}
+  static exportToCSV(): string {
+    return exportHistoryRecordsToCSV(this.getHistory())
+  }
+
+  // {{ AURA: Add - 导出历史记录为JSON }}
+  static exportToJSON(): string {
+    return exportHistoryRecordsToJSON(this.getHistory())
+  }
+
+  // {{ AURA: Add - 按日期范围筛选 }}
+  static filterByDateRange(startDate: Date, endDate: Date): HistoryRecord[] {
+    return filterHistoryRecordsByDateRange(this.getHistory(), startDate, endDate)
+  }
+
+  // {{ AURA: Add - 按作者筛选 }}
+  static filterByAuthor(author: string): HistoryRecord[] {
+    return filterHistoryRecordsByAuthor(this.getHistory(), author)
+  }
+
+  // {{ AURA: Add - 获取收藏的历史记录 }}
+  static getFavorites(): HistoryRecord[] {
+    return filterFavoriteHistoryRecords(this.getHistory())
+  }
+
+  // {{ AURA: Add - 为记录添加标签 }}
+  static addTagToRecord(recordId: string, tagId: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1) {
+      if (!records[index].tags) {
+        records[index].tags = []
+      }
+      if (!records[index].tags!.includes(tagId)) {
+        records[index].tags!.push(tagId)
+        this.saveHistory(records)
+        scheduleHistoryUpsertToSupabase(records[index])
+      }
+    }
+  }
+
+  // {{ AURA: Add - 从记录移除标签 }}
+  static removeTagFromRecord(recordId: string, tagId: string): void {
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1 && records[index].tags) {
+      records[index].tags = records[index].tags!.filter(t => t !== tagId)
+      this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
+    }
+  }
+
+  // {{ AURA: Add - 按标签筛选记录 }}
+  static filterByTag(tagId: string): HistoryRecord[] {
+    return filterHistoryRecordsByTag(this.getHistory(), tagId)
+  }
+
+  // {{ AURA: Add - 更新记录的最后查看时间 }}
+  static updateLastViewedAt(recordId: string, minIntervalMs = 0): void {
+    const now = Date.now()
+    const previousSyncTs = this.lastViewedSyncMap.get(recordId)
+    if (minIntervalMs > 0 && typeof previousSyncTs === 'number' && now - previousSyncTs < minIntervalMs) {
+      return
+    }
+
+    const records = this.getHistory()
+    const index = records.findIndex(r => r.id === recordId)
+    if (index !== -1) {
+      const previousViewedAt = records[index].lastViewedAt
+        ? new Date(records[index].lastViewedAt as any).getTime()
+        : 0
+      if (minIntervalMs > 0 && previousViewedAt > 0 && now - previousViewedAt < minIntervalMs) {
+        this.lastViewedSyncMap.set(recordId, previousViewedAt)
+        return
+      }
+
+      records[index].lastViewedAt = new Date(now)
+      this.lastViewedSyncMap.set(recordId, now)
+      this.saveHistory(records)
+      scheduleHistoryUpsertToSupabase(records[index])
+    }
+  }
+}
+
+// {{ AURA: Add - 标签管理器 }}
+export class TagManager {
+  private static readonly TAGS_KEY = 'dyjx_tags'
+
+  // 获取所有标签
+  static getTags(): Tag[] {
+    try {
+      const result = readStoredTags(this.TAGS_KEY)
+      if (result.tags) {
+        if (result.changed) {
+          this.saveTags(result.tags)
+
+          const historyRewrite = rewriteHistoryTagIds(HistoryManager.getHistory(), result.idMap)
+          if (historyRewrite.changed) {
+            HistoryManager.saveHistory(historyRewrite.records)
+          }
+        }
+
+        return result.tags
+      }
+    } catch (error) {
+      console.error('获取标签失败:', error)
+    }
+    const defaults = this.getDefaultTags()
+    this.saveTags(defaults)
+    return defaults
+  }
+
+  // 获取默认标签
+  static getDefaultTags(): Tag[] {
+    return createDefaultTags()
+  }
+
+  // 保存标签
+  static saveTags(tags: Tag[]): void {
+    try {
+      writeTags(this.TAGS_KEY, tags)
+    } catch (error) {
+      console.error('保存标签失败:', error)
+    }
+  }
+
+  // 添加标签
+  static addTag(tag: Omit<Tag, 'id' | 'createdAt'>): Tag {
+    const tags = this.getTags()
+    const newTag = createTagRecord(tag)
+    tags.push(newTag)
+    this.saveTags(tags)
+    scheduleTagsSyncToSupabase('upsert', newTag)
+    return newTag
+  }
+
+  // 更新标签
+  static updateTag(id: string, updates: Partial<Omit<Tag, 'id' | 'createdAt'>>): void {
+    const tags = this.getTags()
+    const index = tags.findIndex(t => t.id === id)
+    if (index !== -1) {
+      tags[index] = { ...tags[index], ...updates }
+      this.saveTags(tags)
+      scheduleTagsSyncToSupabase('upsert', tags[index])
+    }
+  }
+
+  // 删除标签
+  static deleteTag(id: string): void {
+    const tags = this.getTags().filter(t => t.id !== id)
+    this.saveTags(tags)
+
+    // 同时从所有历史记录中移除该标签
+    const records = HistoryManager.getHistory()
+    records.forEach(record => {
+      if (record.tags && record.tags.includes(id)) {
+        record.tags = record.tags.filter(t => t !== id)
+      }
+    })
+    HistoryManager.saveHistory(records)
+
+    scheduleTagsSyncToSupabase('delete', { id })
+  }
+
+  // 获取单个标签
+  static getTag(id: string): Tag | null {
+    const tags = this.getTags()
+    return tags.find(t => t.id === id) || null
+  }
+
+  // 批量获取标签
+  static getTagsByIds(ids: string[]): Tag[] {
+    const tags = this.getTags()
+    return tags.filter(t => ids.includes(t.id))
   }
 }
 
@@ -379,27 +1138,22 @@ export class HistoryManager {
 export class DataManager {
   // 导出所有数据
   static exportData(): string {
-    const data = {
+    const data = createExportedAppData({
       config: ConfigManager.getAppConfig(),
       parsers: ConfigManager.getParsers(),
       webdavServers: ConfigManager.getWebDAVServers(),
       history: HistoryManager.getHistory(),
-      exportTime: new Date().toISOString(),
-      version: '1.0.0'
-    }
-    
-    return JSON.stringify(data, null, 2)
+      tags: TagManager.getTags(),
+      cleanupConfig: CleanupConfigManager.getCleanupConfig(),
+    })
+
+    return serializeExportedAppData(data)
   }
 
   // 导入数据
   static importData(jsonData: string): { success: boolean; message: string } {
     try {
-      const data = JSON.parse(jsonData)
-      
-      // 验证数据格式
-      if (!data.version || !data.exportTime) {
-        return { success: false, message: '无效的数据格式' }
-      }
+      const data = parseImportedAppData(jsonData)
 
       // 导入配置
       if (data.config) {
@@ -419,6 +1173,15 @@ export class DataManager {
       // 导入历史记录
       if (data.history && Array.isArray(data.history)) {
         HistoryManager.saveHistory(data.history)
+      }
+
+      // 兼容旧备份：新字段存在时才恢复标签与清理配置。
+      if (data.tags && Array.isArray(data.tags)) {
+        TagManager.saveTags(data.tags)
+      }
+
+      if (data.cleanupConfig) {
+        CleanupConfigManager.saveCleanupConfig(data.cleanupConfig)
       }
 
       return { success: true, message: '数据导入成功' }

@@ -1,0 +1,24 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../.tmp/parser-tests",
+    "rootDir": "..",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "noEmit": false,
+    "isolatedModules": false,
+    "incremental": false
+  },
+  "include": [
+    "../scripts/test-parser-core.ts",
+    "../src/lib/url/extract.ts",
+    "../src/lib/parser-race.ts",
+    "../src/lib/api/douyin-parser.ts",
+    "../src/lib/api/parser-security.ts",
+    "../src/lib/storage/config-core.ts",
+    "../src/lib/storage/history-tag-core.ts",
+    "../src/lib/storage/maintenance-core.ts",
+    "../src/types/index.ts"
+  ]
+}

@@ -1,5 +1,7 @@
 export { VideoPreview } from './VideoPreview'
 export { ImageCarousel } from './ImageCarousel'
+export { ImageGallery, DisplayMode } from './ImageGallery'
+export { ImagePreviewModal } from './ImagePreviewModal'
 export { MediaMetadata } from './MediaMetadata'
 export { PreviewActions } from './PreviewActions'
 export { PreviewArea } from './PreviewArea'

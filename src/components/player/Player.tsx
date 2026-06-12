@@ -1,12 +1,11 @@
 'use client'
 
-import React from 'react';
-import { ParsedVideoInfo } from '@/types';
-import { VideoPreview } from '@/components/preview/VideoPreview';
-import { Play, Pause, Volume2, VolumeX, Maximize, Settings, ArrowLeftRight } from 'lucide-react';
+import { ParsedVideoInfo } from '@/types'
+import { VideoPreview } from '@/components/preview/VideoPreview'
+import { Play, Volume2, Maximize, Settings, ArrowLeftRight } from 'lucide-react'
 
 interface PlayerProps {
-  mediaInfo: ParsedVideoInfo;
+  mediaInfo: ParsedVideoInfo
 }
 
 export function Player({ mediaInfo }: PlayerProps) {
@@ -20,8 +19,10 @@ export function Player({ mediaInfo }: PlayerProps) {
       {/* Video Player */}
       <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
         <VideoPreview
+          key={mediaInfo.url}
           videoUrl={mediaInfo.url!}
           thumbnail={mediaInfo.thumbnail}
+          format={mediaInfo.format}
           className="w-full h-full"
         />
       </div>
@@ -48,5 +49,5 @@ export function Player({ mediaInfo }: PlayerProps) {
         </div>
       </div>
     </div>
-  );
+  )
 }

@@ -1,5 +1,6 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { ParsedVideoInfo, MediaType, ConversionTask, TaskStatus } from '@/types'
 import { VideoPreview } from './VideoPreview'
 import { ImageCarousel } from './ImageCarousel'
@@ -7,6 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
+import { cn } from '@/lib/utils'
+import { getMediaPreviewLabel, getMediaStageHeightClass, isAnimatedImageMedia } from './media-helpers'
 import {
   Play,
   Image,
@@ -24,16 +27,32 @@ import {
   HardDrive,
   CheckCircle,
   XCircle,
+  Grid,
+  List,
+  Heart
 } from 'lucide-react'
+
+const ImageGallery = dynamic(
+  () => import('./ImageGallery').then(mod => mod.ImageGallery),
+  {
+    loading: () => (
+      <div className="flex min-h-[320px] items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-gray-900/60 dark:text-gray-300">
+        图集工作台加载中...
+      </div>
+    ),
+  }
+)
 
 interface TwoColumnPreviewProps {
   mediaInfo: ParsedVideoInfo
   isUploading?: boolean
   onConfirmUpload: () => void
   onReparse: () => void
+  onReset?: () => void
   className?: string
   currentTask: ConversionTask | null
   progress: number
+  progressHint?: string
 }
 
 // {{ AURA: Add - 从 convert/page.tsx 移入状态显示相关函数 }}
@@ -100,12 +119,20 @@ export function TwoColumnPreview({
   isUploading = false,
   onConfirmUpload,
   onReparse,
+  onReset,
   className = '',
   currentTask,
   progress,
+  progressHint,
 }: TwoColumnPreviewProps) {
   const isVideo = mediaInfo.mediaType === MediaType.VIDEO
   const isImageAlbum = mediaInfo.mediaType === MediaType.IMAGE_ALBUM
+  const isAnimatedImage = isAnimatedImageMedia(mediaInfo)
+  const mediaLabel = getMediaPreviewLabel(mediaInfo)
+  const mediaStageHeightClass = getMediaStageHeightClass(mediaInfo)
+  
+  // {{ AURA: Add - 智能显示模式选择 }}
+  const useEnhancedGallery = isImageAlbum && mediaInfo.images && mediaInfo.images.length > 3
 
   // 复制链接到剪贴板
   const handleCopyLink = async () => {
@@ -158,276 +185,387 @@ export function TwoColumnPreview({
   }
 
   return (
-    <div className={`w-full ${className}`}>
-      {/* 主标题区域 */}
-      <div className="flex items-center space-x-2 mb-6">
-        {isVideo ? (
-          <Play className="w-6 h-6 text-blue-600" />
-        ) : (
-          <Image className="w-6 h-6 text-green-600" />
-        )}
-        <h2 className="text-2xl font-bold text-gray-900">
-          解析与预览
-        </h2>
-      </div>
+    <div className={`w-full space-y-4 ${className}`}>
+      {/* 主内容区域 - 改进的网格布局 */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:items-stretch">
 
-      {/* 双栏布局容器 - 响应式设计 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        
-        {/* 左侧：视频播放器区域 (2/3宽度) */}
-        <div className="lg:col-span-2">
-          <Card className="overflow-hidden">
-            <CardContent className="p-0">
-              {/* 媒体播放区域 */}
-              <div className="relative bg-black aspect-video">
+        {/* 左侧：媒体预览区域 */}
+        <div className={useEnhancedGallery ? "lg:col-span-12" : "lg:col-span-5"}>
+          {useEnhancedGallery ? (
+            // 图集增强模式 - 使用ImageGallery组件
+            <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
+              <ImageGallery
+                images={mediaInfo.images!}
+                title={mediaInfo.title}
+                autoSelectMode={true}
+                className="w-full"
+              />
+            </div>
+          ) : (
+            // 标准视频/图集预览 - 固定媒体舞台，避免播放后重排
+            <div className="h-full flex flex-col">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                  {isAnimatedImage ? (
+                    <ImageIcon className="w-4 h-4 text-emerald-500" />
+                  ) : isVideo ? (
+                    <Play className="w-4 h-4 text-blue-500" />
+                  ) : (
+                    <Image className="w-4 h-4 text-green-500" />
+                  )}
+                  <span>{mediaLabel}预览</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'border-white/20 bg-white/70 text-xs shadow-sm dark:bg-gray-900/80',
+                    isAnimatedImage && 'border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300',
+                    !isAnimatedImage && isVideo && 'border-blue-200 text-blue-700 dark:border-blue-900 dark:text-blue-300',
+                    isImageAlbum && 'border-green-200 text-green-700 dark:border-green-900 dark:text-green-300',
+                  )}
+                >
+                  {isAnimatedImage ? '自动播放' : isVideo ? '点击控件播放' : `${mediaInfo.imageCount || mediaInfo.images?.length || 0} 张`}
+                </Badge>
+              </div>
+
+              <div
+                className={cn(
+                  'relative overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800 shadow-md',
+                  'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800',
+                  mediaStageHeightClass
+                )}
+              >
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/25 to-transparent" />
                 {isVideo && mediaInfo.url ? (
                   <VideoPreview
+                    key={mediaInfo.url}
                     videoUrl={mediaInfo.url}
                     thumbnail={mediaInfo.thumbnail}
                     title={mediaInfo.title}
+                    format={mediaInfo.format}
                     className="w-full h-full"
                   />
                 ) : isImageAlbum && mediaInfo.images && mediaInfo.images.length > 0 ? (
                   <ImageCarousel
                     images={mediaInfo.images}
                     title={mediaInfo.title}
-                    className="w-full h-full"
+                    className="h-full"
+                    showThumbnailStrip={true}
                   />
                 ) : (
                   // 错误状态
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center text-white">
+                  <div className="h-full flex items-center justify-center bg-black">
+                    <div className="text-center text-white px-4">
                       <AlertTriangle className="w-16 h-16 mx-auto mb-4 opacity-60" />
                       <p className="text-lg font-medium mb-2">无法预览内容</p>
                       <p className="text-sm opacity-75">
-                        {isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
+                        {isAnimatedImage ? '动图地址无效或不可访问' : isVideo ? '视频URL无效或不可访问' : '图集为空或加载失败'}
                       </p>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* 视频标题栏 */}
-              <div className="p-4 bg-white border-t">
-                <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">
-                  {mediaInfo.title || '未知标题'}
-                </h3>
-                {mediaInfo.author && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    作者: {mediaInfo.author}
+              {/* 描述信息 - 移到预览下方 */}
+              {mediaInfo.description && (
+                <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-1 h-4 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">描述</h4>
+                  </div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
+                    {mediaInfo.description}
                   </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* 右侧：信息和操作区域 (1/3宽度) */}
-        <div className="lg:col-span-1">
-          <div className="flex flex-col space-y-4">
-            
-            {/* {{ AURA: Add - 任务状态模块已移入此组件 }} */}
-            {currentTask && (
-              <Card className="flex-shrink-0">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <h4 className="font-semibold text-gray-900 flex-shrink-0">任务状态</h4>
-                    <div className="min-w-0">
-                      <Badge className={getStatusColor(currentTask.status)}>
-                        <div className="flex items-center space-x-1">
-                          {getStatusIcon(currentTask.status)}
-                          <span className="truncate">{getStatusText(currentTask.status)}</span>
-                        </div>
-                      </Badge>
-                    </div>
-                  </div>
-                  {(isUploading || currentTask.status === TaskStatus.PARSING) && (
-                    <div className="space-y-2">
-                      <Progress value={progress} className="w-full" />
-                      {/* {{ AURA: Remove - 移除独立的百分比显示 }} */}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
+        {/* 右侧：信息和操作区域 */}
+        <div className={useEnhancedGallery ? "lg:col-span-12 mt-4" : "lg:col-span-7 space-y-4"}>
+          <div className={useEnhancedGallery ? "grid grid-cols-1 md:grid-cols-2 gap-4" : "space-y-4"}>
 
-            {/* 视频详细信息卡片 */}
-            <Card>
-              <CardContent className="p-4">
-                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                  {isVideo ? (
-                    <FileVideo className="w-4 h-4 mr-2" />
-                  ) : (
-                    <ImageIcon className="w-4 h-4 mr-2" />
-                  )}
-                  媒体信息
-                </h4>
-                
-                <div className="space-y-3 text-sm">
-                  {/* 媒体类型 */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">类型</span>
-                    <Badge variant={isVideo ? "default" : "secondary"}>
-                      {isVideo ? '视频' : '图集'}
+          {/* 媒体详细信息 */}
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden bg-white dark:bg-gray-900 shadow-sm">
+            {/* 标题头部 */}
+            <div className="p-4 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-start gap-3">
+                {/* 作者头像或媒体类型图标 */}
+                {mediaInfo.avatar ? (
+                  <img
+                    src={mediaInfo.avatar}
+                    alt={mediaInfo.author || '作者头像'}
+                    className="w-12 h-12 rounded-full object-cover shadow-md flex-shrink-0 ring-2 ring-white dark:ring-gray-700"
+                  />
+                ) : (
+                  <div className={`p-2.5 rounded-xl shadow-md flex-shrink-0 ${
+                    isVideo
+                      ? 'bg-gradient-to-br from-blue-500 to-cyan-500'
+                      : 'bg-gradient-to-br from-green-500 to-emerald-500'
+                  }`}>
+                    {isVideo ? (
+                      <FileVideo className="w-5 h-5 text-white" />
+                    ) : (
+                      <ImageIcon className="w-5 h-5 text-white" />
+                    )}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-base font-bold text-gray-900 dark:text-white line-clamp-2 flex-1">
+                      {mediaInfo.title || '未知标题'}
+                    </h3>
+                    <Badge variant={isVideo ? "default" : "secondary"} className="font-medium flex-shrink-0 text-xs">
+                      {mediaLabel}
                     </Badge>
                   </div>
-
-                  {/* 分辨率/格式 */}
-                  {isVideo && mediaInfo.format && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">格式</span>
-                      <span className="font-medium uppercase">{mediaInfo.format}</span>
+                  {mediaInfo.author && (
+                    <p className="text-sm text-gray-900 dark:text-white font-medium mb-0.5">
+                      {mediaInfo.author}
+                    </p>
+                  )}
+                  {mediaInfo.signature && (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-1">
+                      {mediaInfo.signature}
+                    </p>
+                  )}
+                  {(mediaInfo.uid || mediaInfo.short_id) && (
+                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500 dark:text-gray-500">
+                      {mediaInfo.uid && <span>UID: {mediaInfo.uid}</span>}
+                      {mediaInfo.short_id && <span>ID: {mediaInfo.short_id}</span>}
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
 
-                  {/* 时长 */}
-                  {mediaInfo.duration && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600 flex items-center">
-                        <Clock className="w-3 h-3 mr-1" />
-                        时长
-                      </span>
-                      <span className="font-medium">{mediaInfo.duration}</span>
+            {/* 基本信息 */}
+            <div className="p-4">
+              <div className="grid grid-cols-2 gap-3">
+                {/* 时长/图片数量 */}
+                {isVideo && mediaInfo.duration && !isAnimatedImage && (
+                  <div className="flex flex-col p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900">
+                    <div className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 mb-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span className="text-xs font-medium">时长</span>
                     </div>
-                  )}
-
-                  {/* 文件大小 */}
-                  {mediaInfo.fileSize && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600 flex items-center">
-                        <HardDrive className="w-3 h-3 mr-1" />
-                        大小
-                      </span>
-                      <span className="font-medium">{formatFileSize(mediaInfo.fileSize)}</span>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">{mediaInfo.duration}</span>
+                  </div>
+                )}
+                {isImageAlbum && (
+                  <div className="flex flex-col p-3 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-100 dark:border-green-900">
+                    <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400 mb-1">
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span className="text-xs font-medium">图片</span>
                     </div>
-                  )}
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">
+                      {mediaInfo.imageCount || mediaInfo.images?.length || 0} 张
+                    </span>
+                  </div>
+                )}
 
-                  {/* 图片数量 */}
-                  {isImageAlbum && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">图片数量</span>
-                      <span className="font-medium">
-                        {mediaInfo.imageCount || mediaInfo.images?.length || 0} 张
-                      </span>
+                {/* 点赞数 */}
+                {mediaInfo.like !== undefined && (
+                  <div className="flex flex-col p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-100 dark:border-red-900">
+                    <div className="flex items-center gap-1.5 text-red-600 dark:text-red-400 mb-1">
+                      <Heart className="w-3.5 h-3.5 fill-current" />
+                      <span className="text-xs font-medium">点赞</span>
                     </div>
-                  )}
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">
+                      {mediaInfo.like.toLocaleString()}
+                    </span>
+                  </div>
+                )}
 
+                {/* 文件大小 */}
+                {mediaInfo.fileSize && (
+                  <div className="flex flex-col p-3 bg-purple-50 dark:bg-purple-950/20 rounded-lg border border-purple-100 dark:border-purple-900">
+                    <div className="flex items-center gap-1.5 text-purple-600 dark:text-purple-400 mb-1">
+                      <HardDrive className="w-3.5 h-3.5" />
+                      <span className="text-xs font-medium">大小</span>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">{formatFileSize(mediaInfo.fileSize)}</span>
+                  </div>
+                )}
+
+                {/* 格式 */}
+                {isVideo && mediaInfo.format && (
+                  <div className="flex flex-col p-3 bg-orange-50 dark:bg-orange-950/20 rounded-lg border border-orange-100 dark:border-orange-900">
+                    <div className="flex items-center gap-1.5 text-orange-600 dark:text-orange-400 mb-1">
+                      {isAnimatedImage ? <ImageIcon className="w-3.5 h-3.5" /> : <FileVideo className="w-3.5 h-3.5" />}
+                      <span className="text-xs font-medium">{isAnimatedImage ? '动图格式' : '格式'}</span>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white uppercase">{mediaInfo.format}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* 详细信息列表 */}
+              {(mediaInfo.viewCount || mediaInfo.uploadDate || mediaInfo.time) && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
                   {/* 观看次数 */}
                   {mediaInfo.viewCount && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">观看次数</span>
-                      <span className="font-medium">{mediaInfo.viewCount}</span>
+                    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded transition-colors">
+                      <span className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-2">
+                        <Eye className="w-3.5 h-3.5" />
+                        观看次数
+                      </span>
+                      <span className="text-sm font-semibold text-gray-900 dark:text-white">{mediaInfo.viewCount}</span>
+                    </div>
+                  )}
+
+                  {/* 发布时间 */}
+                  {mediaInfo.time && (
+                    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded transition-colors">
+                      <span className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5" />
+                        发布时间
+                      </span>
+                      <span className="text-xs font-medium text-gray-900 dark:text-white">
+                        {typeof mediaInfo.time === 'string' ? mediaInfo.time : new Date(mediaInfo.time).toLocaleString()}
+                      </span>
                     </div>
                   )}
 
                   {/* 上传日期 */}
-                  {mediaInfo.uploadDate && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">上传日期</span>
-                      <span className="font-medium">{mediaInfo.uploadDate}</span>
+                  {mediaInfo.uploadDate && !mediaInfo.time && (
+                    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded transition-colors">
+                      <span className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5" />
+                        上传日期
+                      </span>
+                      <span className="text-xs font-medium text-gray-900 dark:text-white">{mediaInfo.uploadDate}</span>
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+          </div>
 
-                {/* 描述信息 */}
-                {mediaInfo.description && (
-                  <div className="mt-4 pt-4 border-t">
-                    <p className="text-xs text-gray-600 mb-2">描述</p>
-                    <p className="text-sm text-gray-700 line-clamp-4 leading-relaxed">
-                      {mediaInfo.description}
-                    </p>
+          {/* 操作按钮区域 */}
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden bg-white dark:bg-gray-900 shadow-sm">
+            {/* 头部标题 */}
+            <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                <div className="w-1 h-4 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
+                操作选项
+              </h4>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {(isUploading || currentTask?.status === TaskStatus.UPLOADING) && (
+                <div className="p-3 rounded-lg border border-blue-100 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/20">
+                  <div className="flex items-center justify-between text-xs text-gray-700 dark:text-gray-300 mb-2">
+                    <span className="font-medium">上传进度</span>
+                    <span className="tabular-nums">{Math.max(0, Math.min(100, Math.floor(progress)))}%</span>
                   </div>
-                )}
-              </CardContent>
-            </Card>
+                  <Progress value={Math.max(0, Math.min(100, Math.floor(progress)))} />
+                  {progressHint && (
+                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                      {progressHint}
+                    </div>
+                  )}
+                </div>
+              )}
 
-            {/* 操作按钮卡片 */}
-            <Card>
-              <CardContent className="p-4">
-                <h4 className="font-semibold text-gray-900 mb-4">操作选项</h4>
-                
-                <div className="space-y-3">
-                  {/* 主要操作 - 确认上传 */}
-                  <Button 
-                    onClick={onConfirmUpload} 
-                    disabled={isUploading}
-                    className="w-full h-11 text-base font-medium"
+              {/* 主要操作 - 确认上传或成功状态 */}
+              {currentTask?.status === TaskStatus.SUCCESS ? (
+                <>
+                  {/* 上传成功状态 */}
+                  <Button
+                    disabled
+                    className="w-full h-12 text-base font-semibold bg-gradient-to-r from-green-600 to-emerald-600 shadow-lg cursor-default"
                     size="lg"
                   >
-                    {isUploading ? (
-                      <>
-                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                        上传中...
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="w-5 h-5 mr-2" />
-                        确认并上传
-                      </>
-                    )}
+                    <CheckCircle className="w-5 h-5 mr-2" />
+                    上传成功
                   </Button>
 
-                  {/* 次要操作按钮组 */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      onClick={onReparse}
-                      disabled={isUploading}
-                      className="h-9"
+                  {/* 开始新的转存按钮 */}
+                  {onReset && (
+                    <Button
+                      onClick={onReset}
+                      variant="outline"
+                      className="w-full h-10 text-sm font-medium border-2 border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 transition-all"
+                      size="lg"
                     >
-                      <RotateCcw className="w-4 h-4 mr-1" />
-                      重新解析
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      开始新的转存
                     </Button>
+                  )}
+                </>
+              ) : (
+                /* 正常上传按钮 */
+                <Button
+                  onClick={onConfirmUpload}
+                  disabled={isUploading}
+                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transition-all"
+                  size="lg"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      上传中...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-5 h-5 mr-2" />
+                      确认并上传
+                    </>
+                  )}
+                </Button>
+              )}
 
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      onClick={handleDownload}
-                      className="h-9"
-                    >
-                      <Download className="w-4 h-4 mr-1" />
-                      下载
-                    </Button>
-                  </div>
+              {/* 次要操作按钮组 */}
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onReparse}
+                    disabled={isUploading}
+                    className="h-10 border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 hover:border-blue-300 dark:hover:border-blue-700 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4 mr-1.5" />
+                    重新解析
+                  </Button>
 
-                  {/* 工具按钮组 */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={handleCopyLink}
-                      className="h-9 text-xs"
-                    >
-                      <Copy className="w-4 h-4 mr-1" />
-                      复制链接
-                    </Button>
-
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={handleOpenInNewTab}
-                      className="h-9 text-xs"
-                    >
-                      <ExternalLink className="w-4 h-4 mr-1" />
-                      新窗口
-                    </Button>
-                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDownload}
+                    className="h-10 border-gray-300 dark:border-gray-600 hover:bg-green-50 dark:hover:bg-green-950/20 hover:border-green-300 dark:hover:border-green-700 transition-colors"
+                  >
+                    <Download className="w-4 h-4 mr-1.5" />
+                    下载
+                  </Button>
                 </div>
 
-                {/* 上传进度提示 */}
-                {isUploading && (
-                  <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="flex items-center text-blue-700">
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      <span className="text-sm font-medium">
-                        正在上传{isVideo ? '视频' : '图集'}到WebDAV服务器...
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyLink}
+                    className="h-10 border-gray-300 dark:border-gray-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 hover:border-purple-300 dark:hover:border-purple-700 transition-colors"
+                  >
+                    <Copy className="w-4 h-4 mr-1.5" />
+                    复制链接
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleOpenInNewTab}
+                    className="h-10 border-gray-300 dark:border-gray-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 hover:border-orange-300 dark:hover:border-orange-700 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4 mr-1.5" />
+                    新窗口
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           </div>
         </div>

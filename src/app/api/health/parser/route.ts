@@ -1,0 +1,319 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { ParserErrorClass, VideoParserConfig } from '@/types'
+import { classifyParserFailure } from '@/lib/parser-health'
+import { requireRouteAuth } from '@/lib/api/route-auth'
+import {
+  readResponseTextLimited,
+  resolveAndValidateHttpUrl,
+  sanitizeCustomHeaders,
+} from '@/lib/api/parser-security'
+
+const DEFAULT_HEALTH_SAMPLE_URL = 'https://www.douyin.com/video/0'
+
+type HealthResponseData = {
+  parserName: string
+  parserUrl: string
+  method: 'GET' | 'POST'
+  reachable: boolean
+  healthy: boolean
+  logicalSuccess: boolean
+  status: number
+  latencyMs: number
+  message: string
+  normalizedMessage: string
+  traceId: string
+  errorClass?: ParserErrorClass
+  checkedAt: string
+  responsePreview: string
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireRouteAuth(request)
+  if (!auth.ok) {
+    return auth.response
+  }
+
+  const traceId = createTraceId()
+  try {
+    const body = await request.json()
+    const parserConfig = (body?.parserConfig || null) as Partial<VideoParserConfig> | null
+
+    if (!parserConfig || !parserConfig.apiUrl || typeof parserConfig.apiUrl !== 'string' || !parserConfig.apiUrl.trim()) {
+      return NextResponse.json({
+        success: false,
+        error: '缺少解析器配置或API地址无效'
+      }, { status: 400 })
+    }
+
+    const parserName = typeof parserConfig.name === 'string' && parserConfig.name.trim()
+      ? parserConfig.name.trim()
+      : '未命名解析器'
+
+    const sampleUrl = typeof body?.sampleUrl === 'string' && body.sampleUrl.trim()
+      ? body.sampleUrl.trim()
+      : DEFAULT_HEALTH_SAMPLE_URL
+
+    let finalApiUrl: string
+    let method: 'GET' | 'POST'
+    let requestOptions: RequestInit
+
+    try {
+      ({ finalApiUrl, method, requestOptions } = buildHealthRequest(parserConfig, sampleUrl, request.url))
+    } catch (error) {
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : '构建健康检查请求失败'
+      }, { status: 400 })
+    }
+
+    const startedAt = Date.now()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
+    let response: Response
+    try {
+      response = await fetch(finalApiUrl, {
+        ...requestOptions,
+        signal: controller.signal
+      })
+    } catch (error) {
+      clearTimeout(timeout)
+      const message = `解析器不可达: ${error instanceof Error ? error.message : '网络错误'}`
+      return NextResponse.json({
+        success: false,
+        error: message,
+        traceId,
+        errorClass: classifyParserFailure({ error, message }),
+        normalizedMessage: message,
+      }, { status: 502 })
+    }
+
+    clearTimeout(timeout)
+    const latencyMs = Date.now() - startedAt
+
+    const rawBody = await readResponseTextLimited(response)
+    const parsedBody = safeParseJsonBody(rawBody)
+    const logicalSuccess = evaluateLogicalSuccess(parsedBody)
+    const healthy = response.ok && (logicalSuccess || parsedBody !== null)
+    const normalizedMessage = buildHealthMessage(response.status, healthy, logicalSuccess)
+    const errorClass = healthy
+      ? undefined
+      : classifyParserFailure({ status: response.status, message: normalizedMessage })
+
+    const data: HealthResponseData = {
+      parserName,
+      parserUrl: finalApiUrl,
+      method,
+      reachable: true,
+      healthy,
+      logicalSuccess,
+      status: response.status,
+      latencyMs,
+      message: normalizedMessage,
+      normalizedMessage,
+      traceId,
+      errorClass,
+      checkedAt: new Date().toISOString(),
+      responsePreview: buildResponsePreview(parsedBody, rawBody)
+    }
+
+    return NextResponse.json({
+      success: true,
+      data
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '健康检查接口执行失败'
+    return NextResponse.json({
+      success: false,
+      error: message,
+      traceId,
+      errorClass: classifyParserFailure({ error, message }),
+      normalizedMessage: message,
+    }, { status: 500 })
+  }
+}
+
+function createTraceId() {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  }
+}
+
+function buildHealthRequest(parserConfig: Partial<VideoParserConfig>, sampleUrl: string, baseUrl: string): {
+  finalApiUrl: string
+  method: 'GET' | 'POST'
+  requestOptions: RequestInit
+} {
+  const urlParamName = parserConfig.urlParamName?.trim() || 'url'
+  const parserName = parserConfig.name?.trim() || ''
+
+  const validatedApiUrl = resolveAndValidateHttpUrl(String(parserConfig.apiUrl || '').trim(), baseUrl, {
+    allowRelativeApi: true,
+  })
+  if (!validatedApiUrl.ok) {
+    throw new Error(validatedApiUrl.error)
+  }
+  const upstreamUrl = validatedApiUrl.url
+
+  const headers = sanitizeCustomHeaders(parserConfig.customHeaders, {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+  })
+
+  if (parserConfig.apiKey) {
+    const headerKeys = Object.keys(headers).map(key => key.toLowerCase())
+    if (!headerKeys.includes('authorization')) {
+      headers['Authorization'] = `Bearer ${parserConfig.apiKey}`
+    }
+    if (!headerKeys.includes('x-api-key')) {
+      headers['X-API-Key'] = parserConfig.apiKey
+    }
+  }
+
+  const configuredMethod = parserConfig.requestMethod?.toUpperCase()
+  const shouldUseGet = configuredMethod === 'GET'
+    || (!configuredMethod && (
+      parserConfig.useGetMethod === true
+      || upstreamUrl.searchParams.has(urlParamName)
+      || parserConfig.apiUrl?.includes(`?${urlParamName}=`)
+      || parserName.toLowerCase().includes('get')
+    ))
+
+  const method: 'GET' | 'POST' = shouldUseGet ? 'GET' : 'POST'
+
+  if (method === 'GET') {
+    const customQueryParams =
+      parserConfig.customQueryParams && typeof parserConfig.customQueryParams === 'object'
+        ? parserConfig.customQueryParams
+        : {}
+    if (customQueryParams) {
+      Object.entries(customQueryParams).forEach(([key, value]) => {
+        if (typeof key === 'string' && value !== undefined && value !== null) {
+          upstreamUrl.searchParams.set(key, String(value))
+        }
+      })
+    }
+    upstreamUrl.searchParams.set(urlParamName, sampleUrl)
+
+    return {
+      finalApiUrl: upstreamUrl.toString(),
+      method,
+      requestOptions: {
+        method,
+        headers
+      }
+    }
+  }
+
+  const headerKeys = Object.keys(headers).map(key => key.toLowerCase())
+  if (!headerKeys.includes('content-type')) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  const bodyPayload: Record<string, unknown> = {
+    ...(parserConfig.customBodyParams && typeof parserConfig.customBodyParams === 'object'
+      ? parserConfig.customBodyParams
+      : {}),
+    [urlParamName]: sampleUrl
+  }
+
+  return {
+    finalApiUrl: upstreamUrl.toString(),
+    method,
+    requestOptions: {
+      method,
+      headers,
+      body: JSON.stringify(bodyPayload)
+    }
+  }
+}
+
+function safeParseJsonBody(body: string): any | null {
+  if (!body || !body.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(body)
+  } catch {
+  }
+
+  const start = body.indexOf('{')
+  const end = body.lastIndexOf('}')
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      return JSON.parse(body.substring(start, end + 1))
+    } catch {
+    }
+  }
+
+  return null
+}
+
+function evaluateLogicalSuccess(payload: any): boolean {
+  if (!payload || typeof payload !== 'object') {
+    return false
+  }
+
+  if (payload.success === true || payload.code === 0 || payload.code === 200) {
+    return true
+  }
+
+  const source = payload.data && typeof payload.data === 'object'
+    ? payload.data
+    : payload.result && typeof payload.result === 'object'
+      ? payload.result
+      : payload
+
+  const candidateUrls = [
+    source.url,
+    source.video_url,
+    source.play_url,
+    source.download_url,
+    source.videoUrl,
+    source.downloadUrl
+  ]
+
+  return candidateUrls.some((value: unknown) => typeof value === 'string' && /^https?:\/\//i.test(value))
+}
+
+function buildHealthMessage(status: number, healthy: boolean, logicalSuccess: boolean): string {
+  if (healthy && logicalSuccess) {
+    return '连通正常，且返回结构符合预期'
+  }
+
+  if (healthy) {
+    return '连通正常，但返回结构较弱（可能为风控页或简化响应）'
+  }
+
+  if (status >= 500) {
+    return `上游服务异常（HTTP ${status}）`
+  }
+
+  if (status === 401 || status === 403) {
+    return `上游拒绝访问（HTTP ${status}），请检查鉴权或防护策略`
+  }
+
+  if (status === 404) {
+    return '上游地址不存在（HTTP 404）'
+  }
+
+  return `连通异常（HTTP ${status}）`
+}
+
+function buildResponsePreview(parsedBody: any, rawBody: string): string {
+  if (parsedBody && typeof parsedBody === 'object') {
+    try {
+      const serialized = JSON.stringify(parsedBody)
+      return serialized.length > 280 ? `${serialized.substring(0, 280)}…` : serialized
+    } catch {
+    }
+  }
+
+  const condensed = (rawBody || '').replace(/\s+/g, ' ').trim()
+  if (!condensed) {
+    return ''
+  }
+  return condensed.length > 280 ? `${condensed.substring(0, 280)}…` : condensed
+}

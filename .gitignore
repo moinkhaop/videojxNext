@@ -137,9 +137,13 @@ Thumbs.db
 # Temporary folders
 tmp/
 temp/
+.tmp/
 
 # Logs
 *.log
+
+# Documentation artifacts
+*.md
 
 # Package manager lock files (optional - keep one)
 # package-lock.json
@@ -155,3 +159,9 @@ storybook-static
 # Temporary Next.js files
 .next/
 .swc/
+
+# Test files
+test-*
+test*.*
+!scripts/test-parser-core.ts
+.ace-tool/

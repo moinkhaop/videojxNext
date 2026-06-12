@@ -1,28 +1,29 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { 
-  Server, 
-  Plus, 
-  Trash2, 
-  Edit, 
-  Eye, 
-  EyeOff, 
-  CheckCircle, 
-  XCircle,
-  Wifi,
-  WifiOff,
+import {
+  Server,
+  Plus,
+  Trash2,
+  Edit,
+  Eye,
+  EyeOff,
+  CheckCircle,
   Save,
-  TestTube
+  X,
+  ArrowLeft,
+  Settings
 } from 'lucide-react'
 import { WebDAVConfig } from '@/types'
 import { ConfigManager } from '@/lib/storage'
 import { ConversionService } from '@/lib/conversion'
+import { CLOUD_STORAGE_SYNC_EVENT } from '@/lib/storage/cloud-sync'
 
 export default function WebDAVConfigPage() {
   const [configs, setConfigs] = useState<WebDAVConfig[]>([])
@@ -38,14 +39,25 @@ export default function WebDAVConfigPage() {
     basePath: ''
   })
 
-  useEffect(() => {
-    loadConfigs()
-  }, [])
-
-  const loadConfigs = () => {
+  const loadConfigs = useCallback(() => {
     const webdavConfigs = ConfigManager.getWebDAVConfigs()
     setConfigs(webdavConfigs)
-  }
+  }, [])
+
+  useEffect(() => {
+    loadConfigs()
+  }, [loadConfigs])
+
+  useEffect(() => {
+    const handleCloudSync = () => {
+      loadConfigs()
+    }
+
+    window.addEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    return () => {
+      window.removeEventListener(CLOUD_STORAGE_SYNC_EVENT, handleCloudSync as EventListener)
+    }
+  }, [loadConfigs])
 
   const handleNewConfig = () => {
     setFormData({
@@ -60,6 +72,12 @@ export default function WebDAVConfigPage() {
   }
 
   const handleEditConfig = (config: WebDAVConfig) => {
+    // 禁止编辑内置配置
+    if (ConfigManager.isBuiltinWebDAVServer(config.id)) {
+      alert('内置默认配置不支持编辑')
+      return
+    }
+
     setFormData({
       name: config.name,
       url: config.url,
@@ -78,13 +96,13 @@ export default function WebDAVConfigPage() {
     }
 
     const configData: WebDAVConfig = {
-      id: crypto.randomUUID(), // 生成唯一ID
+      id: crypto.randomUUID(),
       name: formData.name.trim(),
       url: formData.url.trim(),
       username: formData.username.trim(),
       password: formData.password,
       basePath: formData.basePath.trim(),
-      isDefault: configs.length === 0 // 第一个配置自动设为默认
+      isDefault: configs.length === 0
     }
 
     if (isNewConfig) {
@@ -145,229 +163,288 @@ export default function WebDAVConfigPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-6xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">WebDAV 配置</h1>
-        <p className="text-muted-foreground">
-          管理您的 WebDAV 服务器配置，用于存储转存的视频文件
-        </p>
-      </div>
-
-      {/* 新建/编辑配置表单 */}
-      {(isNewConfig || editingConfig) && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <Server className="w-5 h-5" />
-              <span>{isNewConfig ? '新建 WebDAV 配置' : '编辑 WebDAV 配置'}</span>
-            </CardTitle>
-            <CardDescription>
-              填写您的 WebDAV 服务器连接信息
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div>
-                <label className="block text-sm font-medium mb-2">配置名称</label>
-                <Input
-                  placeholder="例如：我的网盘"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">WebDAV 地址</label>
-                <Input
-                  placeholder="https://dav.example.com"
-                  value={formData.url}
-                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">用户名</label>
-                <Input
-                  placeholder="用户名"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">密码</label>
-                <div className="relative">
-                  <Input
-                    type={showPassword.new ? 'text' : 'password'}
-                    placeholder="密码"
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className="pr-10"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute inset-y-0 right-0 px-3"
-                    onClick={() => togglePasswordVisibility('new')}
-                  >
-                    {showPassword.new ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium mb-2">基础路径（可选）</label>
-                <Input
-                  placeholder="/videos 或留空使用根目录"
-                  value={formData.basePath}
-                  onChange={(e) => setFormData({ ...formData, basePath: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <Button onClick={handleSaveConfig}>
-                <Save className="w-4 h-4 mr-2" />
-                保存配置
-              </Button>
-              <Button variant="outline" onClick={handleCancelEdit}>
-                取消
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* 配置列表 */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">现有配置</h2>
-          {!isNewConfig && !editingConfig && (
-            <Button onClick={handleNewConfig}>
-              <Plus className="w-4 h-4 mr-2" />
-              新建配置
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+      <div className="container mx-auto px-4 py-6 max-w-5xl">
+        {/* 顶部导航 */}
+        <div className="mb-6">
+          <Link href="/settings">
+            <Button variant="ghost" size="sm" className="mb-4">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              返回设置
             </Button>
-          )}
+          </Link>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-2xl shadow-lg">
+                <Server className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-foreground">WebDAV 服务器</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  管理视频文件存储服务器配置
+                </p>
+              </div>
+            </div>
+
+            {!isNewConfig && !editingConfig && (
+              <Button onClick={handleNewConfig} className="bg-blue-600 hover:bg-blue-700">
+                <Plus className="w-4 h-4 mr-2" />
+                新建配置
+              </Button>
+            )}
+          </div>
         </div>
 
-        {configs.length === 0 ? (
-          <Card>
-            <CardContent className="py-12">
-              <div className="text-center text-muted-foreground">
-                <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <h3 className="text-lg font-medium mb-2">还没有 WebDAV 配置</h3>
-                <p>点击"新建配置"添加您的第一个 WebDAV 服务器</p>
+        {/* 新建/编辑配置表单 */}
+        {(isNewConfig || editingConfig) && (
+          <Card className="mb-6 border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl shadow-md">
+                    <Server className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-xl font-bold">
+                      {isNewConfig ? '新建 WebDAV 配置' : '编辑 WebDAV 配置'}
+                    </CardTitle>
+                    <CardDescription className="text-xs mt-0.5">
+                      填写服务器连接信息
+                    </CardDescription>
+                  </div>
+                </div>
+                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                  <X className="w-4 h-4" />
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {configs.map((config) => (
-              <Card key={config.id}>
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-3 mb-3">
-                        <div className="flex items-center space-x-2">
-                          <Server className="w-5 h-5 text-primary" />
-                          <h3 className="font-semibold text-lg">{config.name}</h3>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          {config.isDefault && (
-                            <Badge key={`webdav-config-badge-${config.id}`} variant="default">默认</Badge>
-                          )}
-                        </div>
-                      </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">配置名称 *</label>
+                    <Input
+                      placeholder="例如：我的网盘"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="h-10"
+                    />
+                  </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-muted-foreground">
-                        <div>
-                          <span className="font-medium">地址:</span> {config.url}
-                        </div>
-                        <div>
-                          <span className="font-medium">用户名:</span> {config.username || '未设置'}
-                        </div>
-                        {config.basePath && (
-                          <div className="md:col-span-2">
-                            <span className="font-medium">基础路径:</span> {config.basePath}
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">WebDAV 地址 *</label>
+                    <Input
+                      placeholder="https://dav.example.com"
+                      value={formData.url}
+                      onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                      className="h-10"
+                    />
+                  </div>
+                </div>
 
-                    <div className="flex items-center space-x-2 ml-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">用户名</label>
+                    <Input
+                      placeholder="用户名"
+                      value={formData.username}
+                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      className="h-10"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2">密码</label>
+                    <div className="relative">
+                      <Input
+                        type={showPassword.new ? 'text' : 'password'}
+                        placeholder="密码"
+                        value={formData.password}
+                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                        className="h-10 pr-10"
+                      />
                       <Button
+                        type="button"
+                        variant="ghost"
                         size="sm"
-                        variant="outline"
-                        onClick={() => handleTestConnection(config)}
-                        disabled={testingId === config.id}
+                        className="absolute inset-y-0 right-0 px-3 h-10"
+                        onClick={() => togglePasswordVisibility('new')}
                       >
-                        {testingId === config.id ? (
-                          <div className="flex items-center">
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary mr-2"></div>
-                            测试中
-                          </div>
-                        ) : (
-                          <>
-                            <TestTube className="w-4 h-4 mr-2" />
-                            测试连接
-                          </>
-                        )}
-                      </Button>
-
-                      {!config.isDefault && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleSetDefault(config.id)}
-                        >
-                          设为默认
-                        </Button>
-                      )}
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleEditConfig(config)}
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleDeleteConfig(config.id)}
-                        className="text-red-600 hover:text-red-700"
-                        disabled={isNewConfig || editingConfig?.id === config.id}
-                      >
-                        <Trash2 className="w-4 h-4" />
+                        {showPassword.new ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </Button>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
+                </div>
 
-      {/* 使用说明 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>使用说明</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p key="webdav-help-1"><strong>WebDAV 地址：</strong>输入您的 WebDAV 服务器完整地址，例如 https://dav.example.com</p>
-            <p key="webdav-help-2"><strong>用户名和密码：</strong>用于 WebDAV 服务器认证的凭据</p>
-            <p key="webdav-help-3"><strong>基础路径：</strong>可选，指定文件上传的基础目录，例如 /videos</p>
-            <p key="webdav-help-4"><strong>默认配置：</strong>进行转存时会优先使用默认配置</p>
-            <p key="webdav-help-5"><strong>测试连接：</strong>点击测试连接按钮验证配置是否正确</p>
-          </div>
-        </CardContent>
-      </Card>
+                <div>
+                  <label className="block text-sm font-medium mb-2">基础路径（可选）</label>
+                  <Input
+                    placeholder="/videos 或留空使用根目录"
+                    value={formData.basePath}
+                    onChange={(e) => setFormData({ ...formData, basePath: e.target.value })}
+                    className="h-10"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Button onClick={handleSaveConfig} className="bg-blue-600 hover:bg-blue-700">
+                  <Save className="w-4 h-4 mr-2" />
+                  保存配置
+                </Button>
+                <Button variant="outline" onClick={handleCancelEdit}>
+                  取消
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 配置列表 */}
+        <Card className="mb-6 border-none shadow-lg bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-xl font-bold">已配置的服务器</CardTitle>
+            <CardDescription className="text-xs mt-0.5">
+              {configs.length} 个配置
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {configs.length === 0 ? (
+              <div className="text-center py-12 px-4">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 mb-3">
+                  <Server className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+                </div>
+                <p className="text-sm font-medium text-foreground mb-1">还没有 WebDAV 配置</p>
+                <p className="text-xs text-muted-foreground">点击右上角按钮添加您的第一个服务器</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {configs.map((config) => {
+                  const isBuiltin = ConfigManager.isBuiltinWebDAVServer(config.id)
+                  return (
+                    <div
+                      key={config.id}
+                      className="group flex items-center justify-between p-4 rounded-lg border border-border hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-all"
+                    >
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h4 className="font-semibold text-sm truncate">{config.name}</h4>
+                            {config.isDefault && (
+                              <Badge className="h-5 px-1.5 text-xs bg-blue-500 hover:bg-blue-500">
+                                默认
+                              </Badge>
+                            )}
+                            {isBuiltin && (
+                              <Badge className="h-5 px-1.5 text-xs bg-gray-500 hover:bg-gray-500">
+                                内置
+                              </Badge>
+                            )}
+                          </div>
+                          {!isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">{config.url}</p>
+                              {config.username && <p>用户: {config.username}</p>}
+                            </div>
+                          )}
+                          {/* {isBuiltin && (
+                            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              <p className="truncate">内置默认配置（详细信息已隐藏）</p>
+                            </div>
+                          )} */}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 ml-3">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleTestConnection(config)}
+                          disabled={testingId === config.id}
+                          className="h-8 w-8 p-0"
+                          title="测试连接"
+                        >
+                          {testingId === config.id ? (
+                            <Settings className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="w-4 h-4" />
+                          )}
+                        </Button>
+                        {!config.isDefault && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleSetDefault(config.id)}
+                            className="h-8 px-2 text-xs"
+                            title="设为默认"
+                          >
+                            设为默认
+                          </Button>
+                        )}
+                        {!isBuiltin && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleEditConfig(config)}
+                            disabled={isNewConfig || editingConfig?.id === config.id}
+                            className="h-8 w-8 p-0"
+                            title="编辑"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDeleteConfig(config.id)}
+                          className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          disabled={isNewConfig || editingConfig?.id === config.id}
+                          title="删除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 使用说明 */}
+        <Card className="border-none shadow-lg bg-gradient-to-br from-blue-500/10 via-cyan-500/10 to-teal-500/10 dark:from-blue-500/20 dark:via-cyan-500/20 dark:to-teal-500/20 backdrop-blur-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 p-2.5 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl shadow-md">
+                <CheckCircle className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold mb-3 text-foreground">配置说明</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-0.5">•</span>
+                    <span><strong>WebDAV 地址：</strong>服务器完整地址</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-cyan-500 mt-0.5">•</span>
+                    <span><strong>用户名密码：</strong>服务器认证凭据</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-teal-500 mt-0.5">•</span>
+                    <span><strong>基础路径：</strong>文件上传的基础目录</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-sky-500 mt-0.5">•</span>
+                    <span><strong>默认配置：</strong>转存时优先使用</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 }

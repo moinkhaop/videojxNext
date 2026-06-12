@@ -3,7 +3,8 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Video, Home, Settings, History, Plus } from 'lucide-react'
+import { UserMenu } from '@/components/ui/user-menu'
+import { Video, Home, Settings, History, Plus, Puzzle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // 导航项配置
@@ -29,6 +30,11 @@ const navigationItems = [
     label: '历史记录'
   },
   {
+    href: '/extension',
+    icon: Puzzle,
+    label: '插件使用'
+  },
+  {
     href: '/settings',
     icon: Settings,
     label: '设置'
@@ -51,29 +57,33 @@ function DesktopNavigation() {
             <span className="font-bold text-xl">视频转存工具</span>
           </Link>
           
-          <div className="flex items-center space-x-1">
-            {navigationItems.map(({ href, icon: Icon, label }) => {
-              const isActive = pathname === href
-              return (
-                <Link key={href} href={href}>
-                  <Button 
-                    variant={isActive ? "default" : "ghost"} 
-                    size="sm" 
-                    className={cn(
-                      "flex items-center space-x-2 transition-all duration-200 relative",
-                      isActive && "bg-primary text-primary-foreground shadow-sm",
-                      !isActive && "hover:bg-accent/50 hover:text-accent-foreground"
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                    <span>{label}</span>
-                    {isActive && (
-                      <div className="absolute -bottom-0.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-primary-foreground rounded-full" />
-                    )}
-                  </Button>
-                </Link>
-              )
-            })}
+          <div className="flex items-center space-x-4">
+            <div className="hidden md:flex items-center space-x-1">
+              {navigationItems.map(({ href, icon: Icon, label }) => {
+                const isActive = pathname === href
+                return (
+                  <Link key={href} href={href}>
+                    <Button
+                      variant={isActive ? "default" : "ghost"}
+                      size="sm"
+                      className={cn(
+                        "flex items-center space-x-2 transition-all duration-200 relative",
+                        isActive && "bg-primary text-primary-foreground shadow-sm",
+                        !isActive && "hover:bg-accent/50 hover:text-accent-foreground"
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span>{label}</span>
+                      {isActive && (
+                        <div className="absolute -bottom-0.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-primary-foreground rounded-full" />
+                      )}
+                    </Button>
+                  </Link>
+                )
+              })}
+            </div>
+            
+            <UserMenu />
           </div>
         </div>
       </div>

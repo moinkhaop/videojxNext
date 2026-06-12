@@ -1,9 +1,14 @@
 import './globals.css'
 import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
+// TODO: 暂时注释 Google Fonts，网络问题
+// import { Inter } from 'next/font/google'
 import { Navigation } from '@/components/navigation'
+import { AuthProvider } from '@/contexts/auth-context'
+import { StorageInitializer } from '@/components/storage-initializer'
+import { RouteGuard } from '@/components/route-guard'
 
-const inter = Inter({ subsets: ['latin'] })
+// TODO: 暂时注释 Google Fonts
+// const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: '视频分享链接转存工具',
@@ -24,13 +29,18 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className={inter.className}>
-        <div className="min-h-screen bg-background">
-          <Navigation />
-          <main className="pb-16 md:pb-0">
-            {children}
-          </main>
-        </div>
+      <body className="font-sans"> {/* 使用系统字体替代 Inter */}
+        <AuthProvider>
+          <StorageInitializer>
+            <RouteGuard />
+            <div className="min-h-screen bg-background">
+              <Navigation />
+              <main className="pb-16 md:pb-0">
+                {children}
+              </main>
+            </div>
+          </StorageInitializer>
+        </AuthProvider>
       </body>
     </html>
   )
