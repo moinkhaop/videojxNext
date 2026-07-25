@@ -103,6 +103,30 @@ class DouyinDirectParserTests(unittest.TestCase):
         self.assertEqual(payload["data"]["thumbnail"], "https://cdn.example.com/cover.jpg")
         self.assertEqual(payload["rawData"]["source"], "edgeone_python_router_data")
 
+    def test_preserves_full_play_url_and_keeps_fallback_candidates(self):
+        item = {
+            "video": {
+                "play_addr": {
+                    "uri": "https://cdn.example.com/no-watermark.mp4",
+                    "url_list": ["https://cdn.example.com/fallback.mp4"],
+                },
+                "download_addr": {
+                    "url_list": ["https://cdn.example.com/download.mp4"],
+                },
+            },
+        }
+
+        candidates = DIRECT.collect_video_candidates(item)
+
+        self.assertEqual(candidates[0], "https://cdn.example.com/no-watermark.mp4")
+        self.assertEqual(
+            candidates[1:],
+            [
+                "https://cdn.example.com/fallback.mp4",
+                "https://cdn.example.com/download.mp4",
+            ],
+        )
+
     def test_parses_album_when_only_images_are_present(self):
         payload = DIRECT.build_success_payload(
             {"images": [{"url_list": ["https://cdn.example.com/one.jpg"]}]},

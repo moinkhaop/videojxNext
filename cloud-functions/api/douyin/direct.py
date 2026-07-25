@@ -285,9 +285,14 @@ def collect_video_candidates(item: dict[str, Any]) -> list[str]:
     if isinstance(play_addr, dict):
         uri = play_addr.get("uri")
         if isinstance(uri, str) and uri.strip():
-            candidates.append(
-                "https://www.douyin.com/aweme/v1/play/?" + urlencode({"video_id": uri.strip()})
-            )
+            normalized_uri = uri.strip()
+            if normalized_uri.startswith(("https://", "http://")):
+                candidates.append(normalized_uri)
+            else:
+                candidates.append(
+                    "https://www.douyin.com/aweme/v1/play/?"
+                    + urlencode({"video_id": normalized_uri})
+                )
         _add_http_urls(candidates, play_addr.get("url_list"))
 
     for address in (

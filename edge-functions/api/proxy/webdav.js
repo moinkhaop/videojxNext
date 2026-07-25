@@ -217,33 +217,41 @@ export default async function onRequest(context) {
 
 async function refreshDouyinDirectVideoUrl(context, sourceUrl) {
   const requestUrl = new URL(context.request.url)
-  const endpoint = new URL('/api/douyin/parse', requestUrl.origin)
+  const endpoints = ['/api/douyin/parse', '/api/douyin/direct']
+  let lastError = null
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 12000)
-  try {
-    const resp = await fetch(endpoint.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ url: sourceUrl, videoUrl: sourceUrl, text: sourceUrl }),
-      signal: controller.signal
-    })
-    const text = await safeReadText(resp)
-    if (!resp.ok) {
-      const detail = extractUpstreamErrorMessage(text)
-      const err = new Error(detail ? `刷新解析失败: ${detail}` : `刷新解析失败: HTTP ${resp.status}`)
-      err.status = resp.status
-      throw err
+  for (const path of endpoints) {
+    const endpoint = new URL(path, requestUrl.origin)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12000)
+    try {
+      const resp = await fetch(endpoint.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ url: sourceUrl, videoUrl: sourceUrl, text: sourceUrl }),
+        signal: controller.signal
+      })
+      const text = await safeReadText(resp)
+      if (!resp.ok) {
+        const detail = extractUpstreamErrorMessage(text)
+        const err = new Error(detail ? `刷新解析失败: ${detail}` : `刷新解析失败: HTTP ${resp.status}`)
+        err.status = resp.status
+        throw err
+      }
+      const payload = text ? safeJsonParse(text) : null
+      const url = payload && payload.data && typeof payload.data.url === 'string' ? payload.data.url : ''
+      if (!payload || payload.success !== true || !url) {
+        throw new Error('刷新解析失败: 未返回有效视频URL')
+      }
+      return url
+    } catch (error) {
+      lastError = error
+    } finally {
+      clearTimeout(timer)
     }
-    const payload = text ? safeJsonParse(text) : null
-    const url = payload && payload.data && typeof payload.data.url === 'string' ? payload.data.url : ''
-    if (!payload || payload.success !== true || !url) {
-      throw new Error('刷新解析失败: 未返回有效视频URL')
-    }
-    return url
-  } finally {
-    clearTimeout(timer)
   }
+
+  throw lastError || new Error('刷新解析失败')
 }
 
 function isLikelyDouyinUrl(value) {
@@ -307,13 +315,31 @@ async function uploadBinaryToWebDAV(args) {
 async function downloadForUpload(url, headers, timeoutMs, maxBufferBytes) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let activeHeaders = headers
+  let retriedWithoutReferer = false
   try {
-    const resp = await fetch(url, {
-      method: 'GET',
-      headers,
-      redirect: 'follow',
-      signal: controller.signal
-    })
+    let resp
+    while (true) {
+      resp = await fetch(url, {
+        method: 'GET',
+        headers: activeHeaders,
+        redirect: 'follow',
+        signal: controller.signal
+      })
+
+      if (resp.status !== 403 || retriedWithoutReferer || !hasRefererHeader(activeHeaders)) {
+        break
+      }
+
+      retriedWithoutReferer = true
+      try {
+        await resp.body?.cancel()
+      } catch {
+        // Ignore cleanup failures before retrying the same media URL.
+      }
+      activeHeaders = removeRefererHeaders(activeHeaders)
+    }
+
     if (!resp.ok) {
       const err = new Error(`下载失败: ${resp.status} ${resp.statusText}`)
       err.status = resp.status
@@ -347,6 +373,19 @@ async function downloadForUpload(url, headers, timeoutMs, maxBufferBytes) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+function hasRefererHeader(headers) {
+  return Boolean(headers && (headers.Referer || headers.referer || headers.Origin || headers.origin))
+}
+
+function removeRefererHeaders(headers) {
+  const retryHeaders = { ...(headers || {}) }
+  delete retryHeaders.Referer
+  delete retryHeaders.referer
+  delete retryHeaders.Origin
+  delete retryHeaders.origin
+  return retryHeaders
 }
 
 function buildBasicAuth(webdavConfig) {

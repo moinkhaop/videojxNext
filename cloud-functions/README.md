@@ -12,8 +12,10 @@ https://<你的 EdgeOne 域名>/api/douyin/direct
 ```
 
 它解析公开抖音视频和图集，并返回现有前端使用的 `VideoParseResponse` JSON：短链展开、
-作品页 `_ROUTER_DATA` 提取、视频播放直链候选或按页图片列表。函数不下载、不代理、
-不缓存媒体内容。
+作品页 `_ROUTER_DATA` 提取、`play_addr.uri` 无水印播放地址、视频候选地址或按页图片列表。
+实际下载由 WebDAV 代理完成；代理沿用该下载策略，在抖音媒体地址返回 403 时自动去掉
+`Referer`/`Origin` 重试，并在需要时刷新一次抖音直链。EdgeOne Python 函数本身不下载、
+不代理、不缓存媒体内容。
 
 现有 `edge-functions/api/douyin/parse.js` 已使用 `/api/douyin/parse`，因此 Python
 函数必须保持 `/api/douyin/direct` 路径，避免两个运行时声明同一路由。
