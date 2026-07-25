@@ -3,6 +3,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "api" / "douyin" / "direct.py"
@@ -33,6 +34,17 @@ class DouyinDirectParserTests(unittest.TestCase):
             DIRECT.extract_video_id("https://www.douyin.com/video/1234567890123456789"),
             "1234567890123456789",
         )
+
+    def test_rejects_slide_share_before_extracting_a_video_id(self):
+        with patch.object(
+            DIRECT,
+            "resolve_share_url",
+            return_value="https://www.iesdouyin.com/share/slides/1234567890123456789/?is_slides=1",
+        ):
+            with self.assertRaises(DIRECT.ParserError) as caught:
+                DIRECT.parse_direct_video("https://v.douyin.com/AbCd1234/")
+
+        self.assertEqual(caught.exception.status, 422)
 
     def test_parses_router_data_and_builds_frontend_contract(self):
         page = "<script>window._ROUTER_DATA = " + __import__("json").dumps(

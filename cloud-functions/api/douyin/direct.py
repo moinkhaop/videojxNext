@@ -105,6 +105,16 @@ def is_short_share_url(url: str) -> bool:
     return (parsed.hostname or "").lower() == "v.douyin.com"
 
 
+def is_slide_share_url(url: str) -> bool:
+    """识别短链跳转后的图集分享页，避免把其背景音频误当作视频直链。"""
+
+    parsed = urlparse(str(url or ""))
+    path = parsed.path.lower()
+    query = parse_qs(parsed.query)
+    is_slides = query.get("is_slides", [""])[0].strip().lower()
+    return "/share/slides/" in path or is_slides in {"1", "true"}
+
+
 def extract_video_id(url: str) -> str:
     """同时兼容跳转后的 modal_id 和作品页路径中的作品 ID。"""
 
@@ -363,6 +373,9 @@ def parse_direct_video(input_text: str) -> dict[str, Any]:
 
     deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     resolved_url = resolve_share_url(extracted_url, deadline)
+    if is_slide_share_url(resolved_url):
+        raise ParserError(422, "该作品为图集或实况图，请交由图集兼容解析器处理")
+
     video_id = extract_video_id(resolved_url)
     if not video_id:
         raise ParserError(422, "无法从抖音分享链接提取作品 ID")

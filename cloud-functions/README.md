@@ -39,6 +39,18 @@ python3 -m py_compile cloud-functions/api/douyin/direct.py
 部署后的最小验证应包含：一个获授权的公开视频短链、无效链接、图集链接和超时/403
 场景。图集会返回 422，供前端自动切换到现有图集兼容解析器。
 
+手动调试时，GET 参数必须进行 URL 编码；也可以使用 JSON POST，避免网关对未编码
+`https://` 查询值的兼容性差异：
+
+```bash
+curl -G --data-urlencode 'url=https://v.douyin.com/example/' \
+  'https://<你的 EdgeOne 域名>/api/douyin/direct'
+
+curl -H 'Content-Type: application/json' \
+  --data '{"url":"https://v.douyin.com/example/"}' \
+  'https://<你的 EdgeOne 域名>/api/douyin/direct'
+```
+
 ### 运行边界
 
 EdgeOne 免费 Cloud Functions 的请求/响应 Body 有上限，故本函数只返回小型 JSON。
