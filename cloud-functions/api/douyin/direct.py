@@ -313,6 +313,54 @@ def _has_album_images(item: dict[str, Any]) -> bool:
     return any(isinstance(values, list) and len(values) > 0 for values in possible_lists)
 
 
+def _first_image_url(value: Any) -> str:
+    """从抖音图片节点的兼容结构中取一个非水印展示地址。"""
+
+    if isinstance(value, str):
+        return value if value.startswith(("https://", "http://")) else ""
+    if isinstance(value, list):
+        return _first_http_url(value)
+    if not isinstance(value, dict):
+        return ""
+
+    for key in ("url_list", "display_image", "origin_image", "origin_url_list", "url", "src", "image_url"):
+        candidate = _first_image_url(value.get(key))
+        if candidate:
+            return candidate
+    return ""
+
+
+def collect_album_images(item: dict[str, Any]) -> list[str]:
+    """按图片页顺序提取一张首选 CDN 地址，避免把镜像和水印下载地址重复返回。"""
+
+    source_groups: list[Any] = [item.get("images")]
+    image_post_info = item.get("image_post_info")
+    if isinstance(image_post_info, dict):
+        source_groups.append(image_post_info.get("images"))
+    source_groups.append(item.get("image_infos"))
+
+    images: list[str] = []
+    for source in source_groups:
+        if isinstance(source, dict):
+            entries = list(source.values())
+        elif isinstance(source, list):
+            entries = source
+        else:
+            continue
+        for entry in entries:
+            url = _first_image_url(entry)
+            if url and url not in images:
+                images.append(url)
+    return images
+
+
+def _image_filename(url: str, index: int) -> str:
+    path = urlparse(url).path.lower()
+    matched = re.search(r"\.(webp|jpe?g|png|gif|avif)(?:$|[?#])", path)
+    extension = matched.group(1).replace("jpeg", "jpg") if matched else "jpg"
+    return f"image_{index:03d}.{extension}"
+
+
 def _duration_seconds(value: Any) -> int | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
@@ -324,12 +372,46 @@ def _duration_seconds(value: Any) -> int | None:
 
 
 def build_success_payload(item: dict[str, Any], extracted_url: str, resolved_url: str, video_id: str) -> dict[str, Any]:
-    """构造与前端 ``VideoParseResponse`` 兼容的单视频响应。"""
+    """构造与前端 ``VideoParseResponse`` 兼容的视频或图集响应。"""
+
+    album_images = collect_album_images(item)
+    if is_slide_share_url(resolved_url) or (not collect_video_candidates(item) and album_images):
+        if not album_images:
+            raise ParserError(502, "抖音图集作品详情中未找到可用图片")
+
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        title = _first_non_empty((item.get("desc"), item.get("title")), "未命名图集")
+        return {
+            "success": True,
+            "data": {
+                "title": title,
+                "author": _first_non_empty((author.get("nickname"), author.get("name")), "抖音用户"),
+                "description": _first_non_empty((item.get("desc"), item.get("title")), title),
+                "mediaType": "image_album",
+                "images": [
+                    {"url": url, "filename": _image_filename(url, index)}
+                    for index, url in enumerate(album_images, start=1)
+                ],
+                "imageCount": len(album_images),
+                "thumbnail": album_images[0],
+                "avatar": _first_http_url(_get_path(author, "avatar_thumb", "url_list") or []),
+                "signature": _first_non_empty((author.get("signature"),)),
+                "time": item.get("create_time"),
+                "cover": album_images[0],
+            },
+            "rawData": {
+                "source": "edgeone_python_router_data",
+                "extractedUrl": extracted_url,
+                "resolvedUrl": resolved_url,
+                "videoId": video_id,
+                "mediaKind": "album",
+            },
+        }
 
     candidates = collect_video_candidates(item)
     if not candidates:
         if _has_album_images(item):
-            raise ParserError(422, "该作品为图集或实况图，请交由图集兼容解析器处理")
+            raise ParserError(502, "抖音图集作品详情中未找到可用图片")
         raise ParserError(502, "抖音作品详情中未找到可用视频直链")
 
     video = item.get("video") if isinstance(item.get("video"), dict) else {}
@@ -373,9 +455,6 @@ def parse_direct_video(input_text: str) -> dict[str, Any]:
 
     deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     resolved_url = resolve_share_url(extracted_url, deadline)
-    if is_slide_share_url(resolved_url):
-        raise ParserError(422, "该作品为图集或实况图，请交由图集兼容解析器处理")
-
     video_id = extract_video_id(resolved_url)
     if not video_id:
         raise ParserError(422, "无法从抖音分享链接提取作品 ID")

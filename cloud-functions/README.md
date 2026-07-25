@@ -11,8 +11,9 @@
 https://<你的 EdgeOne 域名>/api/douyin/direct
 ```
 
-它只解析单个公开视频并返回现有前端使用的 `VideoParseResponse` JSON：短链展开、
-作品页 `_ROUTER_DATA` 提取、播放直链候选生成。函数不下载、不代理、不缓存视频。
+它解析公开抖音视频和图集，并返回现有前端使用的 `VideoParseResponse` JSON：短链展开、
+作品页 `_ROUTER_DATA` 提取、视频播放直链候选或按页图片列表。函数不下载、不代理、
+不缓存媒体内容。
 
 现有 `edge-functions/api/douyin/parse.js` 已使用 `/api/douyin/parse`，因此 Python
 函数必须保持 `/api/douyin/direct` 路径，避免两个运行时声明同一路由。
@@ -36,8 +37,9 @@ python3 -m unittest cloud-functions/tests/test_douyin_direct.py
 python3 -m py_compile cloud-functions/api/douyin/direct.py
 ```
 
-部署后的最小验证应包含：一个获授权的公开视频短链、无效链接、图集链接和超时/403
-场景。图集会返回 422，供前端自动切换到现有图集兼容解析器。
+部署后的最小验证应包含：一个获授权的公开视频短链、图集链接、无效链接和超时/403
+场景。图集成功时返回 `mediaType: "image_album"` 和完整的 `images` 列表；公开页面
+未提供实况图对应视频时，函数只返回可验证的原始图片，不会把背景音频伪装成视频。
 
 手动调试时，GET 参数必须进行 URL 编码；也可以使用 JSON POST，避免网关对未编码
 `https://` 查询值的兼容性差异：

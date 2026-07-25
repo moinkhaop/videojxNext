@@ -35,16 +35,34 @@ class DouyinDirectParserTests(unittest.TestCase):
             "1234567890123456789",
         )
 
-    def test_rejects_slide_share_before_extracting_a_video_id(self):
+    def test_parses_slide_share_as_image_album(self):
+        page = "<script>window._ROUTER_DATA = " + __import__("json").dumps(
+            make_router_data(
+                {
+                    "desc": "测试图集",
+                    "author": {"nickname": "测试作者"},
+                    "images": [
+                        {"url_list": ["https://cdn.example.com/album-1.webp"]},
+                        {"url_list": ["https://cdn.example.com/album-2.jpeg"]},
+                    ],
+                    "video": {
+                        "play_addr": {"uri": "https://cdn.example.com/background.mp3"},
+                    },
+                }
+            ),
+            ensure_ascii=False,
+        ) + ";</script>"
         with patch.object(
             DIRECT,
             "resolve_share_url",
             return_value="https://www.iesdouyin.com/share/slides/1234567890123456789/?is_slides=1",
-        ):
-            with self.assertRaises(DIRECT.ParserError) as caught:
-                DIRECT.parse_direct_video("https://v.douyin.com/AbCd1234/")
+        ), patch.object(DIRECT, "fetch_text", return_value=page):
+            payload = DIRECT.parse_direct_video("https://v.douyin.com/AbCd1234/")
 
-        self.assertEqual(caught.exception.status, 422)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["data"]["mediaType"], "image_album")
+        self.assertEqual(payload["data"]["imageCount"], 2)
+        self.assertEqual(payload["data"]["images"][1]["filename"], "image_002.jpg")
 
     def test_parses_router_data_and_builds_frontend_contract(self):
         page = "<script>window._ROUTER_DATA = " + __import__("json").dumps(
@@ -85,15 +103,15 @@ class DouyinDirectParserTests(unittest.TestCase):
         self.assertEqual(payload["data"]["thumbnail"], "https://cdn.example.com/cover.jpg")
         self.assertEqual(payload["rawData"]["source"], "edgeone_python_router_data")
 
-    def test_rejects_album_for_fallback_chain(self):
-        with self.assertRaises(DIRECT.ParserError) as caught:
-            DIRECT.build_success_payload(
-                {"images": [{"url_list": ["https://cdn.example.com/one.jpg"]}]},
-                "https://v.douyin.com/AbCd1234/",
-                "https://www.douyin.com/note/1234567890123456789",
-                "1234567890123456789",
-            )
-        self.assertEqual(caught.exception.status, 422)
+    def test_parses_album_when_only_images_are_present(self):
+        payload = DIRECT.build_success_payload(
+            {"images": [{"url_list": ["https://cdn.example.com/one.jpg"]}]},
+            "https://v.douyin.com/AbCd1234/",
+            "https://www.douyin.com/note/1234567890123456789",
+            "1234567890123456789",
+        )
+        self.assertEqual(payload["data"]["mediaType"], "image_album")
+        self.assertEqual(payload["data"]["images"][0]["url"], "https://cdn.example.com/one.jpg")
 
 
 if __name__ == "__main__":
